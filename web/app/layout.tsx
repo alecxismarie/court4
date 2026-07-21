@@ -1,0 +1,39 @@
+import type { Metadata } from "next";
+import type { ReactNode } from "react";
+
+import { AppShell } from "@/components/app-shell";
+import { Providers } from "@/app/providers";
+import "./globals.css";
+
+export const metadata: Metadata = {
+  title: "Court4",
+  description: "Pickleball match analysis workflow.",
+  icons: {
+    icon: [
+      {
+        url: "/brand/court4-logo-64.png",
+        sizes: "64x64",
+        type: "image/png",
+      },
+    ],
+    apple: [
+      {
+        url: "/brand/court4-logo-192.png",
+        sizes: "192x192",
+        type: "image/png",
+      },
+    ],
+  },
+};
+
+export default function RootLayout({ children }: { children: ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <Providers>
+          <AppShell>{children}</AppShell>
+        </Providers>
+      </body>
+    </html>
+  );
+}

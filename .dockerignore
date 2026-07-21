@@ -1,0 +1,15 @@
+.git/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.env
+data/input/*
+data/output/*
+!data/input/.gitkeep
+!data/output/.gitkeep

@@ -1,0 +1,1 @@
+"""Pickleball AI application package."""

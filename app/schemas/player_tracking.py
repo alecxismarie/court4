@@ -76,6 +76,7 @@ class TrackSummary(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     track_id: int = Field(ge=0)
+    preview_image: str | None = None
     first_frame: int = Field(ge=0)
     last_frame: int = Field(ge=0)
     observation_count: int = Field(ge=0)
@@ -83,6 +84,8 @@ class TrackSummary(BaseModel):
     last_timestamp_seconds: float = Field(ge=0)
     duration_seconds: float = Field(ge=0)
     average_confidence: float = Field(ge=0, le=1)
+    court_distance_feet: float = Field(default=0, ge=0)
+    court_movement_rate_feet_per_second: float = Field(default=0, ge=0)
     court_observation_count: int = Field(ge=0)
     extended_court_observation_count: int = Field(ge=0)
     inside_extended_court_ratio: float = Field(ge=0, le=1)

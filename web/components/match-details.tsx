@@ -7,7 +7,7 @@ import { getAnalysis, getAnalysisFrames } from "@/lib/api/analyses";
 import { normalizeApiError } from "@/lib/api/client";
 import type { AnalysisJob } from "@/lib/api/types";
 import { formatDateTime } from "@/lib/utils";
-import { JobStatus, getStageLabel, getStatusLabel } from "@/components/job-status";
+import { JobStatus, getCurrentWorkflowStep, getStageLabel } from "@/components/job-status";
 import { SampledFrames } from "@/components/sampled-frames";
 import { Skeleton } from "@/components/skeleton";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -31,13 +31,35 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
 
   if (jobQuery.isError || !jobQuery.data) {
     const error = normalizeApiError(jobQuery.error);
+    const isBackendUnavailable = error.code === "backend_unavailable";
     return (
       <div className="rounded-md border border-red-200 bg-red-50 p-6">
-        <h1 className="text-xl font-semibold text-court-red">Match could not be loaded</h1>
-        <p className="mt-2 text-sm text-court-red">{error.message}</p>
+        <h1 className="text-xl font-semibold text-court-red">
+          {isBackendUnavailable
+            ? "Court4 cannot connect to the analysis service"
+            : "Match could not be loaded"}
+        </h1>
+        <p className="mt-2 text-sm text-court-red">
+          {isBackendUnavailable
+            ? "Make sure the Court4 backend is running, then try again."
+            : error.message}
+        </p>
+        <details className="mt-4 text-sm text-court-red">
+          <summary className="cursor-pointer font-semibold">Technical details</summary>
+          <dl className="mt-2 grid gap-1">
+            <div>
+              <dt className="font-semibold">Code</dt>
+              <dd>{error.code}</dd>
+            </div>
+            <div>
+              <dt className="font-semibold">Message</dt>
+              <dd>{error.message}</dd>
+            </div>
+          </dl>
+        </details>
         <Button className="mt-5" type="button" variant="secondary" onClick={() => void jobQuery.refetch()}>
           <RefreshCw aria-hidden="true" className="h-4 w-4" />
-          Retry
+          Try Again
         </Button>
       </div>
     );
@@ -45,6 +67,7 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
 
   const job = jobQuery.data;
   const frames = framesQuery.data?.frames ?? [];
+  const currentStep = getCurrentWorkflowStep(job);
 
   return (
     <div className="space-y-6">
@@ -58,7 +81,7 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
               {job.analysis_id}
             </h1>
             <p className="mt-2 text-sm text-court-muted">
-              {getStatusLabel(job.status)} - {getStageLabel(job.current_stage)}
+              Current step: {currentStep.currentLabel}
             </p>
           </div>
           <NextAction job={job} />
@@ -68,7 +91,7 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
           <MetaItem label="Created" value={formatDateTime(job.created_at)} />
           <MetaItem label="Updated" value={formatDateTime(job.updated_at)} />
           <MetaItem label="Source video" value={job.source_video ?? "Unavailable"} />
-          <MetaItem label="Current stage" value={getStageLabel(job.current_stage)} />
+          <MetaItem label="Workflow stage" value={getStageLabel(job.current_stage)} />
         </dl>
       </section>
 
@@ -104,36 +127,40 @@ function NextAction({ job }: { job: AnalysisJob }) {
   if (job.status === "failed") {
     return (
       <span className="rounded-md bg-red-50 px-3 py-2 text-sm font-semibold text-court-red">
-        Review failed job
+        Review issue
       </span>
     );
   }
   if (job.inspection_completed && !job.calibration_completed) {
-    return <span className="rounded-md bg-blue-50 px-3 py-2 text-sm font-semibold text-court-blue">Detect Court</span>;
+    return (
+      <span className="rounded-md bg-blue-50 px-3 py-2 text-sm font-semibold text-court-blue">
+        Court recognition
+      </span>
+    );
   }
   if (job.calibration_completed && !job.tracking_completed) {
     return (
       <span className="rounded-md bg-blue-50 px-3 py-2 text-sm font-semibold text-court-blue">
-        Track Players
+        Find players
       </span>
     );
   }
   if (job.tracking_completed && !job.player_selected) {
     return (
       <span className="rounded-md bg-blue-50 px-3 py-2 text-sm font-semibold text-court-blue">
-        Select Player
+        Select yourself
       </span>
     );
   }
   if (job.player_selected && !job.analytics_completed) {
     return (
       <span className="rounded-md bg-blue-50 px-3 py-2 text-sm font-semibold text-court-blue">
-        Generate Analytics
+        Generate Match IQ
       </span>
     );
   }
   if (job.analytics_completed) {
-    return <ButtonLink href={`/matches/${job.analysis_id}/analytics`}>View Analytics</ButtonLink>;
+    return <ButtonLink href={`/matches/${job.analysis_id}/analytics`}>View Match IQ</ButtonLink>;
   }
   return (
     <span className="rounded-md bg-court-panel px-3 py-2 text-sm font-semibold text-court-muted">

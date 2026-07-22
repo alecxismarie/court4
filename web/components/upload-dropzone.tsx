@@ -137,7 +137,7 @@ export function UploadDropzone({
         <h2 className="mt-5 text-xl font-semibold text-court-ink">Upload a match video</h2>
         <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-court-muted">
           Court4 currently processes one recorded pickleball match at a time. After upload,
-          court calibration and player selection will follow.
+          you will confirm the court view and choose which tracked player is you.
         </p>
         <p className="mt-4 text-sm font-medium text-court-blue">
           Drag a video here or press Enter to choose a file.

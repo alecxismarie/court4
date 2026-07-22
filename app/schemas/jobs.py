@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.analytics import AnalyticsReport
 from app.schemas.calibration import CourtCalibrationReport
+from app.schemas.match_iq import MatchIQReport
 from app.schemas.player_tracking import PlayerTrackingReport, TrackSummary
 from app.schemas.video import VideoMetadataReport
 
@@ -54,6 +55,22 @@ class AnalysisArtifact(BaseModel):
     size_bytes: int = Field(ge=0)
 
 
+class CalibrationPointRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    x: float
+    y: float
+
+
+class DetectedCourtCorners(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    near_left: CalibrationPointRequest
+    near_right: CalibrationPointRequest
+    far_right: CalibrationPointRequest
+    far_left: CalibrationPointRequest
+
+
 class AnalysisJob(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -70,6 +87,10 @@ class AnalysisJob(BaseModel):
     player_selected: bool = False
     analytics_completed: bool = False
     manual_calibration_required: bool = False
+    court_detection_status: CourtDetectionOutcome | None = None
+    court_detection_confidence: float | None = Field(default=None, ge=0, le=1)
+    court_detection_selected_frame: str | None = None
+    court_detection_detected_corners: DetectedCourtCorners | None = None
     available_artifacts: list[AnalysisArtifact] = Field(default_factory=list)
 
 
@@ -92,13 +113,6 @@ class SampledFramesResponse(BaseModel):
 
     analysis_id: str
     frames: list[SampledFrameArtifact]
-
-
-class CalibrationPointRequest(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    x: float
-    y: float
 
 
 class CalibrationRequest(BaseModel):
@@ -126,15 +140,6 @@ class CalibrationResponse(BaseModel):
     calibration: CourtCalibrationReport
     artifacts: list[AnalysisArtifact]
     job: AnalysisJobResponse
-
-
-class DetectedCourtCorners(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    near_left: CalibrationPointRequest
-    near_right: CalibrationPointRequest
-    far_right: CalibrationPointRequest
-    far_left: CalibrationPointRequest
 
 
 class CourtDetectionResponse(BaseModel):
@@ -215,6 +220,7 @@ class AnalyticsGenerationResponse(BaseModel):
 
     analysis_id: str
     analytics: AnalyticsReport
+    match_iq: MatchIQReport | None = None
     artifacts: list[AnalysisArtifact]
     job: AnalysisJobResponse
 
@@ -224,6 +230,7 @@ class AnalyticsResponse(BaseModel):
 
     analysis_id: str
     analytics: AnalyticsReport
+    match_iq: MatchIQReport | None = None
 
 
 class UploadVideoResponse(AnalysisJobResponse):

@@ -37,6 +37,7 @@ from app.schemas.jobs import (
     TrackingResponse,
     UploadVideoResponse,
 )
+from app.schemas.match_iq import MatchIQReport
 from app.schemas.player_tracking import PlayerTrackingReport
 from app.services.analytics import (
     AnalyticsError,
@@ -52,9 +53,28 @@ from app.services.jobs.exceptions import (
     JobTooLargeError,
 )
 from app.services.jobs.repository import AnalysisJobRepository
-from app.services.tracking import JsonTrackingBackend, TrackingError, UltralyticsByteTrackBackend
+from app.services.match_iq import (
+    MATCH_IQ_FILENAME,
+    MatchIQPersistenceError,
+    generate_and_write_match_iq,
+    load_match_iq_report,
+)
+from app.services.tracking import (
+    DetectorModelMissingError,
+    DetectorRuntimeUnavailableError,
+    DetectorUnavailableError,
+    JsonTrackingBackend,
+    TrackingError,
+    UltralyticsByteTrackBackend,
+)
 from app.services.video import VideoInspectionError, inspect_video
-from app.services.video.player_analysis import analyze_players, load_calibration_report
+from app.services.video.player_analysis import (
+    EligibilityConfig,
+    analyze_players,
+    ensure_player_preview_images,
+    load_calibration_report,
+    refresh_player_selection_metrics,
+)
 from app.services.video.player_selection import load_tracking_report, select_player_track
 from app.sports.pickleball import (
     CalibrationOutputExistsError,
@@ -263,6 +283,12 @@ class AnalysisWorkflowService:
 
         detection_succeeded = result.outcome == CourtDetectionOutcome.detected
         manual_required = not detection_succeeded
+        selected_frame = (
+            self.repository.artifact_from_path(analysis_id, result.selected_frame_path).path
+            if result.selected_frame_path is not None
+            else None
+        )
+        detected_corners = _detected_corners_model(result.image_points)
         updated = self.repository.update_job(
             job,
             status=AnalysisStatus.processing,
@@ -272,23 +298,22 @@ class AnalysisWorkflowService:
             error=None,
             calibration_completed=detection_succeeded,
             manual_calibration_required=manual_required,
+            court_detection_status=result.outcome,
+            court_detection_confidence=result.confidence,
+            court_detection_selected_frame=selected_frame,
+            court_detection_detected_corners=detected_corners,
         )
         artifacts = [
             self.repository.artifact_from_path(analysis_id, path)
             for path in result.artifacts
             if path.is_file()
         ]
-        selected_frame = (
-            self.repository.artifact_from_path(analysis_id, result.selected_frame_path).path
-            if result.selected_frame_path is not None
-            else None
-        )
         return CourtDetectionResponse(
             analysis_id=analysis_id,
             status=result.outcome,
             confidence=result.confidence,
             selected_frame=selected_frame,
-            detected_corners=_detected_corners_model(result.image_points),
+            detected_corners=detected_corners,
             manual_calibration_required=manual_required,
             calibration=result.calibration,
             artifacts=artifacts,
@@ -319,9 +344,9 @@ class AnalysisWorkflowService:
             if not video_path.is_file():
                 raise JobNotFoundError("Source video not found.")
 
-            calibration = self._load_calibration(calibration_path)
-            backend = self._build_tracking_backend(analysis_id, request)
             try:
+                calibration = self._load_calibration(calibration_path)
+                backend = self._build_tracking_backend(analysis_id, request)
                 result = analyze_players(
                     video_path=video_path,
                     calibration=calibration,
@@ -338,11 +363,32 @@ class AnalysisWorkflowService:
                     min_eligible_inside_extended_ratio=(
                         self.settings.min_eligible_inside_extended_ratio
                     ),
+                    min_eligible_inside_court_ratio=(self.settings.min_eligible_inside_court_ratio),
+                    min_eligible_court_movement_rate_feet_per_second=(
+                        self.settings.min_eligible_court_movement_rate_feet_per_second
+                    ),
+                    max_selectable_player_tracks=self.settings.max_selectable_player_tracks,
                     min_eligible_average_confidence=self.settings.min_eligible_average_confidence,
                     annotated_video_codec=self.settings.annotated_video_codec,
                     annotated_video_fps=self.settings.annotated_video_fps,
                 )
                 tracking = result.report
+            except DetectorModelMissingError as exc:
+                raise JobRequestError(
+                    "detector_model_missing",
+                    "Player detection is not available because the detector model is missing.",
+                ) from exc
+            except DetectorRuntimeUnavailableError as exc:
+                raise JobRequestError(
+                    "detector_runtime_unavailable",
+                    "Player detection is not available because the detector runtime "
+                    "is not installed.",
+                ) from exc
+            except DetectorUnavailableError as exc:
+                raise JobRequestError(
+                    "detector_unavailable",
+                    "Player detection is not available with the current detector configuration.",
+                ) from exc
             except TrackingError as exc:
                 self._mark_failed(job, "Tracking failed.")
                 raise JobRequestError("tracking_failed", "Tracking failed.") from exc
@@ -365,9 +411,10 @@ class AnalysisWorkflowService:
     def list_players(self, analysis_id: str) -> PlayersResponse:
         job = self.repository.load_job(analysis_id)
         self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
-        tracking = self._load_tracking(
-            self.repository.analysis_dir(analysis_id) / "tracking" / "tracking.json"
-        )
+        tracking_path = self.repository.analysis_dir(analysis_id) / "tracking" / "tracking.json"
+        tracking = self._load_tracking(tracking_path)
+        tracking = self._refresh_player_selection_metrics(tracking_path, tracking)
+        tracking = self._ensure_player_previews(job, tracking_path, tracking)
         selection_artifact = self._optional_artifact(
             analysis_id,
             self.repository.analysis_dir(analysis_id)
@@ -389,6 +436,7 @@ class AnalysisWorkflowService:
         job = self.repository.load_job(analysis_id)
         self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
         tracking_path = self.repository.analysis_dir(analysis_id) / "tracking" / "tracking.json"
+        self._refresh_player_selection_metrics(tracking_path, self._load_tracking(tracking_path))
         try:
             tracking = select_player_track(
                 tracking_report_path=tracking_path, track_id=request.track_id
@@ -407,6 +455,7 @@ class AnalysisWorkflowService:
             analysis_id,
             tracking_path.parent / tracking.artifacts.player_selection_image,
         )
+        tracking = self._ensure_player_previews(job, tracking_path, tracking)
         return PlayerSelectionResponse(
             analysis_id=analysis_id,
             track_summaries=tracking.track_summaries,
@@ -421,9 +470,11 @@ class AnalysisWorkflowService:
             job.player_selected, "player_selection_required", "Player selection is required."
         )
         analytics_path = self.repository.analysis_dir(analysis_id) / "analytics" / "analytics.json"
+        match_iq_path = analytics_path.parent / MATCH_IQ_FILENAME
 
         if analytics_path.exists():
             analytics = self._load_analytics(analytics_path)
+            match_iq = self._load_optional_match_iq(match_iq_path)
         else:
             try:
                 result = generate_match_analytics(
@@ -433,6 +484,11 @@ class AnalysisWorkflowService:
                     image_width_pixels=self.settings.analytics_image_width_pixels,
                 )
                 analytics = result.report
+                match_iq = generate_and_write_match_iq(
+                    analytics=analytics,
+                    timeline=result.timeline,
+                    analytics_dir=result.analytics_dir,
+                )
             except AnalyticsOutputExistsError as exc:
                 raise JobConflictError(
                     "analytics_exists",
@@ -458,6 +514,7 @@ class AnalysisWorkflowService:
         return AnalyticsGenerationResponse(
             analysis_id=analysis_id,
             analytics=analytics,
+            match_iq=match_iq,
             artifacts=artifacts,
             job=AnalysisJobResponse.model_validate(updated.model_dump(mode="json")),
         )
@@ -471,6 +528,7 @@ class AnalysisWorkflowService:
         return AnalyticsResponse(
             analysis_id=analysis_id,
             analytics=self._load_analytics(analytics_path),
+            match_iq=self._load_optional_match_iq(analytics_path.parent / MATCH_IQ_FILENAME),
         )
 
     async def _save_upload_to_staging(self, upload: UploadFile, analysis_id: str) -> Path:
@@ -615,6 +673,65 @@ class AnalysisWorkflowService:
             return None
         return self.repository.artifact_from_path(analysis_id, path)
 
+    def _ensure_player_previews(
+        self,
+        job: AnalysisJob,
+        tracking_path: Path,
+        tracking: PlayerTrackingReport,
+    ) -> PlayerTrackingReport:
+        if job.source_video is None:
+            return tracking
+        try:
+            source_video_path = self.repository.resolve_artifact(
+                job.analysis_id,
+                job.source_video,
+            )
+            return ensure_player_preview_images(
+                tracking_report_path=tracking_path,
+                source_video_path=source_video_path,
+            )
+        except TrackingError:
+            logger.warning(
+                "player_preview_generation_failed",
+                extra={"analysis_id": job.analysis_id, "tracking_path": str(tracking_path)},
+                exc_info=True,
+            )
+            return tracking
+
+    def _refresh_player_selection_metrics(
+        self,
+        tracking_path: Path,
+        tracking: PlayerTrackingReport,
+    ) -> PlayerTrackingReport:
+        try:
+            return refresh_player_selection_metrics(
+                tracking_report_path=tracking_path,
+                eligibility=self._tracking_eligibility(),
+            )
+        except TrackingError:
+            logger.warning(
+                "player_selection_metric_refresh_failed",
+                extra={
+                    "analysis_id": tracking.analysis_id,
+                    "tracking_path": str(tracking_path),
+                },
+                exc_info=True,
+            )
+            return tracking
+
+    def _tracking_eligibility(self) -> EligibilityConfig:
+        return EligibilityConfig(
+            min_observation_count=self.settings.min_eligible_observation_count,
+            min_duration_seconds=self.settings.min_eligible_track_duration_seconds,
+            min_inside_court_ratio=self.settings.min_eligible_inside_court_ratio,
+            min_inside_extended_ratio=self.settings.min_eligible_inside_extended_ratio,
+            min_court_movement_rate_feet_per_second=(
+                self.settings.min_eligible_court_movement_rate_feet_per_second
+            ),
+            max_selectable_tracks=self.settings.max_selectable_player_tracks,
+            min_average_confidence=self.settings.min_eligible_average_confidence,
+        )
+
     def _mark_failed(self, job: AnalysisJob, message: str) -> None:
         self.repository.update_job(job, status=AnalysisStatus.failed, error=message)
 
@@ -644,6 +761,14 @@ class AnalysisWorkflowService:
             raise JobRequestError(
                 "invalid_analytics", "Analytics report could not be read."
             ) from exc
+
+    def _load_optional_match_iq(self, path: Path) -> MatchIQReport | None:
+        if not path.is_file():
+            return None
+        try:
+            return load_match_iq_report(path)
+        except MatchIQPersistenceError as exc:
+            raise JobRequestError("invalid_match_iq", "Match IQ report could not be read.") from exc
 
 
 def _detected_corners_model(

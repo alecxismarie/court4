@@ -142,22 +142,29 @@ def test_tracking_pipeline_outputs_and_eligibility(
     assert result.report.analysis_id == "tracking-test"
     assert result.report.processed_frame_count == 5
     assert result.report.source_frame_count == 5
-    assert result.report.track_count == 2
+    assert result.report.track_count == 3
     assert result.report.eligible_player_track_ids == [1]
 
     summaries = {summary.track_id: summary for summary in result.report.track_summaries}
     assert summaries[1].eligible_for_selection is True
+    assert summaries[1].preview_image == "tracking/player_previews/track_1.jpg"
+    assert summaries[1].court_distance_feet > 0
+    assert summaries[1].court_movement_rate_feet_per_second > 0
     assert summaries[1].observation_count == 5
     assert summaries[2].eligible_for_selection is False
+    assert summaries[2].preview_image is None
     assert "mostly_outside_court" in summaries[2].rejection_reasons
+    assert summaries[3].eligible_for_selection is False
+    assert "limited_court_movement" in summaries[3].rejection_reasons
 
     assert result.tracking_path.exists()
     assert result.observations_path.exists()
+    assert (result.tracking_dir.parent / "tracking/player_previews/track_1.jpg").exists()
     assert result.player_selection_image_path.exists()
     assert result.annotated_video_path.exists()
 
     observation_lines = result.observations_path.read_text(encoding="utf-8").splitlines()
-    assert len(observation_lines) == 10
+    assert len(observation_lines) == 15
     first_observation = json.loads(observation_lines[0])
     assert first_observation["track_id"] == 1
     assert first_observation["inside_court"] is True
@@ -179,6 +186,8 @@ def test_contact_sheet_and_annotated_video_are_readable(
     result = _run_tracking(case)
 
     contact_sheet = cv2.imread(str(result.player_selection_image_path), cv2.IMREAD_COLOR)
+    preview_path = result.tracking_dir.parent / "tracking/player_previews/track_1.jpg"
+    preview = cv2.imread(str(preview_path), cv2.IMREAD_COLOR)
     annotated = cv2.VideoCapture(str(result.annotated_video_path))
     try:
         success, frame = annotated.read()
@@ -186,6 +195,8 @@ def test_contact_sheet_and_annotated_video_are_readable(
         annotated.release()
 
     assert contact_sheet is not None
+    assert preview is not None
+    assert preview.shape[:2] == (180, 320)
     assert success is True
     assert frame is not None
 
@@ -434,8 +445,10 @@ def _write_controlled_tracking_detections(
     for frame_index in range(5):
         inside_ground = court_point_to_image((10.0 + frame_index * 0.2, 12.0), calibration)
         outside_ground = court_point_to_image((-5.0, 22.0), calibration)
+        stationary_ground = court_point_to_image((16.0, 18.0), calibration)
         lines.append(_line_from_ground_point(frame_index, 1, inside_ground, confidence=0.92))
         lines.append(_line_from_ground_point(frame_index, 2, outside_ground, confidence=0.86))
+        lines.append(_line_from_ground_point(frame_index, 3, stationary_ground, confidence=0.91))
     detections_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

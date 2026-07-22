@@ -12,6 +12,8 @@ import {
   type AnalysisJob,
   type AnalyticsGenerationResponse,
   type AnalyticsResponse,
+  type CalibrationRequest,
+  type CalibrationResponse,
   type CourtDetectionResponse,
   type PlayerSelectionResponse,
   type PlayersResponse,
@@ -22,6 +24,7 @@ import {
   analyticsGenerationResponseSchema,
   analyticsResponseSchema,
   analysisJobSchema,
+  calibrationResponseSchema,
   courtDetectionResponseSchema,
   playerSelectionResponseSchema,
   playersResponseSchema,
@@ -96,6 +99,17 @@ export function detectCourt(analysisId: string): Promise<CourtDetectionResponse>
   return postJson(
     `/api/v1/analyses/${encodeURIComponent(analysisId)}/court-detection`,
     courtDetectionResponseSchema,
+  );
+}
+
+export function submitCalibration(
+  analysisId: string,
+  request: CalibrationRequest,
+): Promise<CalibrationResponse> {
+  return postJson(
+    `/api/v1/analyses/${encodeURIComponent(analysisId)}/calibration`,
+    calibrationResponseSchema,
+    request,
   );
 }
 

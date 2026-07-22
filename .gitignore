@@ -12,6 +12,7 @@ venv/
 .env
 data/input/*
 data/output/*
+models/*
 !data/input/.gitkeep
 !data/output/.gitkeep
 web/.next/

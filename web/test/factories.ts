@@ -3,7 +3,9 @@ import type {
   AnalysisJob,
   AnalyticsGenerationResponse,
   AnalyticsReport,
+  CalibrationResponse,
   CourtDetectionResponse,
+  MatchIQReport,
   PlayerSelectionResponse,
   PlayersResponse,
   SampledFrame,
@@ -26,6 +28,10 @@ export function makeJob(overrides: Partial<AnalysisJob> = {}): AnalysisJob {
     player_selected: false,
     analytics_completed: false,
     manual_calibration_required: false,
+    court_detection_status: null,
+    court_detection_confidence: null,
+    court_detection_selected_frame: null,
+    court_detection_detected_corners: null,
     available_artifacts: [],
     ...overrides,
   };
@@ -112,6 +118,15 @@ export function makeCourtDetectionResponse(
     job: makeJob({
       calibration_completed: true,
       current_stage: "calibrated",
+      court_detection_status: "detected",
+      court_detection_confidence: 0.91,
+      court_detection_selected_frame: "frames/frame_000001.jpg",
+      court_detection_detected_corners: {
+        near_left: { x: 80, y: 760 },
+        near_right: { x: 720, y: 760 },
+        far_right: { x: 600, y: 120 },
+        far_left: { x: 200, y: 120 },
+      },
       available_artifacts: [
         makeArtifact({
           path: "calibrations/auto-court-detection/calibration.json",
@@ -128,6 +143,31 @@ export function makeCourtDetectionResponse(
   };
 }
 
+export function makeCalibrationResponse(
+  overrides: Partial<CalibrationResponse> = {},
+): CalibrationResponse {
+  return {
+    analysis_id: "analysis-123",
+    calibration: makeCourtDetectionResponse().calibration!,
+    artifacts: [
+      makeArtifact({
+        path: "calibrations/manual-calibration/verification.jpg",
+        url: "/api/v1/analyses/analysis-123/artifacts/calibrations/manual-calibration/verification.jpg",
+      }),
+      makeArtifact({
+        path: "calibrations/manual-calibration/top_down.jpg",
+        url: "/api/v1/analyses/analysis-123/artifacts/calibrations/manual-calibration/top_down.jpg",
+      }),
+    ],
+    job: makeJob({
+      current_stage: "calibrated",
+      calibration_completed: true,
+      manual_calibration_required: false,
+    }),
+    ...overrides,
+  };
+}
+
 export function makeTrackSummary(overrides: Partial<TrackSummary> = {}): TrackSummary {
   return {
     track_id: 1,
@@ -138,6 +178,8 @@ export function makeTrackSummary(overrides: Partial<TrackSummary> = {}): TrackSu
     last_timestamp_seconds: 1.4,
     duration_seconds: 1.4,
     average_confidence: 0.92,
+    court_distance_feet: 2.8,
+    court_movement_rate_feet_per_second: 2,
     court_observation_count: 15,
     extended_court_observation_count: 15,
     inside_extended_court_ratio: 1,
@@ -257,12 +299,77 @@ export function makeAnalyticsReport(overrides: Partial<AnalyticsReport> = {}): A
   };
 }
 
+export function makeMatchIQReport(overrides: Partial<MatchIQReport> = {}): MatchIQReport {
+  return {
+    analysis_id: "analysis-123",
+    status: "generated",
+    engine_version: "match-iq-rules-v1",
+    summary:
+      "Match IQ found 3 movement observations. Top signal: Court4 measured 60.0% of tracked time in the transition zone.",
+    insights: [
+      {
+        id: "transition-occupancy",
+        rule_id: "positioning-high-transition-v1",
+        priority: 30,
+        title: "Transition-zone time was the largest positioning signal",
+        statement: "Court4 measured 60.0% of tracked time in the transition zone.",
+        evidence: [
+          {
+            metric: "zone_occupancy.transition_zone.percentage",
+            label: "Transition Zone occupancy",
+            value: 60,
+            formatted_value: "60.0%",
+            threshold: ">= 55.0%",
+          },
+        ],
+      },
+      {
+        id: "measured-movement",
+        rule_id: "movement-measured-distance-v1",
+        priority: 70,
+        title: "Movement sample was measured",
+        statement: "Court4 measured 42.5 ft over 5.0 seconds, averaging 2.50 ft/s.",
+        evidence: [
+          {
+            metric: "distance.total_distance_feet",
+            label: "Total distance",
+            value: 42.5,
+            formatted_value: "42.5 ft",
+            threshold: "reported from analytics distance metric",
+          },
+        ],
+      },
+    ],
+    focus: {
+      title: "Focus area: positioning mix",
+      statement:
+        "Use the zone-occupancy insight as the main movement focus for this match. Court4 is only reporting where tracked time was spent.",
+      supporting_insight_ids: ["transition-occupancy"],
+    },
+    limitations: [
+      "Match IQ uses movement metrics only.",
+      "Court4 does not evaluate shots, serves, rallies, ball movement, opponents, scoring, or intent.",
+      "Court4 does not compare against previous matches because player history is not available yet.",
+    ],
+    metrics_used: [
+      "distance.total_distance_feet",
+      "distance.average_movement_feet_per_second",
+      "timeline_observation_count",
+      "zone_occupancy.tracked_time_seconds",
+      "zone_occupancy.transition_zone.percentage",
+    ],
+    created_at: "2026-07-21T00:03:00Z",
+    ...overrides,
+  };
+}
+
 export function makeAnalyticsGenerationResponse(
   overrides: Partial<AnalyticsGenerationResponse> = {},
 ): AnalyticsGenerationResponse {
   return {
     analysis_id: "analysis-123",
     analytics: makeAnalyticsReport(),
+    match_iq: makeMatchIQReport(),
     artifacts: [
       makeArtifact({
         path: "analytics/heatmap.png",

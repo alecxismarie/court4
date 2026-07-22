@@ -37,7 +37,7 @@ export function normalizeApiError(error: unknown): Court4ApiError {
 
 export async function requestJson<TResponse>(
   path: string,
-  schema: z.ZodType<TResponse>,
+  schema: z.ZodType<TResponse, z.ZodTypeDef, unknown>,
 ): Promise<TResponse> {
   const response = await fetch(toApiUrl(path), {
     headers: { Accept: "application/json" },
@@ -53,7 +53,7 @@ export async function requestJson<TResponse>(
 
 export async function postJson<TResponse>(
   path: string,
-  schema: z.ZodType<TResponse>,
+  schema: z.ZodType<TResponse, z.ZodTypeDef, unknown>,
   body?: unknown,
 ): Promise<TResponse> {
   const response = await fetch(toApiUrl(path), {

@@ -105,10 +105,14 @@ def retrieve_artifact(
     workflow: WorkflowDependency,
 ) -> FileResponse:
     artifact = workflow.get_artifact_file(analysis_id, artifact_path)
+    content_disposition_type = (
+        "inline" if artifact.content_type.startswith("image/") else "attachment"
+    )
     return FileResponse(
         artifact.path,
         media_type=artifact.content_type,
         filename=artifact.path.name,
+        content_disposition_type=content_disposition_type,
     )
 
 

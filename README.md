@@ -76,6 +76,40 @@ Phase 1.0B adds automatic court detection and the first end-to-end frontend work
 - Player-selection artifact display with eligible track selection
 - Simple analytics result page with factual metrics, trajectory, and heatmap artifacts
 
+Phase 1.1 adds deterministic Match IQ:
+
+- Rule-based Match IQ engine under `app/services/match_iq`
+- Evidence-backed movement insights generated only from existing analytics metrics
+- Persisted `analytics/match_iq.json` saved alongside analytics output
+- Backward-compatible analytics responses where legacy analyses can return `match_iq: null`
+- Frontend Match IQ summary, insight cards, focus area, limitations, and rule evidence
+
+Phase 1.2 adds shareable performance cards:
+
+- Instagram Story, Instagram/Facebook portrait, and square formats
+- PNG export from persisted analytics and Match IQ data
+- Native device sharing when the browser supports it
+- Optional heatmap or trajectory artifact and optional results link
+- No direct Facebook or Instagram posting integration
+
+Phase 1.3 adds a player-centered workspace:
+
+- Primary navigation for Dashboard, Performance, Matches, Upload Match, Player, and Settings
+- Returning-player dashboard with latest Match IQ, factual activity totals, and recent matches
+- Performance snapshot built from completed local analyses without progress comparisons
+- Browser-local Player profile used for dashboard greeting and share-card defaults
+- State-aware matches list with human-readable statuses and available actions only
+- Mobile navigation that keeps all primary routes reachable
+
+Phase 1.3A hardens real-video workflow reliability:
+
+- Interactive frontend manual calibration for automatic court-detection fallback
+- Canonical `COURT4_DETECTOR_MODEL_PATH` support with Docker Compose model mounting
+- Typed missing-model errors for the Ultralytics path
+- CLI/API Match IQ persistence parity
+- Maintained Playwright browser smoke tests for happy path, manual calibration, and missing-model recovery
+- Local real-video YOLO validation remains CPU-only and limited by generic person tracking quality
+
 Still out of scope: auth, databases, cloud storage, background workers, ball tracking, pose estimation, scoring, shot classification, coaching, face recognition, biometric identification, player comparison, opponent analysis, and real-time processing.
 
 ## Project Structure
@@ -93,6 +127,7 @@ app/
   services/tracking/           Tracking backends and errors
   services/video/              Video inspection, tracking, and selection services
   services/analytics/          Selected-player movement analytics and images
+  services/match_iq/           Deterministic movement-insight rules
   sports/pickleball/           Pickleball calibration, geometry, landmarks
 scripts/
   inspect_video.py
@@ -106,7 +141,7 @@ data/output/
 web/                           Next.js frontend
   app/                         App Router pages
   components/                  Frontend UI components
-  lib/                         Env, API client, storage helpers
+  lib/                         Env, API client, local storage, workspace aggregation, share cards
   test/                        Frontend test helpers
 ```
 
@@ -123,15 +158,49 @@ make install
 On Windows PowerShell:
 
 ```powershell
-py -3.12 -m venv .venv
+# Install Python 3.12 first if needed:
+winget install --id Python.Python.3.12 -e
+
+# Verify this is a real Python install, not a WindowsApps alias.
+where.exe python
+python --version
+
+# If where.exe points at WindowsApps, use a real python.org install path instead.
+$pythonCandidates = @(
+  "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+  "C:\Program Files\Python312\python.exe",
+  "C:\Program Files (x86)\Python312\python.exe"
+)
+$env:COURT4_PYTHON = $pythonCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $env:COURT4_PYTHON) { throw "Install Python 3.12 from python.org or winget first." }
+& $env:COURT4_PYTHON --version
+
+& $env:COURT4_PYTHON -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-The optional real detector backend needs Ultralytics:
+If PowerShell blocks activation for the current shell, run:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
+
+The optional real detector backend needs Ultralytics plus ByteTrack's `lap`
+dependency:
 
 ```bash
 python -m pip install -e ".[detector]"
+```
+
+Court4 does not commit YOLO weights. Place a local model file under `models/`
+or set `COURT4_DETECTOR_MODEL_PATH` to another path:
+
+```powershell
+New-Item -ItemType Directory -Force models | Out-Null
+$env:COURT4_DETECTOR_MODEL_PATH = "models/yolo11n.pt"
 ```
 
 Frontend setup:
@@ -148,6 +217,8 @@ The default frontend expects the API at `http://127.0.0.1:8000`. On Windows/WSL 
 ## Configuration
 
 Settings use the existing `PICKLEBALL_AI_` prefix for backward compatibility.
+`COURT4_DETECTOR_MODEL_PATH` is the canonical detector weight path and takes
+precedence over the legacy `PICKLEBALL_AI_DETECTOR_MODEL_PATH`.
 
 | Variable | Default |
 | --- | --- |
@@ -166,6 +237,7 @@ Settings use the existing `PICKLEBALL_AI_` prefix for backward compatibility.
 | `PICKLEBALL_AI_COURT_DETECTION_LOW_CONFIDENCE_THRESHOLD` | `0.25` |
 | `PICKLEBALL_AI_TRANSITION_AREA_DEPTH_FEET` | `8` |
 | `PICKLEBALL_AI_TRACKING_OUTPUT_DIR` | `data/output` |
+| `COURT4_DETECTOR_MODEL_PATH` | `models/yolo11n.pt` |
 | `PICKLEBALL_AI_DETECTOR_MODEL_PATH` | `models/yolo11n.pt` |
 | `PICKLEBALL_AI_DETECTOR_CONFIDENCE_THRESHOLD` | `0.35` |
 | `PICKLEBALL_AI_DETECTOR_IMAGE_SIZE` | `640` |
@@ -174,6 +246,9 @@ Settings use the existing `PICKLEBALL_AI_` prefix for backward compatibility.
 | `PICKLEBALL_AI_MIN_ELIGIBLE_TRACK_DURATION_SECONDS` | `1` |
 | `PICKLEBALL_AI_MIN_ELIGIBLE_OBSERVATION_COUNT` | `3` |
 | `PICKLEBALL_AI_MIN_ELIGIBLE_INSIDE_EXTENDED_RATIO` | `0.6` |
+| `PICKLEBALL_AI_MIN_ELIGIBLE_INSIDE_COURT_RATIO` | `0.6` |
+| `PICKLEBALL_AI_MIN_ELIGIBLE_COURT_MOVEMENT_RATE_FEET_PER_SECOND` | `1.2` |
+| `PICKLEBALL_AI_MAX_SELECTABLE_PLAYER_TRACKS` | `4` |
 | `PICKLEBALL_AI_MIN_ELIGIBLE_AVERAGE_CONFIDENCE` | `0.4` |
 | `PICKLEBALL_AI_ANNOTATED_VIDEO_CODEC` | `mp4v` |
 | `PICKLEBALL_AI_ANNOTATED_VIDEO_FPS` | `10` |
@@ -222,7 +297,23 @@ data/output/<analysis_id>/
   frames/
 ```
 
-`job.json` tracks `status`, `current_stage`, timestamps, failure details, stage-completion flags, and available artifact paths.
+`job.json` tracks `status`, `current_stage`, timestamps, failure details, stage-completion flags, available artifact paths, and optional automatic court-detection metadata:
+
+```json
+{
+  "court_detection_status": "detected",
+  "court_detection_confidence": 0.91,
+  "court_detection_selected_frame": "frames/frame_000001.jpg",
+  "court_detection_detected_corners": {
+    "near_left": {"x": 80.0, "y": 760.0},
+    "near_right": {"x": 720.0, "y": 760.0},
+    "far_right": {"x": 600.0, "y": 120.0},
+    "far_left": {"x": 200.0, "y": 120.0}
+  }
+}
+```
+
+Older jobs without these fields remain valid and return `null` values in the API payload.
 
 Endpoint overview:
 
@@ -321,12 +412,15 @@ http://localhost:3000
 Frontend routes:
 
 ```text
-GET /                         Dashboard and local recent matches
-GET /matches                  Recent matches stored in browser localStorage
+GET /                         Player dashboard with latest Match IQ and activity summary
+GET /performance              Factual current performance snapshot
+GET /matches                  State-aware recent matches stored in browser localStorage
 GET /matches/upload           Match video upload
 GET /matches/{analysis_id}    Job status, sampled frames, and workflow actions
-GET /matches/{analysis_id}/calibrate
-GET /matches/{analysis_id}/analytics
+GET /matches/{analysis_id}/calibrate  Manual four-corner calibration fallback
+GET /matches/{analysis_id}/analytics  Analytics, Match IQ, and share-card export
+GET /player                   Browser-local player profile
+GET /settings                 Application and technical settings boundary
 ```
 
 The match details page now drives the first end-to-end flow:
@@ -340,7 +434,49 @@ Generate My Analytics
 View analytics results
 ```
 
-If automatic court detection returns `low_confidence` or `failed`, the page shows a `Calibrate Manually` action and keeps the existing manual calibration route as the fallback. The manual route is still intentionally lightweight; it preserves the fallback entry point while automatic detection is the primary flow.
+If automatic court detection returns `low_confidence` or `failed`, the page shows a `Calibrate Manually` action that opens the interactive calibration fallback.
+
+The manual calibration page lets the user select a sampled frame, mark four
+visible outer court corners, undo/reset points, review the order, submit to the
+backend, and inspect the returned verification and top-down artifacts. The
+player-facing point order is `far left`, `far right`, `near right`, `near left`;
+the frontend maps those points to the backend contract order `near_left`,
+`near_right`, `far_right`, `far_left`.
+
+The Dashboard is a returning-player workspace. It shows `Welcome back` or
+`Welcome back, {displayName}` when a browser-local Player profile exists, the latest
+persisted Match IQ, factual activity totals, and a compact recent-match list. If no
+completed Match IQ exists, it shows: `Your latest Match IQ will appear here after you
+analyze a match.`
+
+The Performance page shows only factual aggregates from completed analyses:
+
+- matches analyzed
+- cumulative distance from `analytics.distance.total_distance_feet`
+- cumulative tracked time from `analytics.zone_occupancy.tracked_time_seconds`
+- most common measured court zone from summed zone seconds
+- recent Match IQ summaries when persisted
+
+Invalid, missing, NaN, infinite, incomplete, failed, or legacy values are ignored or
+shown as unavailable. Court4 does not fabricate progress trends, ratings, rankings, or
+improvement percentages. The page states: `Progress trends will appear here after
+Court4 has enough match history to compare your sessions reliably.`
+
+The Player page stores a minimal profile in browser `localStorage` only. Supported
+fields are display name, dominant hand, experience level, and optional home club or
+location. Values are trimmed, length-limited, sanitized for angle brackets, and can be
+cleared. This is not an account system and does not sync across devices. The Settings
+page is reserved for application and technical preferences, not sports identity fields.
+
+The shared workspace aggregation utility in `web/lib/workspace-data.ts` defines a
+completed match as a completed job with `analytics_completed` and a loaded analytics
+payload. It sorts deterministically by persisted analytics/job timestamps, counts
+completed Match IQ reports, derives the latest Match IQ, formats distance and tracked
+time, and avoids mutating API payloads.
+
+Mobile navigation uses the same primary route set as desktop navigation. All six routes
+remain visible and keyboard-accessible at narrow widths; there is no separate conflicting
+navigation model.
 
 ## Video Inspection
 
@@ -397,6 +533,8 @@ data/output/<analysis_id>/calibrations/auto-court-detection/
 
 The service returns `detected` only when confidence meets `PICKLEBALL_AI_COURT_DETECTION_MIN_CONFIDENCE`. Lower-confidence candidates return `low_confidence`; missing or unusable candidates return `failed`. Both fallback outcomes set `manual_calibration_required` on the analysis job so callers can route the user to manual calibration.
 
+The detection outcome, confidence, selected frame, and detected corners are persisted in `job.json` so they remain available after refresh and after later tracking, player-selection, and analytics updates.
+
 Manual calibration CLI:
 
 ```bash
@@ -423,7 +561,11 @@ The corner reprojection error checks the homography math, not whether the select
 
 ## Player Tracking
 
-The production detector path is an optional Ultralytics YOLO model with integrated ByteTrack. The model is loaded once per analysis, only class `person` is used, and weights must exist locally. Court4 does not silently download weights.
+The production detector path is an optional Ultralytics YOLO model with integrated ByteTrack. The model is loaded once per analysis, only class `person` is accepted from YOLO, and weights must exist locally. Court4 does not silently download weights. If the configured model path is missing, API tracking returns `detector_model_missing` with this user-facing message:
+
+```text
+Player detection is not available because the detector model is missing.
+```
 
 Example real-model command:
 
@@ -495,9 +637,14 @@ Rejected tracks include deterministic reasons such as:
 - `insufficient_observations`
 - `insufficient_duration`
 - `mostly_outside_court`
+- `mostly_outside_detected_court`
+- `limited_court_movement`
 - `low_average_confidence`
+- `outside_top_player_candidates`
 
-Court4 does not assume exactly four players. Singles and doubles must both remain possible later.
+Eligible tracks are ordered deterministically by movement distance, movement rate, duration, confidence, and track ID, then capped by `PICKLEBALL_AI_MAX_SELECTABLE_PLAYER_TRACKS`. Court4 does not assume exactly four players. Singles and doubles both remain possible because the cap is a maximum, not an expected player count.
+
+The raw tracking report can still contain spectators and background people because YOLO is a generic person detector. The frontend selection UI shows only tracks marked `eligible_for_selection`; rejected tracks remain in collapsed technical details for auditability.
 
 ## Manual Player Selection
 
@@ -541,15 +688,35 @@ Output:
 ```text
 data/output/<analysis_id>/analytics/
   analytics.json
+  match_iq.json
   movement_summary.json
   timeline.json
   trajectory.png
   heatmap.png
 ```
 
-`analytics.json` is the top-level report with source paths, selected track ID, distance metrics, average court position, zone occupancy, and artifact names. `movement_summary.json` is a compact factual summary for the selected player. `timeline.json` contains timestamped court positions. `trajectory.png` and `heatmap.png` preserve regulation court proportions in a top-down view.
+`analytics.json` is the top-level report with source paths, selected track ID, distance metrics, average court position, zone occupancy, and artifact names. `match_iq.json` is the persisted deterministic Match IQ report generated from movement analytics. `movement_summary.json` is a compact factual summary for the selected player. `timeline.json` contains timestamped court positions. `trajectory.png` and `heatmap.png` preserve regulation court proportions in a top-down view.
+
+The CLI and API use the same deterministic Match IQ persistence helpers. If analytics already exist, the CLI loads the stored reports and writes a missing `match_iq.json` without duplicating rule logic.
 
 Zone occupancy uses the configured `PICKLEBALL_AI_TRANSITION_AREA_DEPTH_FEET` value. Observations outside the regulation court are ignored for timeline, distance, heatmap, trajectory, and zone occupancy.
+
+## Match IQ and Share Cards
+
+Match IQ is deterministic and rule-based. It may use only metrics already produced by
+the analytics pipeline, including total distance, average movement per second, timeline
+observation count, tracked time, and kitchen, transition-zone, and baseline occupancy.
+Every generated insight includes a stable rule ID, evidence metric, formatted metric
+value, and threshold/rule description. If movement data is insufficient, Match IQ
+returns an insufficient-data report instead of fabricating observations.
+
+Share cards are generated in the browser from persisted analytics and Match IQ data.
+Supported formats are Instagram Story, Instagram/Facebook portrait, and square post.
+Cards may include player display name, match date, total distance, zone occupancy,
+Match IQ summary, one or two Match IQ insights, one focus recommendation, Court4
+branding, an optional heatmap or trajectory artifact, and an optional results link.
+They do not include the original video, other-player images, track IDs, internal
+thresholds, raw JSON, or unsupported statistics.
 
 ## Annotated Video
 
@@ -586,7 +753,10 @@ The output preserves source aspect ratio. It records only processed frames and u
 - API processing is synchronous; long videos block the request until each step completes.
 - API job persistence is local JSON on disk; there is no database, queue, auth, or multi-user isolation yet.
 - Frontend recent matches are stored only in the current browser's localStorage.
-- The frontend manual calibration page is still a fallback entry point rather than a polished interactive corner-marking tool.
+- Player profile data is browser-local only; there is no authentication or cross-device synchronization.
+- Phase 1.3 introduces a player-centered workspace but does not yet provide long-term progress comparisons, AI coaching, public profiles, authentication, or cross-device profile synchronization.
+- Manual calibration accuracy depends on the user selecting the true outer court corners.
+- Legacy analyses without persisted Match IQ remain viewable but show Match IQ as unavailable.
 - No interpolation is performed beyond native backend continuity.
 - Severe lens distortion is not corrected.
 
@@ -615,6 +785,7 @@ cd web
 npm.cmd run lint
 npm.cmd run typecheck
 npm.cmd run test
+npm.cmd run e2e
 npm.cmd run build
 npm.cmd run dev
 ```
@@ -630,37 +801,79 @@ docker compose run --rm api python -m scripts.select_player --tracking-report ..
 docker compose run --rm api python -m scripts.analyze_match --analysis-id ...
 ```
 
-The default Docker image does not install Ultralytics or include model weights. Use controlled JSONL detections for offline validation, or extend the image/install optional dependencies and mount a local model file for real inference.
+The Docker image installs the optional detector dependencies, including Ultralytics
+and ByteTrack's `lap` dependency, but it does not include model weights. The
+Compose service mounts `./models:/app/models:ro` and sets
+`COURT4_DETECTOR_MODEL_PATH=/app/models/yolo11n.pt`, so real tracking requires a
+local untracked `models/yolo11n.pt` file on the host. Controlled JSONL detections
+remain available for deterministic offline tests that do not require weights.
 
 Run the API with Docker:
 
 ```bash
 docker build -t court4:local .
-docker run --rm -p 8000:8000 -v "$PWD/data:/app/data" court4:local
+docker run --rm -p 8000:8000 \
+  -e COURT4_DETECTOR_MODEL_PATH=/app/models/yolo11n.pt \
+  -v "$PWD/data:/app/data" \
+  -v "$PWD/models:/app/models:ro" \
+  court4:local
+```
+
+Run backend validation through Docker without a local Python environment:
+
+```powershell
+docker compose build api
+docker compose run --rm api python -m pytest
+docker compose run --rm api python -m ruff check .
+docker compose run --rm api python -m ruff format --check .
+docker compose run --rm api python -m mypy app scripts tests
 ```
 
 ## Validation Commands
 
 Default offline validation:
 
-```bash
+```powershell
+.\.venv\Scripts\Activate.ps1
 python -m pytest
 python -m ruff check .
 python -m ruff format --check .
 python -m mypy app scripts tests
 docker build -t court4:local .
+
+# In another shell while the API is running:
+curl.exe http://127.0.0.1:8000/health
+curl.exe http://127.0.0.1:8000/docs
+
 cd web
 npm.cmd run lint
 npm.cmd run typecheck
 npm.cmd run test
+npm.cmd run e2e
 $env:NEXT_PUBLIC_COURT4_API_URL="http://127.0.0.1:8000"
 npm.cmd run build
 ```
 
-Optional real-model validation should only be reported when a local model file and optional detector dependencies are actually available.
+Optional real-model validation should only be reported when a local model file and optional detector dependencies are actually available. For a no-download runtime check in Docker, use `--network none` and mount the local model:
+
+```powershell
+docker run --rm --network none `
+  -e COURT4_DETECTOR_MODEL_PATH=/app/models/yolo11n.pt `
+  -v "${PWD}/data:/app/data" `
+  -v "${PWD}/models:/app/models:ro" `
+  court4:local python -m scripts.track_players `
+    --input /app/data/output/<analysis_id>/uploads/source.mp4 `
+    --calibration /app/data/output/<analysis_id>/calibrations/auto-court-detection/calibration.json `
+    --analysis-id real-model-validation `
+    --output-dir /app/data/output `
+    --model-path /app/models/yolo11n.pt `
+    --frame-interval 1
+```
 
 ## Recommended Next Phase
 
-Phase 1.1 - Shareable Performance Cards.
+Phase 1.3B - Real-Video Track Continuity and Candidate Review.
 
-That phase should add shareable summaries based on factual analytics outputs without adding ball tracking, scoring, or AI coaching.
+That phase should improve duplicate-track handling, identity continuity, candidate
+review, and real-video evaluation coverage before adding long-term player history
+or progress comparisons.

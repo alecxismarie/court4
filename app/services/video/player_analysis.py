@@ -36,6 +36,12 @@ from app.sports.pickleball.geometry import REGULATION_COURT, ordered_court_corne
 
 logger = logging.getLogger(__name__)
 
+PLAYER_PREVIEW_DIR_NAME = "player_previews"
+PLAYER_PREVIEW_WIDTH = 320
+PLAYER_PREVIEW_HEIGHT = 180
+PLAYER_PREVIEW_PADDING = 10
+MAX_COURT_MOVEMENT_STEP_FEET = 15.0
+
 
 @dataclass(frozen=True)
 class PlayerTrackingResult:
@@ -51,7 +57,10 @@ class PlayerTrackingResult:
 class EligibilityConfig:
     min_observation_count: int
     min_duration_seconds: float
+    min_inside_court_ratio: float
     min_inside_extended_ratio: float
+    min_court_movement_rate_feet_per_second: float
+    max_selectable_tracks: int
     min_average_confidence: float
 
 
@@ -62,6 +71,59 @@ class _RepresentativeCrop:
     frame_index: int
     confidence: float
     crop: ImageArray
+
+
+@dataclass(frozen=True)
+class _PreviewCandidate:
+    score: float
+    track_id: int
+    frame_index: int
+    confidence: float
+    bounding_box: BoundingBox
+
+
+@dataclass
+class _TrackSelectionMetrics:
+    observation_count: int = 0
+    confidence_sum: float = 0.0
+    court_observation_count: int = 0
+    extended_court_observation_count: int = 0
+    court_distance_feet: float = 0.0
+    last_court_position: tuple[float, float] | None = None
+
+    def update(self, observation: PlayerObservation) -> None:
+        self.observation_count += 1
+        self.confidence_sum += observation.confidence
+        if observation.inside_court:
+            self.court_observation_count += 1
+            if self.last_court_position is not None:
+                step_distance = _point_distance_feet(
+                    self.last_court_position,
+                    observation.court_position,
+                )
+                if step_distance <= MAX_COURT_MOVEMENT_STEP_FEET:
+                    self.court_distance_feet += step_distance
+            self.last_court_position = observation.court_position
+        if observation.inside_extended_court:
+            self.extended_court_observation_count += 1
+
+    @property
+    def average_confidence(self) -> float:
+        return self.confidence_sum / self.observation_count if self.observation_count else 0.0
+
+    @property
+    def inside_court_ratio(self) -> float:
+        if not self.observation_count:
+            return 0.0
+        return self.court_observation_count / self.observation_count
+
+    @property
+    def inside_extended_ratio(self) -> float:
+        return (
+            self.extended_court_observation_count / self.observation_count
+            if self.observation_count
+            else 0.0
+        )
 
 
 @dataclass
@@ -75,6 +137,8 @@ class _TrackAccumulator:
     confidence_sum: float = 0.0
     court_observation_count: int = 0
     extended_court_observation_count: int = 0
+    court_distance_feet: float = 0.0
+    last_court_position: tuple[float, float] | None = None
     representative_crop: _RepresentativeCrop | None = None
     rejection_reasons: list[str] = field(default_factory=list)
 
@@ -85,6 +149,14 @@ class _TrackAccumulator:
         self.confidence_sum += observation.confidence
         if observation.inside_court:
             self.court_observation_count += 1
+            if self.last_court_position is not None:
+                step_distance = _point_distance_feet(
+                    self.last_court_position,
+                    observation.court_position,
+                )
+                if step_distance <= MAX_COURT_MOVEMENT_STEP_FEET:
+                    self.court_distance_feet += step_distance
+            self.last_court_position = observation.court_position
         if observation.inside_extended_court:
             self.extended_court_observation_count += 1
         self._update_representative_crop(observation, frame)
@@ -99,10 +171,18 @@ class _TrackAccumulator:
             if self.observation_count
             else 0.0
         )
+        inside_court_ratio = (
+            self.court_observation_count / self.observation_count if self.observation_count else 0.0
+        )
+        court_movement_rate = (
+            self.court_distance_feet / duration_seconds if duration_seconds > 0 else 0.0
+        )
         rejection_reasons = _eligibility_rejection_reasons(
             observation_count=self.observation_count,
             duration_seconds=duration_seconds,
+            inside_court_ratio=inside_court_ratio,
             inside_extended_ratio=inside_extended_ratio,
+            court_movement_rate_feet_per_second=court_movement_rate,
             average_confidence=average_confidence,
             eligibility=eligibility,
         )
@@ -115,6 +195,8 @@ class _TrackAccumulator:
             last_timestamp_seconds=self.last_timestamp_seconds,
             duration_seconds=duration_seconds,
             average_confidence=average_confidence,
+            court_distance_feet=self.court_distance_feet,
+            court_movement_rate_feet_per_second=court_movement_rate,
             court_observation_count=self.court_observation_count,
             extended_court_observation_count=self.extended_court_observation_count,
             inside_extended_court_ratio=inside_extended_ratio,
@@ -184,13 +266,21 @@ def analyze_players(
     min_eligible_average_confidence: float,
     annotated_video_codec: str,
     annotated_video_fps: float,
+    min_eligible_inside_court_ratio: float = 0.6,
+    min_eligible_court_movement_rate_feet_per_second: float = 1.2,
+    max_selectable_player_tracks: int = 4,
 ) -> PlayerTrackingResult:
     _validate_tracking_options(
         frame_interval=frame_interval,
         court_inclusion_margin_feet=court_inclusion_margin_feet,
         min_eligible_track_duration_seconds=min_eligible_track_duration_seconds,
         min_eligible_observation_count=min_eligible_observation_count,
+        min_eligible_inside_court_ratio=min_eligible_inside_court_ratio,
         min_eligible_inside_extended_ratio=min_eligible_inside_extended_ratio,
+        min_eligible_court_movement_rate_feet_per_second=(
+            min_eligible_court_movement_rate_feet_per_second
+        ),
+        max_selectable_player_tracks=max_selectable_player_tracks,
         min_eligible_average_confidence=min_eligible_average_confidence,
         annotated_video_codec=annotated_video_codec,
         annotated_video_fps=annotated_video_fps,
@@ -251,7 +341,12 @@ def analyze_players(
         eligibility = EligibilityConfig(
             min_observation_count=min_eligible_observation_count,
             min_duration_seconds=min_eligible_track_duration_seconds,
+            min_inside_court_ratio=min_eligible_inside_court_ratio,
             min_inside_extended_ratio=min_eligible_inside_extended_ratio,
+            min_court_movement_rate_feet_per_second=(
+                min_eligible_court_movement_rate_feet_per_second
+            ),
+            max_selectable_tracks=max_selectable_player_tracks,
             min_average_confidence=min_eligible_average_confidence,
         )
 
@@ -318,6 +413,13 @@ def analyze_players(
             accumulator.to_summary(eligibility)
             for accumulator in sorted(track_accumulators.values(), key=lambda item: item.track_id)
         ]
+        track_summaries = _apply_selectable_track_limit(track_summaries, eligibility)
+        preview_paths = _write_player_preview_images_from_accumulators(
+            summaries=track_summaries,
+            accumulators=track_accumulators,
+            tracking_dir=tracking_dir,
+        )
+        track_summaries = _apply_preview_paths(track_summaries, preview_paths)
         eligible_track_ids = [
             summary.track_id for summary in track_summaries if summary.eligible_for_selection
         ]
@@ -432,7 +534,7 @@ def _build_observation(
         court_position=court_position,
         inside_court=inside,
         inside_extended_court=inside_extended,
-        excluded_from_player_tracks=not inside_extended,
+        excluded_from_player_tracks=not inside,
     )
 
 
@@ -442,7 +544,10 @@ def _validate_tracking_options(
     court_inclusion_margin_feet: float,
     min_eligible_track_duration_seconds: float,
     min_eligible_observation_count: int,
+    min_eligible_inside_court_ratio: float,
     min_eligible_inside_extended_ratio: float,
+    min_eligible_court_movement_rate_feet_per_second: float,
+    max_selectable_player_tracks: int,
     min_eligible_average_confidence: float,
     annotated_video_codec: str,
     annotated_video_fps: float,
@@ -455,8 +560,14 @@ def _validate_tracking_options(
         raise TrackingConfigurationError("Minimum eligible duration must be non-negative.")
     if min_eligible_observation_count <= 0:
         raise TrackingConfigurationError("Minimum eligible observation count must be positive.")
+    if not 0 <= min_eligible_inside_court_ratio <= 1:
+        raise TrackingConfigurationError("Minimum inside-court ratio must be between 0 and 1.")
     if not 0 <= min_eligible_inside_extended_ratio <= 1:
         raise TrackingConfigurationError("Minimum inside-extended ratio must be between 0 and 1.")
+    if min_eligible_court_movement_rate_feet_per_second < 0:
+        raise TrackingConfigurationError("Minimum court movement rate must be non-negative.")
+    if max_selectable_player_tracks <= 0:
+        raise TrackingConfigurationError("Maximum selectable player tracks must be positive.")
     if not 0 <= min_eligible_average_confidence <= 1:
         raise TrackingConfigurationError("Minimum average confidence must be between 0 and 1.")
     if len(annotated_video_codec) != 4:
@@ -573,6 +684,344 @@ def _crop_detection(frame: ImageArray, bounding_box: BoundingBox) -> ImageArray:
     return cast(ImageArray, crop)
 
 
+def ensure_player_preview_images(
+    *,
+    tracking_report_path: Path,
+    source_video_path: Path,
+) -> PlayerTrackingReport:
+    """Backfill per-track preview images for persisted tracking reports."""
+    report = _read_tracking_report(tracking_report_path)
+    tracking_dir = tracking_report_path.parent
+    expected_paths = {
+        summary.track_id: _player_preview_artifact_path(summary.track_id)
+        for summary in report.track_summaries
+        if summary.eligible_for_selection
+    }
+    preview_paths = {
+        track_id: artifact_path
+        for track_id, artifact_path in expected_paths.items()
+        if _artifact_path_exists(tracking_dir, artifact_path)
+    }
+    missing_track_ids = set(expected_paths) - set(preview_paths)
+
+    if missing_track_ids:
+        preview_paths.update(
+            _write_player_preview_images_from_observations(
+                observations_path=tracking_dir / report.artifacts.observations_jsonl,
+                source_video_path=source_video_path,
+                tracking_dir=tracking_dir,
+                track_ids=missing_track_ids,
+            )
+        )
+
+    updated_summaries = _apply_preview_paths(report.track_summaries, preview_paths)
+    if updated_summaries == report.track_summaries:
+        return report
+
+    updated_report = report.model_copy(update={"track_summaries": updated_summaries})
+    _write_tracking_report(updated_report, tracking_report_path)
+    return updated_report
+
+
+def refresh_player_selection_metrics(
+    *,
+    tracking_report_path: Path,
+    eligibility: EligibilityConfig,
+) -> PlayerTrackingReport:
+    report = _read_tracking_report(tracking_report_path)
+    observations_path = tracking_report_path.parent / report.artifacts.observations_jsonl
+    if not observations_path.is_file():
+        return report
+
+    metrics_by_track = _collect_track_selection_metrics(observations_path)
+    updated_summaries: list[TrackSummary] = []
+    for summary in report.track_summaries:
+        metrics = metrics_by_track.get(summary.track_id)
+        if metrics is None:
+            updated_summaries.append(summary)
+            continue
+
+        court_movement_rate = (
+            metrics.court_distance_feet / summary.duration_seconds
+            if summary.duration_seconds > 0
+            else 0.0
+        )
+        rejection_reasons = _eligibility_rejection_reasons(
+            observation_count=summary.observation_count,
+            duration_seconds=summary.duration_seconds,
+            inside_court_ratio=metrics.inside_court_ratio,
+            inside_extended_ratio=metrics.inside_extended_ratio,
+            court_movement_rate_feet_per_second=court_movement_rate,
+            average_confidence=metrics.average_confidence,
+            eligibility=eligibility,
+        )
+        eligible = not rejection_reasons
+        updated_summaries.append(
+            summary.model_copy(
+                update={
+                    "average_confidence": metrics.average_confidence,
+                    "court_distance_feet": metrics.court_distance_feet,
+                    "court_movement_rate_feet_per_second": court_movement_rate,
+                    "court_observation_count": metrics.court_observation_count,
+                    "extended_court_observation_count": (metrics.extended_court_observation_count),
+                    "inside_extended_court_ratio": metrics.inside_extended_ratio,
+                    "eligible_for_selection": eligible,
+                    "rejection_reasons": rejection_reasons,
+                    "preview_image": summary.preview_image if eligible else None,
+                }
+            )
+        )
+
+    updated_summaries = _apply_selectable_track_limit(updated_summaries, eligibility)
+    eligible_track_ids = [
+        summary.track_id for summary in updated_summaries if summary.eligible_for_selection
+    ]
+    updated_report = report.model_copy(
+        update={
+            "track_summaries": updated_summaries,
+            "eligible_player_track_ids": eligible_track_ids,
+        }
+    )
+    if updated_report == report:
+        return report
+
+    _write_tracking_report(updated_report, tracking_report_path)
+    return updated_report
+
+
+def _collect_track_selection_metrics(
+    observations_path: Path,
+) -> dict[int, _TrackSelectionMetrics]:
+    metrics_by_track: dict[int, _TrackSelectionMetrics] = {}
+    with observations_path.open("r", encoding="utf-8") as observations_file:
+        for line in observations_file:
+            if not line.strip():
+                continue
+            try:
+                observation = PlayerObservation.model_validate_json(line)
+            except ValidationError:
+                continue
+            metrics = metrics_by_track.setdefault(
+                observation.track_id,
+                _TrackSelectionMetrics(),
+            )
+            metrics.update(observation)
+    return metrics_by_track
+
+
+def _write_player_preview_images_from_accumulators(
+    *,
+    summaries: list[TrackSummary],
+    accumulators: dict[int, _TrackAccumulator],
+    tracking_dir: Path,
+) -> dict[int, str]:
+    preview_paths: dict[int, str] = {}
+    preview_dir = tracking_dir / PLAYER_PREVIEW_DIR_NAME
+    for summary in summaries:
+        if not summary.eligible_for_selection:
+            continue
+        crop = accumulators[summary.track_id].representative_crop
+        if crop is None:
+            continue
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        preview_path = _player_preview_file_path(tracking_dir, summary.track_id)
+        preview = _format_player_preview(crop.crop)
+        if not cv2.imwrite(str(preview_path), preview):
+            raise TrackingVideoReadError(f"OpenCV could not write player preview: {preview_path}")
+        preview_paths[summary.track_id] = _player_preview_artifact_path(summary.track_id)
+    return preview_paths
+
+
+def _write_player_preview_images_from_observations(
+    *,
+    observations_path: Path,
+    source_video_path: Path,
+    tracking_dir: Path,
+    track_ids: set[int],
+) -> dict[int, str]:
+    if not observations_path.is_file() or not source_video_path.is_file():
+        return {}
+
+    capture = cv2.VideoCapture(str(source_video_path))
+    try:
+        if not capture.isOpened():
+            return {}
+        source_width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        source_height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        if source_width <= 0 or source_height <= 0:
+            return {}
+
+        candidates = _collect_player_preview_candidates(
+            observations_path=observations_path,
+            track_ids=track_ids,
+            image_width=source_width,
+            image_height=source_height,
+        )
+        if not candidates:
+            return {}
+
+        preview_dir = tracking_dir / PLAYER_PREVIEW_DIR_NAME
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        preview_paths: dict[int, str] = {}
+        for candidate in sorted(candidates.values(), key=lambda item: item.frame_index):
+            capture.set(cv2.CAP_PROP_POS_FRAMES, candidate.frame_index)
+            success, frame = capture.read()
+            if not success:
+                continue
+            crop = _crop_detection(cast(ImageArray, frame), candidate.bounding_box)
+            if crop.size == 0:
+                continue
+            preview_path = _player_preview_file_path(tracking_dir, candidate.track_id)
+            preview = _format_player_preview(crop)
+            if not cv2.imwrite(str(preview_path), preview):
+                continue
+            preview_paths[candidate.track_id] = _player_preview_artifact_path(candidate.track_id)
+        return preview_paths
+    finally:
+        capture.release()
+
+
+def _collect_player_preview_candidates(
+    *,
+    observations_path: Path,
+    track_ids: set[int],
+    image_width: int,
+    image_height: int,
+) -> dict[int, _PreviewCandidate]:
+    candidates: dict[int, _PreviewCandidate] = {}
+    with observations_path.open("r", encoding="utf-8") as observations_file:
+        for line in observations_file:
+            if not line.strip():
+                continue
+            try:
+                observation = PlayerObservation.model_validate_json(line)
+            except ValidationError:
+                continue
+            if observation.track_id not in track_ids or observation.excluded_from_player_tracks:
+                continue
+            if not observation.bounding_box.is_inside_image(image_width, image_height):
+                continue
+            if observation.bounding_box.area < 100:
+                continue
+
+            score = observation.confidence * math.sqrt(observation.bounding_box.area)
+            current = candidates.get(observation.track_id)
+            if current is not None and score <= current.score:
+                continue
+            candidates[observation.track_id] = _PreviewCandidate(
+                score=score,
+                track_id=observation.track_id,
+                frame_index=observation.frame_index,
+                confidence=observation.confidence,
+                bounding_box=observation.bounding_box,
+            )
+    return candidates
+
+
+def _format_player_preview(crop: ImageArray) -> ImageArray:
+    preview = np.full(
+        (PLAYER_PREVIEW_HEIGHT, PLAYER_PREVIEW_WIDTH, 3),
+        255,
+        dtype=np.uint8,
+    )
+    height, width = crop.shape[:2]
+    if height <= 0 or width <= 0:
+        return cast(ImageArray, preview)
+
+    max_width = PLAYER_PREVIEW_WIDTH - PLAYER_PREVIEW_PADDING * 2
+    max_height = PLAYER_PREVIEW_HEIGHT - PLAYER_PREVIEW_PADDING * 2
+    scale = min(max_width / width, max_height / height)
+    resized_width = max(1, int(round(width * scale)))
+    resized_height = max(1, int(round(height * scale)))
+    resized = cv2.resize(crop, (resized_width, resized_height), interpolation=cv2.INTER_AREA)
+    x = (PLAYER_PREVIEW_WIDTH - resized_width) // 2
+    y = (PLAYER_PREVIEW_HEIGHT - resized_height) // 2
+    preview[y : y + resized_height, x : x + resized_width] = resized
+    return cast(ImageArray, preview)
+
+
+def _apply_preview_paths(
+    summaries: list[TrackSummary],
+    preview_paths: dict[int, str],
+) -> list[TrackSummary]:
+    updated_summaries: list[TrackSummary] = []
+    for summary in summaries:
+        preview_path = preview_paths.get(summary.track_id)
+        if preview_path is not None and summary.preview_image != preview_path:
+            updated_summaries.append(summary.model_copy(update={"preview_image": preview_path}))
+        else:
+            updated_summaries.append(summary)
+    return updated_summaries
+
+
+def _apply_selectable_track_limit(
+    summaries: list[TrackSummary],
+    eligibility: EligibilityConfig,
+) -> list[TrackSummary]:
+    eligible_summaries = [summary for summary in summaries if summary.eligible_for_selection]
+    if len(eligible_summaries) <= eligibility.max_selectable_tracks:
+        return summaries
+
+    kept_track_ids = {
+        summary.track_id
+        for summary in sorted(eligible_summaries, key=_selectable_track_rank_key)[
+            : eligibility.max_selectable_tracks
+        ]
+    }
+    limited_summaries: list[TrackSummary] = []
+    for summary in summaries:
+        if not summary.eligible_for_selection or summary.track_id in kept_track_ids:
+            limited_summaries.append(summary)
+            continue
+        limited_summaries.append(
+            summary.model_copy(
+                update={
+                    "eligible_for_selection": False,
+                    "rejection_reasons": [
+                        *summary.rejection_reasons,
+                        "outside_top_player_candidates",
+                    ],
+                    "preview_image": None,
+                }
+            )
+        )
+    return limited_summaries
+
+
+def _selectable_track_rank_key(summary: TrackSummary) -> tuple[float, float, float, float, int]:
+    return (
+        -summary.court_distance_feet,
+        -summary.court_movement_rate_feet_per_second,
+        -summary.duration_seconds,
+        -summary.average_confidence,
+        summary.track_id,
+    )
+
+
+def _player_preview_artifact_path(track_id: int) -> str:
+    return f"tracking/{PLAYER_PREVIEW_DIR_NAME}/track_{track_id}.jpg"
+
+
+def _player_preview_file_path(tracking_dir: Path, track_id: int) -> Path:
+    return tracking_dir / PLAYER_PREVIEW_DIR_NAME / f"track_{track_id}.jpg"
+
+
+def _artifact_path_exists(tracking_dir: Path, artifact_path: str) -> bool:
+    analysis_dir = tracking_dir.parent.resolve()
+    path = (analysis_dir / artifact_path).resolve()
+    return path.is_relative_to(analysis_dir) and path.is_file()
+
+
+def _read_tracking_report(tracking_path: Path) -> PlayerTrackingReport:
+    try:
+        payload = json.loads(tracking_path.read_text(encoding="utf-8"))
+        return PlayerTrackingReport.model_validate(payload)
+    except (OSError, json.JSONDecodeError, ValidationError) as exc:
+        raise TrackingConfigurationError(
+            f"Tracking report could not be parsed: {tracking_path}"
+        ) from exc
+
+
 def _write_player_selection_contact_sheet(
     *,
     summaries: list[TrackSummary],
@@ -638,7 +1087,9 @@ def _eligibility_rejection_reasons(
     *,
     observation_count: int,
     duration_seconds: float,
+    inside_court_ratio: float,
     inside_extended_ratio: float,
+    court_movement_rate_feet_per_second: float,
     average_confidence: float,
     eligibility: EligibilityConfig,
 ) -> list[str]:
@@ -647,8 +1098,16 @@ def _eligibility_rejection_reasons(
         reasons.append("insufficient_observations")
     if duration_seconds < eligibility.min_duration_seconds:
         reasons.append("insufficient_duration")
+    if inside_court_ratio < eligibility.min_inside_court_ratio:
+        reasons.append("mostly_outside_detected_court")
     if inside_extended_ratio < eligibility.min_inside_extended_ratio:
         reasons.append("mostly_outside_court")
+    if (
+        duration_seconds >= eligibility.min_duration_seconds
+        and court_movement_rate_feet_per_second
+        < eligibility.min_court_movement_rate_feet_per_second
+    ):
+        reasons.append("limited_court_movement")
     if average_confidence < eligibility.min_average_confidence:
         reasons.append("low_average_confidence")
     return reasons
@@ -663,3 +1122,7 @@ def _write_tracking_report(report: PlayerTrackingReport, tracking_path: Path) ->
 
 def _int_point(point: tuple[float, float]) -> tuple[int, int]:
     return (int(round(point[0])), int(round(point[1])))
+
+
+def _point_distance_feet(first: tuple[float, float], second: tuple[float, float]) -> float:
+    return math.hypot(second[0] - first[0], second[1] - first[1])

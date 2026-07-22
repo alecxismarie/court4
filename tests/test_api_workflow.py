@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import cast
@@ -49,6 +50,10 @@ def test_video_upload_job_retrieval_frames_and_safe_filename(
 
     assert retrieved.status_code == 200
     assert retrieved.json()["inspection_completed"] is True
+    assert retrieved.json()["court_detection_status"] is None
+    assert retrieved.json()["court_detection_confidence"] is None
+    assert retrieved.json()["court_detection_selected_frame"] is None
+    assert retrieved.json()["court_detection_detected_corners"] is None
     assert frames.status_code == 200
     assert len(frames.json()["frames"]) == 3
     assert frames.json()["frames"][0]["url"].startswith(
@@ -191,13 +196,28 @@ def test_automatic_court_detection_success_updates_job(
     assert payload["calibration"]["calibration_id"] == "auto-court-detection"
     assert payload["job"]["calibration_completed"] is True
     assert payload["job"]["manual_calibration_required"] is False
+    assert payload["job"]["court_detection_status"] == "detected"
+    assert payload["job"]["court_detection_confidence"] == payload["confidence"]
+    assert payload["job"]["court_detection_selected_frame"] == payload["selected_frame"]
+    assert payload["job"]["court_detection_detected_corners"] == payload["detected_corners"]
     assert {artifact["path"].split("/")[-1] for artifact in payload["artifacts"]} == {
         "calibration.json",
         "top_down.jpg",
         "verification.jpg",
     }
-    assert job.json()["current_stage"] == "calibrated"
-    assert job.json()["calibration_completed"] is True
+    loaded_job = job.json()
+    assert loaded_job["current_stage"] == "calibrated"
+    assert loaded_job["calibration_completed"] is True
+    assert loaded_job["court_detection_status"] == "detected"
+    assert loaded_job["court_detection_confidence"] == payload["confidence"]
+    assert loaded_job["court_detection_selected_frame"] == payload["selected_frame"]
+    assert loaded_job["court_detection_detected_corners"] == payload["detected_corners"]
+
+    reloaded_job = client.get(f"/api/v1/analyses/{analysis_id}")
+
+    assert reloaded_job.status_code == 200
+    assert reloaded_job.json()["court_detection_status"] == "detected"
+    assert reloaded_job.json()["court_detection_confidence"] == payload["confidence"]
 
 
 def test_automatic_court_detection_low_confidence_requires_manual_calibration(
@@ -221,9 +241,18 @@ def test_automatic_court_detection_low_confidence_requires_manual_calibration(
     assert payload["manual_calibration_required"] is True
     assert payload["calibration"] is None
     assert payload["artifacts"] == []
-    assert job.json()["current_stage"] == "inspected"
-    assert job.json()["calibration_completed"] is False
-    assert job.json()["manual_calibration_required"] is True
+    assert payload["job"]["court_detection_status"] == "low_confidence"
+    assert payload["job"]["court_detection_confidence"] == payload["confidence"]
+    assert payload["job"]["court_detection_selected_frame"] == payload["selected_frame"]
+    assert payload["job"]["court_detection_detected_corners"] == payload["detected_corners"]
+    loaded_job = job.json()
+    assert loaded_job["current_stage"] == "inspected"
+    assert loaded_job["calibration_completed"] is False
+    assert loaded_job["manual_calibration_required"] is True
+    assert loaded_job["court_detection_status"] == "low_confidence"
+    assert loaded_job["court_detection_confidence"] == payload["confidence"]
+    assert loaded_job["court_detection_selected_frame"] == payload["selected_frame"]
+    assert loaded_job["court_detection_detected_corners"] == payload["detected_corners"]
 
 
 def test_automatic_court_detection_failure_requires_manual_calibration(
@@ -251,8 +280,17 @@ def test_automatic_court_detection_failure_requires_manual_calibration(
     assert payload["selected_frame"] is None
     assert payload["detected_corners"] is None
     assert payload["manual_calibration_required"] is True
-    assert job.json()["calibration_completed"] is False
-    assert job.json()["manual_calibration_required"] is True
+    assert payload["job"]["court_detection_status"] == "failed"
+    assert payload["job"]["court_detection_confidence"] == 0.0
+    assert payload["job"]["court_detection_selected_frame"] is None
+    assert payload["job"]["court_detection_detected_corners"] is None
+    loaded_job = job.json()
+    assert loaded_job["calibration_completed"] is False
+    assert loaded_job["manual_calibration_required"] is True
+    assert loaded_job["court_detection_status"] == "failed"
+    assert loaded_job["court_detection_confidence"] == 0.0
+    assert loaded_job["court_detection_selected_frame"] is None
+    assert loaded_job["court_detection_detected_corners"] is None
 
 
 def test_full_controlled_api_workflow(
@@ -296,6 +334,7 @@ def test_full_controlled_api_workflow(
     )
     analytics = client.post(f"/api/v1/analyses/{analysis_id}/analytics")
     retrieved_analytics = client.get(f"/api/v1/analyses/{analysis_id}/analytics")
+    repeated_analytics = client.post(f"/api/v1/analyses/{analysis_id}/analytics")
     heatmap = client.get(f"/api/v1/analyses/{analysis_id}/artifacts/analytics/heatmap.png")
     trajectory = client.get(f"/api/v1/analyses/{analysis_id}/artifacts/analytics/trajectory.png")
     final_job = client.get(f"/api/v1/analyses/{analysis_id}")
@@ -305,18 +344,31 @@ def test_full_controlled_api_workflow(
     assert tracking.json()["tracking"]["eligible_player_track_ids"] == [1]
     assert players.status_code == 200
     assert players.json()["track_summaries"][0]["eligible_for_selection"] is True
+    assert players.json()["track_summaries"][0]["preview_image"] == (
+        "tracking/player_previews/track_1.jpg"
+    )
     assert invalid_selection.status_code == 400
     assert analytics_before_selection.status_code == 409
     assert selection.status_code == 200
     assert selection.json()["selected_player_track_id"] == 1
     assert analytics.status_code == 200
     assert analytics.json()["analytics"]["timeline_observation_count"] == 15
+    assert analytics.json()["match_iq"]["status"] == "generated"
+    assert (
+        analytics.json()["match_iq"]["insights"][0]["rule_id"] == "positioning-high-transition-v1"
+    )
+    assert (output_dir / analysis_id / "analytics" / "match_iq.json").is_file()
     assert retrieved_analytics.status_code == 200
     assert retrieved_analytics.json()["analytics"]["artifacts"]["heatmap_png"] == "heatmap.png"
+    assert retrieved_analytics.json()["match_iq"] == analytics.json()["match_iq"]
+    assert repeated_analytics.status_code == 200
+    assert repeated_analytics.json()["match_iq"] == analytics.json()["match_iq"]
     assert heatmap.status_code == 200
     assert heatmap.headers["content-type"].startswith("image/png")
+    assert heatmap.headers["content-disposition"].startswith("inline")
     assert trajectory.status_code == 200
     assert trajectory.headers["content-type"].startswith("image/png")
+    assert trajectory.headers["content-disposition"].startswith("inline")
     assert final_job.json()["status"] == "completed"
     assert final_job.json()["analytics_completed"] is True
 
@@ -371,6 +423,162 @@ def test_full_controlled_api_workflow_with_automatic_court_detection(
     assert retrieved_analytics.status_code == 200
     assert final_job.json()["status"] == "completed"
     assert final_job.json()["analytics_completed"] is True
+    assert final_job.json()["court_detection_status"] == "detected"
+    assert final_job.json()["court_detection_confidence"] == detection.json()["confidence"]
+    assert final_job.json()["court_detection_selected_frame"] == detection.json()["selected_frame"]
+    assert (
+        final_job.json()["court_detection_detected_corners"] == detection.json()["detected_corners"]
+    )
+
+
+def test_ultralytics_tracking_missing_model_returns_typed_error(
+    tmp_path: Path,
+    synthetic_video_factory: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _output_dir = _api_client(
+        tmp_path,
+        monkeypatch,
+        detector_model_path=tmp_path / "models" / "missing.pt",
+    )
+    video_path = synthetic_video_factory(
+        tmp_path / "match.avi",
+        frame_count=15,
+        fps=10.0,
+        width=800,
+        height=900,
+    )
+    analysis_id = _upload_video(client, video_path).json()["analysis_id"]
+    calibration = client.post(
+        f"/api/v1/analyses/{analysis_id}/calibration",
+        json=_calibration_payload(calibration_id="api-calibration"),
+    )
+
+    response = client.post(
+        f"/api/v1/analyses/{analysis_id}/tracking",
+        json={
+            "calibration_id": "api-calibration",
+            "backend": "ultralytics",
+            "frame_interval": 1,
+        },
+    )
+    job = client.get(f"/api/v1/analyses/{analysis_id}")
+
+    assert calibration.status_code == 200
+    assert response.status_code == 400
+    assert response.json()["error"] == {
+        "code": "detector_model_missing",
+        "message": "Player detection is not available because the detector model is missing.",
+    }
+    assert job.json()["status"] == "processing"
+    assert job.json()["tracking_completed"] is False
+
+
+def test_legacy_job_without_court_detection_fields_still_loads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, output_dir = _api_client(tmp_path, monkeypatch)
+    analysis_id = "legacy-analysis"
+    analysis_dir = output_dir / analysis_id
+    analysis_dir.mkdir(parents=True)
+    (analysis_dir / "job.json").write_text(
+        json.dumps(
+            {
+                "analysis_id": analysis_id,
+                "status": "processing",
+                "current_stage": "inspected",
+                "created_at": "2026-07-21T00:00:00Z",
+                "updated_at": "2026-07-21T00:01:00Z",
+                "inspection_completed": True,
+                "calibration_completed": False,
+                "tracking_completed": False,
+                "player_selected": False,
+                "analytics_completed": False,
+                "manual_calibration_required": False,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(f"/api/v1/analyses/{analysis_id}")
+
+    assert response.status_code == 200
+    assert response.json()["court_detection_status"] is None
+    assert response.json()["court_detection_confidence"] is None
+    assert response.json()["court_detection_selected_frame"] is None
+    assert response.json()["court_detection_detected_corners"] is None
+
+
+def test_legacy_analytics_without_match_iq_returns_null(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, output_dir = _api_client(tmp_path, monkeypatch)
+    analysis_id = "legacy-analytics"
+    analytics_dir = output_dir / analysis_id / "analytics"
+    analytics_dir.mkdir(parents=True)
+    (output_dir / analysis_id / "job.json").write_text(
+        json.dumps(
+            {
+                "analysis_id": analysis_id,
+                "status": "completed",
+                "current_stage": "analyzed",
+                "created_at": "2026-07-21T00:00:00Z",
+                "updated_at": "2026-07-21T00:01:00Z",
+                "inspection_completed": True,
+                "calibration_completed": True,
+                "tracking_completed": True,
+                "player_selected": True,
+                "analytics_completed": True,
+                "manual_calibration_required": False,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (analytics_dir / "analytics.json").write_text(
+        json.dumps(
+            {
+                "analysis_id": analysis_id,
+                "source_tracking_report": "tracking/tracking.json",
+                "source_observations": "tracking/observations.jsonl",
+                "calibration_id": "legacy-calibration",
+                "selected_player_track_id": 1,
+                "distance": {
+                    "total_distance_feet": 12.0,
+                    "total_distance_meters": 3.6576,
+                    "average_movement_feet_per_second": 2.4,
+                    "average_movement_meters_per_second": 0.73152,
+                },
+                "timeline_observation_count": 5,
+                "average_court_position": [10.0, 20.0],
+                "zone_occupancy": {
+                    "kitchen": {"seconds": 1.0, "percentage": 20.0},
+                    "transition_zone": {"seconds": 3.0, "percentage": 60.0},
+                    "baseline_area": {"seconds": 1.0, "percentage": 20.0},
+                    "tracked_time_seconds": 5.0,
+                },
+                "artifacts": {
+                    "analytics_json": "analytics.json",
+                    "movement_summary_json": "movement_summary.json",
+                    "timeline_json": "timeline.json",
+                    "trajectory_png": "trajectory.png",
+                    "heatmap_png": "heatmap.png",
+                },
+                "created_at": "2026-07-21T00:02:00Z",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    response = client.get(f"/api/v1/analyses/{analysis_id}/analytics")
+
+    assert response.status_code == 200
+    assert response.json()["analytics"]["analysis_id"] == analysis_id
+    assert response.json()["match_iq"] is None
 
 
 def test_analytics_retrieval_before_generation_returns_conflict(
@@ -410,12 +618,16 @@ def _api_client(
     monkeypatch: pytest.MonkeyPatch,
     *,
     max_upload_size_bytes: int = 5_000_000,
+    detector_model_path: Path | None = None,
 ) -> tuple[TestClient, Path]:
     output_dir = tmp_path / "api-output"
     monkeypatch.setenv("PICKLEBALL_AI_ANALYSIS_OUTPUT_DIR", str(output_dir))
     monkeypatch.setenv("PICKLEBALL_AI_DEFAULT_SAMPLE_INTERVAL_SECONDS", "0.5")
     monkeypatch.setenv("PICKLEBALL_AI_MAX_UPLOAD_SIZE_BYTES", str(max_upload_size_bytes))
     monkeypatch.setenv("PICKLEBALL_AI_MIN_ELIGIBLE_TRACK_DURATION_SECONDS", "0.2")
+    monkeypatch.setenv("PICKLEBALL_AI_MIN_ELIGIBLE_COURT_MOVEMENT_RATE_FEET_PER_SECOND", "0.5")
+    if detector_model_path is not None:
+        monkeypatch.setenv("COURT4_DETECTOR_MODEL_PATH", str(detector_model_path))
     get_settings.cache_clear()
     return TestClient(create_app()), output_dir
 

@@ -16,10 +16,14 @@ RUN apt-get update \
 
 COPY pyproject.toml README.md ./
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir ".[dev]"
+    && python -m pip install --no-cache-dir ".[dev,detector]"
+
+ENV YOLO_CONFIG_DIR=/tmp
+ENV MPLCONFIGDIR=/tmp/matplotlib
 
 COPY app ./app
 COPY scripts ./scripts
+COPY tests ./tests
 COPY data ./data
 
 EXPOSE 8000

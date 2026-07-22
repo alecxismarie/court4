@@ -5,7 +5,10 @@ import numpy as np
 
 from app.schemas.player_tracking import BoundingBox, TrackedPersonDetection
 from app.services.detection.interfaces import ImageArray, PersonDetectionBackend
-from app.services.tracking.exceptions import DetectorUnavailableError
+from app.services.tracking.exceptions import (
+    DetectorModelMissingError,
+    DetectorRuntimeUnavailableError,
+)
 
 
 class UltralyticsByteTrackBackend(PersonDetectionBackend):
@@ -24,17 +27,17 @@ class UltralyticsByteTrackBackend(PersonDetectionBackend):
         image_size: int,
     ) -> None:
         if not model_path.exists():
-            raise DetectorUnavailableError(
+            raise DetectorModelMissingError(
                 "Detector model file does not exist. Provide --model-path or set "
-                f"PICKLEBALL_AI_DETECTOR_MODEL_PATH: {model_path}"
+                f"COURT4_DETECTOR_MODEL_PATH: {model_path}"
             )
         if not model_path.is_file():
-            raise DetectorUnavailableError(f"Detector model path is not a file: {model_path}")
+            raise DetectorModelMissingError(f"Detector model path is not a file: {model_path}")
 
         try:
             from ultralytics import YOLO
         except ImportError as exc:
-            raise DetectorUnavailableError(
+            raise DetectorRuntimeUnavailableError(
                 "Ultralytics is not installed. Install the optional detector extra with "
                 "`python -m pip install -e .[detector]`."
             ) from exc
@@ -42,7 +45,7 @@ class UltralyticsByteTrackBackend(PersonDetectionBackend):
         self._model_path = model_path
         self._confidence_threshold = confidence_threshold
         self._image_size = image_size
-        self._model = YOLO(str(model_path))
+        self._model: Any | None = YOLO(str(model_path))
 
     @property
     def model_name(self) -> str:
@@ -56,6 +59,8 @@ class UltralyticsByteTrackBackend(PersonDetectionBackend):
         timestamp_seconds: float,
     ) -> tuple[TrackedPersonDetection, ...]:
         del frame_index, timestamp_seconds
+        if self._model is None:
+            return ()
         results = self._model.track(
             frame,
             persist=True,

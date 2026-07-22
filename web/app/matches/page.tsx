@@ -12,9 +12,9 @@ export default function MatchesPage() {
             <p className="text-sm font-semibold uppercase tracking-wide text-court-green">
               Matches
             </p>
-            <h1 className="mt-2 text-3xl font-semibold text-court-ink">Recent analyses</h1>
+            <h1 className="mt-2 text-3xl font-semibold text-court-ink">Your matches</h1>
             <p className="mt-2 text-sm text-court-muted">
-              This list is remembered locally in your browser after successful uploads.
+              Review match status, Match IQ availability, and share-ready results.
             </p>
           </div>
           <ButtonLink href="/matches/upload">

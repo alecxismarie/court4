@@ -7,6 +7,26 @@ export const analysisArtifactSchema = z.object({
   size_bytes: z.number().nonnegative(),
 });
 
+export const calibrationPointSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+});
+
+export const detectedCourtCornersSchema = z.object({
+  near_left: calibrationPointSchema,
+  near_right: calibrationPointSchema,
+  far_right: calibrationPointSchema,
+  far_left: calibrationPointSchema,
+});
+
+export const courtDetectionOutcomeSchema = z.enum(["detected", "low_confidence", "failed"]);
+
+function missingAsNull<TSchema extends z.ZodTypeAny>(schema: TSchema) {
+  return z
+    .union([schema, z.null(), z.undefined()])
+    .transform((value): z.output<TSchema> | null => value ?? null);
+}
+
 export const analysisJobSchema = z.object({
   analysis_id: z.string(),
   status: z.string(),
@@ -21,6 +41,10 @@ export const analysisJobSchema = z.object({
   player_selected: z.boolean(),
   analytics_completed: z.boolean(),
   manual_calibration_required: z.boolean(),
+  court_detection_status: missingAsNull(courtDetectionOutcomeSchema),
+  court_detection_confidence: missingAsNull(z.number().min(0).max(1)),
+  court_detection_selected_frame: missingAsNull(z.string()),
+  court_detection_detected_corners: missingAsNull(detectedCourtCornersSchema),
   available_artifacts: z.array(analysisArtifactSchema),
 });
 
@@ -35,11 +59,6 @@ export const sampledFrameSchema = z.object({
 export const sampledFramesResponseSchema = z.object({
   analysis_id: z.string(),
   frames: z.array(sampledFrameSchema),
-});
-
-export const calibrationPointSchema = z.object({
-  x: z.number(),
-  y: z.number(),
 });
 
 export const calibrationPointTupleSchema = z.tuple([z.number(), z.number()]);
@@ -77,14 +96,12 @@ export const calibrationReportSchema = z.object({
   created_at: z.string(),
 });
 
-export const detectedCourtCornersSchema = z.object({
-  near_left: calibrationPointSchema,
-  near_right: calibrationPointSchema,
-  far_right: calibrationPointSchema,
-  far_left: calibrationPointSchema,
+export const calibrationResponseSchema = z.object({
+  analysis_id: z.string(),
+  calibration: calibrationReportSchema,
+  artifacts: z.array(analysisArtifactSchema),
+  job: analysisJobSchema,
 });
-
-export const courtDetectionOutcomeSchema = z.enum(["detected", "low_confidence", "failed"]);
 
 export const courtDetectionResponseSchema = z.object({
   analysis_id: z.string(),
@@ -102,6 +119,7 @@ export const trackingBackendSchema = z.enum(["controlled-json", "ultralytics"]);
 
 export const trackSummarySchema = z.object({
   track_id: z.number().int().nonnegative(),
+  preview_image: z.string().nullable().optional(),
   first_frame: z.number().int().nonnegative(),
   last_frame: z.number().int().nonnegative(),
   observation_count: z.number().int().nonnegative(),
@@ -109,6 +127,8 @@ export const trackSummarySchema = z.object({
   last_timestamp_seconds: z.number().nonnegative(),
   duration_seconds: z.number().nonnegative(),
   average_confidence: z.number().min(0).max(1),
+  court_distance_feet: z.number().nonnegative().optional(),
+  court_movement_rate_feet_per_second: z.number().nonnegative().optional(),
   court_observation_count: z.number().int().nonnegative(),
   extended_court_observation_count: z.number().int().nonnegative(),
   inside_extended_court_ratio: z.number().min(0).max(1),
@@ -203,9 +223,45 @@ export const analyticsReportSchema = z.object({
   created_at: z.string(),
 });
 
+export const matchIQEvidenceSchema = z.object({
+  metric: z.string(),
+  label: z.string(),
+  value: z.union([z.number(), z.string()]),
+  formatted_value: z.string(),
+  threshold: z.string(),
+});
+
+export const matchIQInsightSchema = z.object({
+  id: z.string(),
+  rule_id: z.string(),
+  priority: z.number().int().nonnegative(),
+  title: z.string(),
+  statement: z.string(),
+  evidence: z.array(matchIQEvidenceSchema),
+});
+
+export const matchIQFocusSchema = z.object({
+  title: z.string(),
+  statement: z.string(),
+  supporting_insight_ids: z.array(z.string()),
+});
+
+export const matchIQReportSchema = z.object({
+  analysis_id: z.string(),
+  status: z.enum(["generated", "insufficient_data"]),
+  engine_version: z.string(),
+  summary: z.string(),
+  insights: z.array(matchIQInsightSchema),
+  focus: matchIQFocusSchema.nullable(),
+  limitations: z.array(z.string()),
+  metrics_used: z.array(z.string()),
+  created_at: z.string(),
+});
+
 export const analyticsGenerationResponseSchema = z.object({
   analysis_id: z.string(),
   analytics: analyticsReportSchema,
+  match_iq: matchIQReportSchema.nullable(),
   artifacts: z.array(analysisArtifactSchema),
   job: analysisJobSchema,
 });
@@ -213,6 +269,7 @@ export const analyticsGenerationResponseSchema = z.object({
 export const analyticsResponseSchema = z.object({
   analysis_id: z.string(),
   analytics: analyticsReportSchema,
+  match_iq: matchIQReportSchema.nullable(),
 });
 
 export const apiErrorResponseSchema = z.object({
@@ -227,6 +284,9 @@ export type AnalysisJob = z.infer<typeof analysisJobSchema>;
 export type AnalyticsGenerationResponse = z.infer<typeof analyticsGenerationResponseSchema>;
 export type AnalyticsResponse = z.infer<typeof analyticsResponseSchema>;
 export type AnalyticsReport = z.infer<typeof analyticsReportSchema>;
+export type CalibrationResponse = z.infer<typeof calibrationResponseSchema>;
+export type MatchIQInsight = z.infer<typeof matchIQInsightSchema>;
+export type MatchIQReport = z.infer<typeof matchIQReportSchema>;
 export type CourtDetectionResponse = z.infer<typeof courtDetectionResponseSchema>;
 export type PlayersResponse = z.infer<typeof playersResponseSchema>;
 export type PlayerSelectionResponse = z.infer<typeof playerSelectionResponseSchema>;
@@ -243,6 +303,15 @@ export type TrackingRequest = {
   model_path?: string | null;
   confidence_threshold?: number | null;
   frame_interval?: number | null;
+};
+
+export type CalibrationRequest = {
+  calibration_id?: string | null;
+  source_frame: string;
+  near_left: { x: number; y: number };
+  near_right: { x: number; y: number };
+  far_right: { x: number; y: number };
+  far_left: { x: number; y: number };
 };
 
 export type UploadProgress = {

@@ -1,22 +1,27 @@
 "use client";
 
-import { BarChart3, Home, Settings, Trophy, Upload } from "lucide-react";
+import { Activity, BarChart3, Home, Settings, Trophy, Upload, UserRound } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
+import { usePlayerProfile } from "@/lib/use-player-profile";
 
 const navItems = [
   { href: "/", label: "Dashboard", icon: Home, disabled: false },
+  { href: "/performance", label: "Performance", icon: Activity, disabled: false },
   { href: "/matches", label: "Matches", icon: Trophy, disabled: false },
-  { href: "/matches/upload", label: "Upload", icon: Upload, disabled: false },
-  { href: "/settings", label: "Settings", icon: Settings, disabled: true },
+  { href: "/matches/upload", label: "Upload Match", icon: Upload, disabled: false },
+  { href: "/player", label: "Player", icon: UserRound, disabled: false },
+  { href: "/settings", label: "Settings", icon: Settings, disabled: false },
 ] as const;
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const { profile } = usePlayerProfile();
+  const playerLabel = profile.displayName || "Local Player";
 
   return (
     <div className="min-h-screen bg-[#eef4f0]">
@@ -33,11 +38,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             />
             <span>Court4</span>
           </Link>
-          <span className="rounded-md border border-court-line px-3 py-1 text-sm text-court-muted">
-            Local Player
+          <span className="max-w-[11rem] truncate rounded-md border border-court-line px-3 py-1 text-sm text-court-muted">
+            {playerLabel}
           </span>
         </div>
-        <nav aria-label="Primary navigation" className="flex gap-1 overflow-x-auto px-3 pb-3">
+        <nav aria-label="Primary navigation" className="grid grid-cols-3 gap-1 px-3 pb-3">
           {navItems.map((item) => (
             <NavLink
               key={item.href}
@@ -46,6 +51,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               active={isActive(pathname, item.href)}
               disabled={item.disabled}
               icon={<item.icon aria-hidden="true" className="h-4 w-4" />}
+              compact
             />
           ))}
         </nav>
@@ -84,8 +90,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <BarChart3 aria-hidden="true" className="h-5 w-5" />
                 </span>
                 <div>
-                  <p className="text-sm font-medium text-court-ink">Local Player</p>
-                  <p className="text-xs text-court-muted">Development session</p>
+                  <p className="max-w-36 truncate text-sm font-medium text-court-ink">
+                    {playerLabel}
+                  </p>
+                  <p className="text-xs text-court-muted">Browser-local workspace</p>
                 </div>
               </div>
             </div>
@@ -104,15 +112,18 @@ function NavLink({
   active,
   disabled,
   icon,
+  compact = false,
 }: {
   href: string;
   label: string;
   active: boolean;
   disabled: boolean;
   icon: ReactNode;
+  compact?: boolean;
 }) {
   const classes = cn(
     "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+    compact && "min-h-10 justify-center px-2 text-center text-xs sm:text-sm",
     active
       ? "bg-court-lime text-court-navy"
       : "text-court-muted hover:bg-court-panel hover:text-court-ink",
@@ -138,6 +149,9 @@ function NavLink({
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") {
     return pathname === "/";
+  }
+  if (href === "/matches") {
+    return pathname === "/matches" || (pathname.startsWith("/matches/") && !pathname.startsWith("/matches/upload"));
   }
   return pathname === href || pathname.startsWith(`${href}/`);
 }

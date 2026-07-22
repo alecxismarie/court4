@@ -22,6 +22,14 @@ class DetectorUnavailableError(TrackingError):
     """Raised when the configured detector or model is unavailable."""
 
 
+class DetectorModelMissingError(DetectorUnavailableError):
+    """Raised when the configured detector model file is missing."""
+
+
+class DetectorRuntimeUnavailableError(DetectorUnavailableError):
+    """Raised when detector runtime dependencies are not installed."""
+
+
 class TrackingConfigurationError(TrackingError):
     """Raised when tracking settings are invalid."""
 

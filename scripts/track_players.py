@@ -84,6 +84,11 @@ def main(argv: list[str] | None = None) -> int:
             min_eligible_track_duration_seconds=settings.min_eligible_track_duration_seconds,
             min_eligible_observation_count=settings.min_eligible_observation_count,
             min_eligible_inside_extended_ratio=settings.min_eligible_inside_extended_ratio,
+            min_eligible_inside_court_ratio=settings.min_eligible_inside_court_ratio,
+            min_eligible_court_movement_rate_feet_per_second=(
+                settings.min_eligible_court_movement_rate_feet_per_second
+            ),
+            max_selectable_player_tracks=settings.max_selectable_player_tracks,
             min_eligible_average_confidence=settings.min_eligible_average_confidence,
             annotated_video_codec=settings.annotated_video_codec,
             annotated_video_fps=settings.annotated_video_fps,

@@ -183,7 +183,7 @@ def test_existing_analytics_output_is_rejected(
         )
 
 
-def test_analyze_match_cli_success_and_failure(
+def test_analyze_match_cli_generates_match_iq_and_reuses_existing_outputs(
     tmp_path: Path,
     synthetic_court_image_factory: Callable[..., Path],
     capsys: pytest.CaptureFixture[str],
@@ -194,13 +194,25 @@ def test_analyze_match_cli_success_and_failure(
         ["--analysis-id", "analytics-case", "--output-dir", str(tmp_path / "output")]
     )
     success = capsys.readouterr()
+    repeated_code = analyze_match_cli_main(
+        ["--analysis-id", "analytics-case", "--output-dir", str(tmp_path / "output")]
+    )
+    repeated = capsys.readouterr()
     failure_code = analyze_match_cli_main(
         ["--analysis-id", "missing", "--output-dir", str(tmp_path / "output")]
     )
     failure = capsys.readouterr()
+    match_iq_path = tmp_path / "output" / "analytics-case" / "analytics" / "match_iq.json"
 
     assert success_code == 0
     assert '"analysis_id": "analytics-case"' in success.out
+    assert "Match IQ written to:" in success.err
+    assert match_iq_path.is_file()
+    match_iq = json.loads(match_iq_path.read_text(encoding="utf-8"))
+    assert match_iq["status"] == "generated"
+    assert repeated_code == 0
+    assert repeated.out == success.out
+    assert "Match IQ written to:" in repeated.err
     assert failure_code == 1
     assert "Error:" in failure.err
 

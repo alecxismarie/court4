@@ -1,7 +1,14 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, PositiveFloat, PositiveInt, ValidationInfo, field_validator
+from pydantic import (
+    AliasChoices,
+    Field,
+    PositiveFloat,
+    PositiveInt,
+    ValidationInfo,
+    field_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -24,14 +31,23 @@ class Settings(BaseSettings):
     min_calibration_polygon_area_pixels: PositiveFloat = Field(default=1000)
     transition_area_depth_feet: PositiveFloat = Field(default=8)
     tracking_output_dir: Path = Path("data/output")
-    detector_model_path: Path = Path("models/yolo11n.pt")
+    detector_model_path: Path = Field(
+        default=Path("models/yolo11n.pt"),
+        validation_alias=AliasChoices(
+            "COURT4_DETECTOR_MODEL_PATH",
+            "PICKLEBALL_AI_DETECTOR_MODEL_PATH",
+        ),
+    )
     detector_confidence_threshold: float = Field(default=0.35, ge=0, le=1)
     detector_image_size: PositiveInt = Field(default=640)
     frame_processing_interval: PositiveInt = Field(default=1)
     court_inclusion_margin_feet: float = Field(default=3, ge=0)
     min_eligible_track_duration_seconds: float = Field(default=1, ge=0)
     min_eligible_observation_count: PositiveInt = Field(default=3)
+    min_eligible_inside_court_ratio: float = Field(default=0.6, ge=0, le=1)
     min_eligible_inside_extended_ratio: float = Field(default=0.6, ge=0, le=1)
+    min_eligible_court_movement_rate_feet_per_second: float = Field(default=1.2, ge=0)
+    max_selectable_player_tracks: PositiveInt = Field(default=4)
     min_eligible_average_confidence: float = Field(default=0.4, ge=0, le=1)
     annotated_video_codec: str = "mp4v"
     annotated_video_fps: PositiveFloat = Field(default=10)

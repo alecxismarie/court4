@@ -6,5 +6,8 @@ services:
       - "8000:8000"
     env_file:
       - .env.example
+    environment:
+      COURT4_DETECTOR_MODEL_PATH: /app/models/yolo11n.pt
     volumes:
       - ./data:/app/data
+      - ./models:/app/models:ro

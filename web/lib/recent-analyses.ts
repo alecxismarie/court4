@@ -1,4 +1,5 @@
 const STORAGE_KEY = "court4.recentAnalyses";
+export const RECENT_ANALYSES_UPDATED_EVENT = "court4:recent-analyses-updated";
 const MAX_RECENT_ANALYSES = 10;
 const ANALYSIS_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
@@ -39,6 +40,7 @@ export function rememberAnalysisId(analysisId: string): void {
   ].slice(0, MAX_RECENT_ANALYSES);
   try {
     storage.setItem(STORAGE_KEY, JSON.stringify(next));
+    window.dispatchEvent(new Event(RECENT_ANALYSES_UPDATED_EVENT));
   } catch {
     // Browser storage can be disabled or quota-limited.
   }

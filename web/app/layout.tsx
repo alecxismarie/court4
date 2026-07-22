@@ -7,18 +7,18 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Court4",
-  description: "Pickleball match analysis workflow.",
+  description: "Know your game",
   icons: {
     icon: [
       {
-        url: "/brand/court4-logo-64.png",
+        url: "/brand/court4-favicon-64.png",
         sizes: "64x64",
         type: "image/png",
       },
     ],
     apple: [
       {
-        url: "/brand/court4-logo-192.png",
+        url: "/brand/court4-favicon-192.png",
         sizes: "192x192",
         type: "image/png",
       },

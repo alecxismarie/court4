@@ -8,7 +8,12 @@ from uuid import uuid4
 
 import cv2
 
+from app.schemas.player_candidates import (
+    RecordingSuitability,
+    RecordingSuitabilityStatus,
+)
 from app.schemas.video import VideoMetadataReport
+from app.services.recording_quality import assess_upload_preflight
 from app.services.video.exceptions import (
     FrameSamplingError,
     OutputDirectoryExistsError,
@@ -46,6 +51,7 @@ class _RawVideoMetadata:
     frame_count: int
     duration_seconds: float
     codec: str | None
+    rotation_degrees: int
 
 
 def inspect_video(
@@ -96,8 +102,11 @@ def inspect_video(
             codec=raw_metadata.codec,
             sample_interval_seconds=sample_interval_seconds,
             sampled_frames=len(frame_paths),
+            rotation_degrees=raw_metadata.rotation_degrees,
+            recording_suitability=_initial_recording_suitability(raw_metadata),
             created_at=datetime.now(tz=UTC),
         )
+        report = report.model_copy(update={"upload_preflight": assess_upload_preflight(report)})
         metadata_path = analysis_dir / "metadata.json"
         _write_metadata_report(report, metadata_path)
 
@@ -183,6 +192,7 @@ def _extract_metadata(capture: cv2.VideoCapture) -> _RawVideoMetadata:
         frame_count=frame_count,
         duration_seconds=frame_count / fps,
         codec=_extract_codec(capture),
+        rotation_degrees=_extract_rotation(capture),
     )
 
 
@@ -196,6 +206,48 @@ def _extract_codec(capture: cv2.VideoCapture) -> str | None:
     if not codec or not codec.isprintable():
         return None
     return codec
+
+
+def _extract_rotation(capture: cv2.VideoCapture) -> int:
+    property_id = getattr(cv2, "CAP_PROP_ORIENTATION_META", None)
+    if property_id is None:
+        return 0
+    rotation = int(round(capture.get(property_id)))
+    return rotation if rotation in {0, 90, 180, 270} else 0
+
+
+def _initial_recording_suitability(metadata: _RawVideoMetadata) -> RecordingSuitability:
+    reasons: list[str] = []
+    guidance: list[str] = []
+    orientation = "vertical" if metadata.height > metadata.width else "landscape"
+    status = RecordingSuitabilityStatus.suitable
+    if orientation == "vertical":
+        status = RecordingSuitabilityStatus.limited
+        reasons.append("vertical_video_limitation")
+        guidance.append("Use landscape orientation when possible.")
+    if min(metadata.width, metadata.height) < 480:
+        status = RecordingSuitabilityStatus.limited
+        reasons.append("limited_resolution")
+        guidance.append("Record at a higher resolution so players occupy more pixels.")
+    if metadata.duration_seconds < 3:
+        status = RecordingSuitabilityStatus.unsuitable
+        reasons.append("recording_too_short")
+        guidance.append("Record a longer continuous section of play.")
+    if status != RecordingSuitabilityStatus.suitable:
+        guidance.extend(
+            [
+                "Keep the full court visible.",
+                "Place the camera behind the baseline and keep it stable.",
+            ]
+        )
+    return RecordingSuitability(
+        status=status,
+        reasons=reasons,
+        guidance=list(dict.fromkeys(guidance)),
+        orientation=orientation,
+        detected_people=0,
+        usable_candidate_count=0,
+    )
 
 
 def _create_output_directories(output_dir: Path, analysis_id: str) -> tuple[Path, Path]:

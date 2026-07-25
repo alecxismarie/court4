@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "dataset_id": "court4-real-video-seed",
+  "dataset_version": "1.0.0",
+  "description": "Two-sample seed set for deterministic Phase 1.5 framework validation. Labels are derived conservatively from existing documented manual review and are not independent ground truth.",
+  "reference_time": "2026-07-25T00:00:00Z",
+  "minimum_recommended_sample_size": 5,
+  "threshold_simulations": [
+    {
+      "threshold": "blocking_short_edge_pixels",
+      "proposed_value": 360,
+      "rationale": "Sensitivity check only: test whether lowering the blocking resolution boundary changes the landscape decision."
+    },
+    {
+      "threshold": "minimum_tracked_seconds",
+      "proposed_value": 15,
+      "rationale": "Sensitivity check only: test whether a stricter minimum tracked duration changes the vertical decision."
+    }
+  ],
+  "samples": [
+    {
+      "sample_id": "landscape-indoor-doubles-01",
+      "video_reference": "data/output/dc4b4effac81444da71bd848a51ed590/uploads/source.mp4",
+      "recording_environment": "Indoor doubles match",
+      "orientation": "LANDSCAPE",
+      "resolution": {
+        "width": 640,
+        "height": 368
+      },
+      "fps": 30,
+      "camera_position": "Behind the near baseline",
+      "court_visibility": "FULL",
+      "expected_players_on_court": 4,
+      "known_spectators_or_irrelevant_detections": [
+        "Spectators are visible along both sidelines.",
+        "Raw person tracking includes background people."
+      ],
+      "expected_recording_quality": "UNSUITABLE",
+      "expected_insight_eligibility": "INSUFFICIENT_EVIDENCE",
+      "reviewer_notes": "The Phase 1.4 report accepted suppression because the 368-pixel short edge is below the current blocking policy. This is a policy-baseline label, not an independently calibrated quality verdict.",
+      "review_status": "PARTIALLY_REVIEWED",
+      "reviewer_confidence": "LOW",
+      "artifacts": {
+        "artifact_root": "data/output",
+        "inspection_analysis_id": "dc4b4effac81444da71bd848a51ed590",
+        "court_analysis_id": "dc4b4effac81444da71bd848a51ed590",
+        "tracking_analysis_id": "phase13a-landscape-yolo-repro-20260722",
+        "candidates_analysis_id": "phase13a-landscape-yolo-repro-20260722",
+        "analytics_analysis_id": "dc4b4effac81444da71bd848a51ed590",
+        "match_iq_analysis_id": "dc4b4effac81444da71bd848a51ed590",
+        "inference_run_id": "phase13a-landscape-yolo-repro-20260722",
+        "reuse_notes": "Reuse preserved CPU YOLO/ByteTrack observations, Phase 1.3B candidates, and legacy source analytics. Do not rerun inference."
+      },
+      "human_review": {
+        "recording": {
+          "full_court_visible": true,
+          "recording_quality_verdict": "UNSUITABLE",
+          "notes": "Low resolution is a current blocking condition. Camera stability and obstruction severity were not independently labeled.",
+          "reviewer_confidence": "LOW"
+        },
+        "player_candidates": {
+          "expected_court_player_count": 4,
+          "expected_players_represented": 4,
+          "missed_players": 0,
+          "notes": "Existing visual review reports all four court-player appearances in the ranked list, but exact duplicate and spectator-promotion counts are not labeled.",
+          "reviewer_confidence": "LOW"
+        },
+        "tracking": {
+          "continuity_acceptable": false,
+          "fragmentation_severity": "SEVERE",
+          "excessive_gaps": true,
+          "observed_gameplay_coverage_acceptable": false,
+          "notes": "The detector produced 161 raw tracks and short player fragments across a 61.2-second recording. Frame-level continuity ground truth is unavailable.",
+          "reviewer_confidence": "LOW"
+        },
+        "insight": {
+          "recording_quality_verdict_correct": true,
+          "confidence_levels_justified": true,
+          "suppression_decision_correct": true,
+          "limitations_accurate": true,
+          "action_appropriately_conservative": true,
+          "notes": "Normal Match IQ suppression was accepted in the Phase 1.4 report. Interpretation wording was not independently reviewed.",
+          "reviewer_confidence": "LOW"
+        }
+      }
+    },
+    {
+      "sample_id": "vertical-indoor-drill-01",
+      "video_reference": "data/output/f54693f1003849fdb456247322925258/uploads/source.mp4",
+      "recording_environment": "Indoor drill or singles-like point with social-video text overlay",
+      "orientation": "VERTICAL",
+      "resolution": {
+        "width": 720,
+        "height": 1280
+      },
+      "fps": 30,
+      "camera_position": "Behind the near baseline in vertical orientation",
+      "court_visibility": "PARTIAL",
+      "expected_players_on_court": 2,
+      "known_spectators_or_irrelevant_detections": [
+        "Text overlay obstructs part of the vertical frame."
+      ],
+      "expected_recording_quality": "LIMITED",
+      "expected_insight_eligibility": "MEASUREMENT_ONLY",
+      "reviewer_notes": "The Phase 1.4 report accepted LIMITED measurement-only eligibility after selection, with interpretation and recommendations suppressed. No selected-player analytics artifact exists.",
+      "review_status": "PARTIALLY_REVIEWED",
+      "reviewer_confidence": "MODERATE",
+      "artifacts": {
+        "artifact_root": "data/output",
+        "inspection_analysis_id": "f54693f1003849fdb456247322925258",
+        "court_analysis_id": "f54693f1003849fdb456247322925258",
+        "tracking_analysis_id": "phase13a-vertical-yolo-repro-20260722",
+        "candidates_analysis_id": "phase13a-vertical-yolo-repro-20260722",
+        "inference_run_id": "phase13a-vertical-yolo-repro-20260722",
+        "reuse_notes": "Reuse preserved CPU YOLO/ByteTrack observations and Phase 1.3B candidates. Analytics and Match IQ are intentionally absent."
+      },
+      "human_review": {
+        "recording": {
+          "full_court_visible": false,
+          "obstruction_severity": "MODERATE",
+          "recording_quality_verdict": "LIMITED",
+          "notes": "Vertical framing and overlay text limit spatial coverage; camera stability and player pixel size were not independently labeled.",
+          "reviewer_confidence": "MODERATE"
+        },
+        "player_candidates": {
+          "expected_court_player_count": 2,
+          "expected_players_represented": 2,
+          "missed_players": 0,
+          "notes": "The preserved artifacts contain one USABLE and one UNCERTAIN candidate. Identity and duplicate counts are not ground-truthed.",
+          "reviewer_confidence": "LOW"
+        },
+        "tracking": {
+          "continuity_acceptable": true,
+          "fragmentation_severity": "NONE",
+          "excessive_gaps": false,
+          "observed_gameplay_coverage_acceptable": false,
+          "notes": "The best candidate contains one 14.27-second fragment. The sample remains too short and narrow for broad interpretation.",
+          "reviewer_confidence": "MODERATE"
+        },
+        "insight": {
+          "recording_quality_verdict_correct": true,
+          "measurement_only_decision_correct": true,
+          "suppression_decision_correct": true,
+          "limitations_accurate": true,
+          "action_appropriately_conservative": true,
+          "recording_guidance_accurate": true,
+          "notes": "Measurement-only eligibility and recommendation suppression are accepted policy outcomes. No generated selected-player insight exists for wording review.",
+          "reviewer_confidence": "MODERATE"
+        }
+      }
+    }
+  ]
+}

@@ -41,9 +41,9 @@ describe("recent matches", () => {
 
     renderWithQueryClient(<RecentMatches />);
 
-    const completedRow = rowFor("complete");
+    const completedRow = rowForAnalysis("complete");
     expect(within(completedRow).getByText("Match IQ ready")).toBeInTheDocument();
-    expect(within(completedRow).getByText("Match IQ available")).toBeInTheDocument();
+    expect(within(completedRow).getByText("Analysis under review")).toBeInTheDocument();
     expect(within(completedRow).getByRole("link", { name: /^view match$/i })).toHaveAttribute(
       "href",
       "/matches/complete",
@@ -57,15 +57,15 @@ describe("recent matches", () => {
       "/matches/complete/analytics#share-card",
     );
 
-    const selectionRow = rowFor("select-me");
+    const selectionRow = rowForAnalysis("select-me");
     expect(within(selectionRow).getByText("Select yourself")).toBeInTheDocument();
-    expect(within(selectionRow).getByText("Match IQ pending")).toBeInTheDocument();
+    expect(within(selectionRow).getByText("Analysis under review")).toBeInTheDocument();
     expect(within(selectionRow).queryByRole("link", { name: /view match iq/i })).not.toBeInTheDocument();
     expect(within(selectionRow).queryByRole("link", { name: /^share$/i })).not.toBeInTheDocument();
 
-    const failedRow = rowFor("failed");
+    const failedRow = rowForAnalysis("failed");
     expect(within(failedRow).getByText("Needs attention")).toBeInTheDocument();
-    expect(within(failedRow).getByText("Match IQ unavailable")).toBeInTheDocument();
+    expect(within(failedRow).getByText("No verified insight yet")).toBeInTheDocument();
     expect(within(failedRow).queryByRole("link", { name: /view match iq/i })).not.toBeInTheDocument();
     expect(within(failedRow).queryByRole("link", { name: /^share$/i })).not.toBeInTheDocument();
   });
@@ -75,8 +75,8 @@ describe("recent matches", () => {
 
     renderWithQueryClient(<RecentMatches />);
 
-    const legacyRow = rowFor("legacy");
-    expect(within(legacyRow).getByText("Match IQ unavailable")).toBeInTheDocument();
+    const legacyRow = rowForAnalysis("legacy");
+    expect(within(legacyRow).getByText("No verified insight yet")).toBeInTheDocument();
     expect(within(legacyRow).getByText("42.5 ft")).toBeInTheDocument();
     expect(within(legacyRow).getByText("Baseline 40.0%")).toBeInTheDocument();
     expect(within(legacyRow).queryByRole("link", { name: /view match iq/i })).not.toBeInTheDocument();
@@ -84,8 +84,8 @@ describe("recent matches", () => {
   });
 });
 
-function rowFor(text: string): HTMLElement {
-  const row = screen.getByText(text).closest("article");
+function rowForAnalysis(analysisId: string): HTMLElement {
+  const row = document.querySelector(`a[href="/matches/${analysisId}"]`)?.closest("article");
   expect(row).not.toBeNull();
   return row!;
 }

@@ -110,6 +110,30 @@ Phase 1.3A hardens real-video workflow reliability:
 - Maintained Playwright browser smoke tests for happy path, manual calibration, and missing-model recovery
 - Local real-video YOLO validation remains CPU-only and limited by generic person tracking quality
 
+Phase 1.3B adds real-video track continuity and candidate review:
+
+- Deterministic player candidates built from one or more raw track fragments
+- Stable candidate IDs, quality labels, warnings, and early/middle/late previews
+- Candidate selection, rejection/restore, manual merge/undo, and persisted review state
+- Candidate-based analytics with fragment lineage and no artificial gap jumps
+- Recording-suitability guidance, including a recoverable vertical-video path
+- Ranked visual player cards; raw track IDs are confined to technical details
+
+Phase 1.4 adds insight integrity and recording-quality gates:
+
+- Typed `EXCELLENT`, `GOOD`, `LIMITED`, and `UNSUITABLE` recording quality
+- Persisted upload preflight and post-tracking analysis readiness
+- Centralized initial engineering thresholds for orientation, resolution, FPS,
+  duration, calibration, candidates, visibility, tracked time, gaps, and fragments
+- Separate recording, tracking, measurement, interpretation, and recommendation confidence
+- Deterministic `NORMAL`, `CAUTIOUS`, `MEASUREMENT_ONLY`, and
+  `INSUFFICIENT_EVIDENCE` Match IQ gates
+- Evidence-led insight cards with observation, evidence, confidence, interpretation,
+  limitations, and next-review action
+- Suppression of interpretation/advice for weak evidence and normal Match IQ for
+  unsuitable evidence
+- Disabled timeline-half rules that could reconnect movement across unobserved gaps
+
 Still out of scope: auth, databases, cloud storage, background workers, ball tracking, pose estimation, scoring, shot classification, coaching, face recognition, biometric identification, player comparison, opponent analysis, and real-time processing.
 
 ## Project Structure
@@ -124,7 +148,9 @@ app/
   services/court_detection/    Automatic sampled-frame court detection
   services/detection/          Detector/backend interfaces
   services/jobs/               Filesystem-backed job workflow services
+  services/recording_quality/  Two-stage recording and evidence assessment
   services/tracking/           Tracking backends and errors
+  services/candidates/         Candidate generation, association, and review persistence
   services/video/              Video inspection, tracking, and selection services
   services/analytics/          Selected-player movement analytics and images
   services/match_iq/           Deterministic movement-insight rules
@@ -325,6 +351,13 @@ GET  /api/v1/analyses/{analysis_id}/artifacts/{artifact_path}
 POST /api/v1/analyses/{analysis_id}/court-detection
 POST /api/v1/analyses/{analysis_id}/calibration
 POST /api/v1/analyses/{analysis_id}/tracking
+GET  /api/v1/analyses/{analysis_id}/player-candidates
+POST /api/v1/analyses/{analysis_id}/player-candidates/generate
+POST /api/v1/analyses/{analysis_id}/player-candidates/{candidate_id}/select
+POST /api/v1/analyses/{analysis_id}/player-candidates/{candidate_id}/reject
+POST /api/v1/analyses/{analysis_id}/player-candidates/{candidate_id}/restore
+POST /api/v1/analyses/{analysis_id}/player-candidates/merge
+POST /api/v1/analyses/{analysis_id}/player-candidates/unmerge
 GET  /api/v1/analyses/{analysis_id}/players
 POST /api/v1/analyses/{analysis_id}/players/select
 POST /api/v1/analyses/{analysis_id}/analytics
@@ -382,6 +415,12 @@ curl http://localhost:8000/api/v1/analyses/<analysis_id>/players
 curl -X POST http://localhost:8000/api/v1/analyses/<analysis_id>/players/select \
   -H "Content-Type: application/json" \
   -d '{"track_id": 1}'
+
+# Preferred Phase 1.3B flow:
+curl http://localhost:8000/api/v1/analyses/<analysis_id>/player-candidates
+
+curl -X POST \
+  http://localhost:8000/api/v1/analyses/<analysis_id>/player-candidates/<candidate_id>/select
 
 curl -X POST http://localhost:8000/api/v1/analyses/<analysis_id>/analytics
 
@@ -603,6 +642,8 @@ Tracking output:
 data/output/<analysis_id>/tracking/
   tracking.json
   observations.jsonl
+  player_candidates.json
+  player_candidates/<candidate_id>/{crop,frame}_{1,2,3}.jpg
   player_selection.jpg
   tracked_players.mp4
 ```
@@ -646,11 +687,17 @@ Eligible tracks are ordered deterministically by movement distance, movement rat
 
 The raw tracking report can still contain spectators and background people because YOLO is a generic person detector. The frontend selection UI shows only tracks marked `eligible_for_selection`; rejected tracks remain in collapsed technical details for auditability.
 
-## Manual Player Selection
+## Player-Candidate Review
 
-Player detection is not player identification. Track IDs are local to one analysis and can switch.
+Player detection is not player identification. Raw IDs are local to one analysis
+and can switch. Court4 deterministically groups plausible non-overlapping fragments
+into reviewable candidates, while blocking overlap, opposite-side, and impossible-
+movement associations.
 
-Use `player_selection.jpg` to inspect representative crops, then select one eligible track:
+The primary frontend shows candidate crops, tracked duration, quality, warnings,
+selection, rejection, manual merge, and undo. Raw IDs remain in collapsed technical
+details. Review state is persisted in `player_candidates.json`; legacy raw-track
+selection and the CLI remain backward compatible:
 
 ```bash
 python -m scripts.select_player \
@@ -658,7 +705,9 @@ python -m scripts.select_player \
   --track-id 2
 ```
 
-This updates `tracking.json` with `selected_player_track_id` and preserves `observations.jsonl`. The selection is not a real-world identity and is not persisted outside the local analysis report.
+Candidate selection persists `selected_player_candidate_id` plus its technical
+source fragment IDs. Analytics use the candidate and never add movement between
+fragments or across long gaps. A selection is not a real-world or biometric identity.
 
 ## Movement Analytics
 
@@ -695,7 +744,13 @@ data/output/<analysis_id>/analytics/
   heatmap.png
 ```
 
-`analytics.json` is the top-level report with source paths, selected track ID, distance metrics, average court position, zone occupancy, and artifact names. `match_iq.json` is the persisted deterministic Match IQ report generated from movement analytics. `movement_summary.json` is a compact factual summary for the selected player. `timeline.json` contains timestamped court positions. `trajectory.png` and `heatmap.png` preserve regulation court proportions in a top-down view.
+`analytics.json` is the top-level report with selected candidate lineage, technical
+source fragments, observed and unobserved duration, continuity warnings, distance,
+average court position, zone occupancy, and artifact names. `match_iq.json` is the
+persisted deterministic Match IQ report generated from movement analytics.
+`movement_summary.json` is a compact factual summary for the selected player.
+`timeline.json` contains timestamped court positions. `trajectory.png` and
+`heatmap.png` preserve regulation court proportions in a top-down view.
 
 The CLI and API use the same deterministic Match IQ persistence helpers. If analytics already exist, the CLI loads the stored reports and writes a missing `match_iq.json` without duplicating rule logic.
 
@@ -704,11 +759,11 @@ Zone occupancy uses the configured `PICKLEBALL_AI_TRANSITION_AREA_DEPTH_FEET` va
 ## Match IQ and Share Cards
 
 Match IQ is deterministic and rule-based. It may use only metrics already produced by
-the analytics pipeline, including total distance, average movement per second, timeline
-observation count, tracked time, and kitchen, transition-zone, and baseline occupancy.
-Every generated insight includes a stable rule ID, evidence metric, formatted metric
-value, and threshold/rule description. If movement data is insufficient, Match IQ
-returns an insufficient-data report instead of fabricating observations.
+the analytics pipeline. Every new insight separates observation, evidence, five
+confidence dimensions, cautious interpretation, limitations, and a review action.
+Limited evidence produces measurement-only output; unsuitable evidence produces an
+insufficient-evidence report with normal insight cards suppressed. Rule IDs and reason
+codes remain available in persisted technical data but are hidden from normal user views.
 
 Share cards are generated in the browser from persisted analytics and Match IQ data.
 Supported formats are Instagram Story, Instagram/Facebook portrait, and square post.
@@ -724,7 +779,7 @@ thresholds, raw JSON, or unsupported statistics.
 
 - court polygon
 - bounding boxes
-- stable track IDs from the backend
+- raw tracker IDs from the backend
 - mapped ground-contact points
 - excluded labels for off-court detections
 
@@ -732,17 +787,20 @@ The output preserves source aspect ratio. It records only processed frames and u
 
 ## Camera Guidance
 
-- Keep the camera fixed.
-- Make the full court visible.
-- Avoid severe obstruction.
-- Prefer elevated or baseline-oriented views.
-- Keep spectators away from the court boundary where possible.
+- Place the camera behind or diagonally behind the baseline.
+- Keep the full court visible and the camera stable.
+- Prefer landscape orientation.
+- Record at 720p minimum; 1080p is recommended.
+- Capture enough continuous gameplay; usable tracked time matters more than total duration.
+- Avoid severe obstruction and keep spectators away from the court boundary where possible.
 - Use the same camera framing for calibration and tracking.
 
 ## Known Current Limitations
 
 - Real-world performance depends on the chosen model, camera angle, lighting, occlusion, and spectators.
 - Track IDs can switch during overlap or missed detections.
+- Candidate association is conservative and can leave duplicate visible-player,
+  spectator, or high-fragment candidates for manual review.
 - ByteTrack is used through the optional Ultralytics backend; tests use controlled track IDs.
 - No player identity recognition, face recognition, or team assignment exists.
 - Automatic court detection is a deterministic local heuristic; real-world confidence depends on line visibility, camera angle, lighting, occlusion, and background clutter.
@@ -756,7 +814,8 @@ The output preserves source aspect ratio. It records only processed frames and u
 - Player profile data is browser-local only; there is no authentication or cross-device synchronization.
 - Phase 1.3 introduces a player-centered workspace but does not yet provide long-term progress comparisons, AI coaching, public profiles, authentication, or cross-device profile synchronization.
 - Manual calibration accuracy depends on the user selecting the true outer court corners.
-- Legacy analyses without persisted Match IQ remain viewable but show Match IQ as unavailable.
+- Legacy analyses remain viewable. Missing quality evidence is labeled unavailable and
+  does not strengthen an insight.
 - No interpolation is performed beyond native backend continuity.
 - Severe lens distortion is not corrected.
 
@@ -829,6 +888,55 @@ docker compose run --rm api python -m ruff format --check .
 docker compose run --rm api python -m mypy app scripts tests
 ```
 
+## Real-Video Evidence Calibration
+
+Phase 1.5 adds an internal, deterministic calibration workflow for the Phase 1.4
+recording-quality and Match IQ evidence policies.
+
+Validate the versioned seed manifest:
+
+```powershell
+python -m scripts.calibrate_evidence validate calibration/manifest.v1.json
+```
+
+Evaluate reusable artifacts and regenerate the reports:
+
+```powershell
+python -m scripts.calibrate_evidence evaluate calibration/manifest.v1.json
+```
+
+Outputs:
+
+- `calibration-results.json`
+- `CALIBRATION_REPORT.md`
+
+The evaluator reuses persisted inspection, court, tracking, candidate, analytics, and
+Match IQ artifacts. It does not rerun expensive inference by default, overwrite human
+labels, mutate production thresholds, or expose calibration as a player-facing feature.
+Threshold alternatives are simulated in memory and remain manual review inputs.
+
+The seed dataset contains only the documented landscape and vertical recordings. All
+metrics are provisional and do not constitute scientific validation. See
+`CALIBRATION_GUIDE.md`, `PHASE_1_5_CALIBRATION_DESIGN.md`, and
+`PHASE_1_5_REPORT.md`.
+
+Phase 1.5A adds the backward-compatible `calibration/manifest.v2.json`, safe onboarding
+templates, balance diagnostics, detailed identity/continuity/insight labels, explicit
+artifact readiness, split-aware threshold simulation, and
+`CALIBRATION_DISAGREEMENTS.md`.
+
+```powershell
+python -m scripts.calibrate_evidence summarize calibration/manifest.v2.json
+python -m scripts.calibrate_evidence review-status calibration/manifest.v2.json
+python -m scripts.calibrate_evidence artifact-status calibration/manifest.v2.json
+python -m scripts.calibrate_evidence evaluate calibration/manifest.v2.json
+```
+
+Actual recording collection and independent annotation remain human work. See
+`DATASET_COLLECTION_GUIDE.md`, `ANNOTATION_GUIDE.md`, and
+`PHASE_1_5A_DATASET_DESIGN.md`. Exact implementation and validation evidence is in
+`PHASE_1_5A_REPORT.md`.
+
 ## Validation Commands
 
 Default offline validation:
@@ -872,8 +980,8 @@ docker run --rm --network none `
 
 ## Recommended Next Phase
 
-Phase 1.3B - Real-Video Track Continuity and Candidate Review.
-
-That phase should improve duplicate-track handling, identity continuity, candidate
-review, and real-video evaluation coverage before adding long-term player history
-or progress comparisons.
+Expand the Phase 1.5 manifest with independently reviewed videos across camera,
+orientation, lighting, obstruction, spectator, and player-size conditions. Add
+frame-level player identity and continuity ground truth before claiming candidate
+precision or tracking accuracy. Player History should remain deferred until the intended
+real-upload operating envelope is measured and accepted.

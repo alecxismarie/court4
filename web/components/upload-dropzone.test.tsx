@@ -21,6 +21,15 @@ describe("upload dropzone", () => {
     process.env.NEXT_PUBLIC_COURT4_MAX_UPLOAD_BYTES = "1073741824";
   });
 
+  it("shows the recording guide before upload", () => {
+    renderWithQueryClient(<UploadDropzone />);
+
+    expect(screen.getByText("How to record for Court4")).toBeInTheDocument();
+    expect(screen.getByText(/behind or diagonally behind the baseline/i)).toBeInTheDocument();
+    expect(screen.getByText(/720p minimum; 1080p is recommended/i)).toBeInTheDocument();
+    expect(screen.getByText(/Usable tracked time matters more/i)).toBeInTheDocument();
+  });
+
   it("validates selected video size before upload", async () => {
     const user = userEvent.setup();
     const uploadAnalysis = vi.fn<UploadAnalysisFn>();

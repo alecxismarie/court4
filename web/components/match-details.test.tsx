@@ -9,9 +9,13 @@ import {
   generateAnalytics,
   getAnalysis,
   getAnalysisFrames,
-  getPlayers,
-  selectPlayer,
+  getPlayerCandidates,
+  mergePlayerCandidates,
+  rejectPlayerCandidate,
+  restorePlayerCandidate,
+  selectPlayerCandidate,
   startTracking,
+  unmergePlayerCandidate,
 } from "@/lib/api/analyses";
 import {
   makeAnalyticsGenerationResponse,
@@ -19,9 +23,9 @@ import {
   makeCourtDetectionResponse,
   makeFrame,
   makeJob,
-  makePlayerSelectionResponse,
-  makePlayersResponse,
-  makeTrackSummary,
+  makePlayerCandidate,
+  makePlayerCandidateCollection,
+  makeRecordingQuality,
   makeTrackingResponse,
 } from "@/test/factories";
 import { renderWithQueryClient } from "@/test/render";
@@ -37,18 +41,26 @@ vi.mock("@/lib/api/analyses", () => ({
   generateAnalytics: vi.fn(),
   getAnalysis: vi.fn(),
   getAnalysisFrames: vi.fn(),
-  getPlayers: vi.fn(),
-  selectPlayer: vi.fn(),
+  getPlayerCandidates: vi.fn(),
+  mergePlayerCandidates: vi.fn(),
+  rejectPlayerCandidate: vi.fn(),
+  restorePlayerCandidate: vi.fn(),
+  selectPlayerCandidate: vi.fn(),
   startTracking: vi.fn(),
+  unmergePlayerCandidate: vi.fn(),
 }));
 
 const mockedDetectCourt = vi.mocked(detectCourt);
 const mockedGenerateAnalytics = vi.mocked(generateAnalytics);
 const mockedGetAnalysis = vi.mocked(getAnalysis);
 const mockedGetAnalysisFrames = vi.mocked(getAnalysisFrames);
-const mockedGetPlayers = vi.mocked(getPlayers);
-const mockedSelectPlayer = vi.mocked(selectPlayer);
+const mockedGetPlayerCandidates = vi.mocked(getPlayerCandidates);
+const mockedMergePlayerCandidates = vi.mocked(mergePlayerCandidates);
+const mockedRejectPlayerCandidate = vi.mocked(rejectPlayerCandidate);
+const mockedRestorePlayerCandidate = vi.mocked(restorePlayerCandidate);
+const mockedSelectPlayerCandidate = vi.mocked(selectPlayerCandidate);
 const mockedStartTracking = vi.mocked(startTracking);
+const mockedUnmergePlayerCandidate = vi.mocked(unmergePlayerCandidate);
 
 describe("match details workflow", () => {
   beforeEach(() => {
@@ -57,9 +69,13 @@ describe("match details workflow", () => {
     mockedGenerateAnalytics.mockReset();
     mockedGetAnalysis.mockReset();
     mockedGetAnalysisFrames.mockReset();
-    mockedGetPlayers.mockReset();
-    mockedSelectPlayer.mockReset();
+    mockedGetPlayerCandidates.mockReset();
+    mockedMergePlayerCandidates.mockReset();
+    mockedRejectPlayerCandidate.mockReset();
+    mockedRestorePlayerCandidate.mockReset();
+    mockedSelectPlayerCandidate.mockReset();
     mockedStartTracking.mockReset();
+    mockedUnmergePlayerCandidate.mockReset();
   });
 
   it("shows a loading state while the analysis is loading", () => {
@@ -126,7 +142,7 @@ describe("match details workflow", () => {
     expect(screen.getByRole("button", { name: /recognize court/i })).toBeInTheDocument();
   });
 
-  it("shows court recognition result artifacts with technical details closed", async () => {
+  it("shows the useful court verification without developer-facing artifacts or metadata", async () => {
     const user = userEvent.setup();
     const calibratedJob = makeCalibratedJob({
       available_artifacts: [
@@ -150,11 +166,10 @@ describe("match details workflow", () => {
     expect(await screen.findByText("Court recognized with 91% confidence.")).toBeInTheDocument();
     expect(await screen.findByText("Find the players")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Detected court" })).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "Top-down court view" })).toBeInTheDocument();
-    expect(screen.getByText("Confidence value")).not.toBeVisible();
-    for (const calibrationSourceLabel of screen.getAllByText("Calibration source")) {
-      expect(calibrationSourceLabel).not.toBeVisible();
-    }
+    expect(screen.queryByRole("img", { name: "Top-down court view" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Confidence value")).not.toBeInTheDocument();
+    expect(screen.queryByText("Calibration source")).not.toBeInTheDocument();
+    expect(screen.queryByText("Technical details")).not.toBeInTheDocument();
   });
 
   it("renders persisted court confidence after refresh without the original detection response", async () => {
@@ -246,16 +261,16 @@ describe("match details workflow", () => {
     expect(screen.getAllByRole("link", { name: /calibrate manually/i })).toHaveLength(1);
   });
 
-  it("keeps tracking options hidden in advanced settings by default", async () => {
+  it("keeps developer-facing tracking options out of the user view", async () => {
     mockedGetAnalysis.mockResolvedValue(makeCalibratedJob());
     mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
 
     renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
 
     expect(await screen.findByText("Find the players")).toBeInTheDocument();
-    expect(screen.getByText("Advanced settings")).toBeVisible();
-    expect(screen.getByText("Detector backend")).not.toBeVisible();
-    expect(screen.getByText("Frame interval")).not.toBeVisible();
+    expect(screen.queryByText("Advanced settings")).not.toBeInTheDocument();
+    expect(screen.queryByText("Detector backend")).not.toBeInTheDocument();
+    expect(screen.queryByText("Frame interval")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /find players/i })).toBeInTheDocument();
   });
 
@@ -274,66 +289,58 @@ describe("match details workflow", () => {
     expect(screen.getByRole("button", { name: /finding players/i })).toBeDisabled();
   });
 
-  it("starts tracking with existing default request values and displays eligible player cards", async () => {
+  it("starts tracking with automatic defaults and displays eligible player cards", async () => {
     const user = userEvent.setup();
     mockedGetAnalysis
       .mockResolvedValueOnce(makeCalibratedJob())
       .mockResolvedValue(makeTrackedJob());
     mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
     mockedStartTracking.mockResolvedValue(makeTrackingResponse());
-    mockedGetPlayers.mockResolvedValue(
-      makePlayersResponse({
-        track_summaries: [
-          makeTrackSummary({ track_id: 1 }),
-          makeTrackSummary({
-            track_id: 99,
-            eligible_for_selection: false,
-            rejection_reasons: ["too few observations"],
+    mockedGetPlayerCandidates.mockResolvedValue(
+      makePlayerCandidateCollection({
+        candidates: [
+          makePlayerCandidate(),
+          makePlayerCandidate({
+            candidate_id: "pc-needs-review",
+            source_raw_track_ids: [99],
+            quality: "UNCERTAIN",
+            quality_reasons: ["short_track_duration"],
+            warnings: ["short_track_duration"],
           }),
         ],
       }),
     );
 
     renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
-    await user.click(await screen.findByText("Advanced settings"));
-    await user.selectOptions(await screen.findByLabelText("Detector backend"), "controlled-json");
-    await user.click(screen.getByRole("button", { name: /find players/i }));
+    await user.click(await screen.findByRole("button", { name: /find players/i }));
 
     await waitFor(() =>
       expect(mockedStartTracking).toHaveBeenCalledWith("analysis-123", {
         calibration_id: "auto-court-detection",
-        backend: "controlled-json",
-        detections_jsonl: "uploads/detections.jsonl",
+        backend: "ultralytics",
+        detections_jsonl: null,
         frame_interval: 1,
       }),
     );
     expect(await screen.findByText("Player 1")).toBeInTheDocument();
     expect(screen.queryByText("Track 1")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /this is me/i })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /this is me/i })).toHaveLength(2);
   });
 
   it("shows a recoverable no-selectable-players state", async () => {
     mockedGetAnalysis.mockResolvedValue(makeTrackedJob());
     mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
-    mockedGetPlayers.mockResolvedValue(
-      makePlayersResponse({
-        track_summaries: [
-          makeTrackSummary({
-            track_id: 7,
-            eligible_for_selection: false,
-            rejection_reasons: ["mostly_outside_detected_court"],
-          }),
-        ],
-      }),
+    mockedGetPlayerCandidates.mockResolvedValue(
+      makePlayerCandidateCollection({ candidates: [] }),
     );
 
     renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
 
-    expect(await screen.findByText("No selectable players were found.")).toBeInTheDocument();
     expect(
-      screen.getByText("Try finding players again with adjusted processing options."),
+      await screen.findByText(
+        "Court4 found people in the video, but none were tracked long enough to analyze reliably.",
+      ),
     ).toBeInTheDocument();
-    expect(screen.getByText("mostly_outside_detected_court")).not.toBeVisible();
   });
 
   it("shows tracking failures with useful copy and retry", async () => {
@@ -349,9 +356,9 @@ describe("match details workflow", () => {
 
     expect(await screen.findByText("We could not identify the players")).toBeInTheDocument();
     expect(
-      screen.getByText("Try the analysis again or open advanced settings to adjust processing options."),
+      screen.getByText("Try the analysis again. If the problem continues, use a clearer recording."),
     ).toBeInTheDocument();
-    expect(screen.getByText("No detections were returned.")).not.toBeVisible();
+    expect(screen.queryByText("No detections were returned.")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /try again/i }));
     expect(mockedStartTracking).toHaveBeenCalledTimes(2);
@@ -373,26 +380,37 @@ describe("match details workflow", () => {
 
     expect(await screen.findByText("Player detection model is missing")).toBeInTheDocument();
     expect(
-      screen.getAllByText(
+      screen.getByText(
         "Player detection is not available because the detector model is missing.",
       ),
-    ).toHaveLength(2);
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /find players/i })).not.toBeDisabled();
-    expect(screen.getByText("detector_model_missing")).not.toBeVisible();
+    expect(screen.queryByText("detector_model_missing")).not.toBeInTheDocument();
   });
 
   it("highlights the selected player and allows changing selection", async () => {
     const user = userEvent.setup();
-    const tracks = [makeTrackSummary({ track_id: 1 }), makeTrackSummary({ track_id: 2 })];
+    const candidates = [
+      makePlayerCandidate(),
+      makePlayerCandidate({
+        candidate_id: "pc-player-two",
+        source_raw_track_ids: [2],
+      }),
+    ];
     mockedGetAnalysis.mockResolvedValue(makePlayerSelectedJob());
     mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
-    mockedGetPlayers.mockResolvedValue(
-      makePlayersResponse({
-        track_summaries: tracks,
-        selected_player_track_id: 1,
+    mockedGetPlayerCandidates.mockResolvedValue(
+      makePlayerCandidateCollection({
+        candidates,
+        selected_candidate_id: "pc-player-one",
       }),
     );
-    mockedSelectPlayer.mockResolvedValue(makePlayerSelectionResponse());
+    mockedSelectPlayerCandidate.mockResolvedValue(
+      makePlayerCandidateCollection({
+        candidates,
+        selected_candidate_id: "pc-player-two",
+      }),
+    );
 
     renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
 
@@ -401,14 +419,173 @@ describe("match details workflow", () => {
     expect(playerTwoCard).not.toBeNull();
     await user.click(within(playerTwoCard as HTMLElement).getByRole("button", { name: /this is me/i }));
 
-    await waitFor(() => expect(mockedSelectPlayer).toHaveBeenCalledWith("analysis-123", 2));
+    await waitFor(() =>
+      expect(mockedSelectPlayerCandidate).toHaveBeenCalledWith(
+        "analysis-123",
+        "pc-player-two",
+      ),
+    );
+  });
+
+  it("shows at most four eligible player choices and hides automatic exclusions", async () => {
+    const candidates = Array.from({ length: 5 }, (_, index) =>
+      makePlayerCandidate({
+        candidate_id: `pc-player-${index + 1}`,
+        source_raw_track_ids: [index + 1],
+      }),
+    );
+    mockedGetAnalysis.mockResolvedValue(makeTrackedJob());
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+    mockedGetPlayerCandidates.mockResolvedValue(
+      makePlayerCandidateCollection({
+        candidates,
+        excluded_candidates: [
+          makePlayerCandidate({
+            candidate_id: "pc-spectator",
+            source_raw_track_ids: [99],
+            selection_eligible: false,
+            selection_exclusion_reasons: ["mostly_outside_detected_court"],
+          }),
+        ],
+      }),
+    );
+
+    renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+
+    expect(await screen.findByText("Player 1")).toBeInTheDocument();
+    expect(screen.getByText("Player 4")).toBeInTheDocument();
+    expect(screen.queryByText("Player 5")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Excluded candidates/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /restore/i })).not.toBeInTheDocument();
+  });
+
+  it("shows candidate quality, preview, and guidance without raw lineage", async () => {
+    const user = userEvent.setup();
+    mockedGetAnalysis.mockResolvedValue(makeTrackedJob());
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+    mockedGetPlayerCandidates.mockResolvedValue(
+      makePlayerCandidateCollection({
+        candidates: [
+          makePlayerCandidate({
+            quality: "UNCERTAIN",
+            quality_reasons: ["vertical_video_limitation"],
+            warnings: ["vertical_video_limitation"],
+            source_raw_track_ids: [4, 12],
+          }),
+        ],
+        recording_suitability: {
+          status: "LIMITED",
+          reasons: ["vertical_video_limitation"],
+          guidance: ["Use landscape orientation when possible."],
+          orientation: "vertical",
+          detected_people: 2,
+          usable_candidate_count: 0,
+        },
+        analysis_readiness: makeRecordingQuality({
+          status: "LIMITED",
+          warnings: [
+            {
+              code: "vertical_orientation",
+              label: "Orientation",
+              status: "WARNING",
+              message: "Vertical framing may exclude important parts of the court.",
+              measured_value: "vertical",
+            },
+          ],
+          reason_codes: ["vertical_orientation"],
+          guidance: ["Use landscape orientation when possible."],
+        }),
+      }),
+    );
+
+    renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+
+    expect(await screen.findByText("Needs review")).toBeInTheDocument();
+    expect(screen.getByText("Use landscape orientation when possible.")).toBeInTheDocument();
+    expect(screen.queryByText("4, 12")).not.toBeInTheDocument();
+    const card = screen.getByText("Player 1").closest("article") as HTMLElement;
+    await user.click(within(card).getByText("Preview candidate"));
+    expect(within(card).getAllByRole("img", { name: /Player 1 at/i })).toHaveLength(3);
+    expect(within(card).queryByText("Technical details")).not.toBeInTheDocument();
+  });
+
+  it("rejects and restores a candidate while keeping it recoverable", async () => {
+    const user = userEvent.setup();
+    const candidate = makePlayerCandidate();
+    const initial = makePlayerCandidateCollection({ candidates: [candidate] });
+    const rejected = makePlayerCandidateCollection({
+      candidates: [],
+      excluded_candidates: [
+        {
+          ...candidate,
+          review_status: "REJECTED",
+          rejection_reason: "not_a_player",
+        },
+      ],
+    });
+    mockedGetAnalysis.mockResolvedValue(makeTrackedJob());
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+    mockedGetPlayerCandidates.mockResolvedValueOnce(initial).mockResolvedValue(rejected);
+    mockedRejectPlayerCandidate.mockResolvedValue(rejected);
+    mockedRestorePlayerCandidate.mockResolvedValue(initial);
+
+    renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+    await user.click(await screen.findByRole("button", { name: /not a player/i }));
+
+    expect(await screen.findByText("Excluded candidates (1)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /restore/i })).toBeInTheDocument();
+    expect(mockedRejectPlayerCandidate).toHaveBeenCalledWith(
+      "analysis-123",
+      "pc-player-one",
+    );
+  });
+
+  it("shows a clear warning when a manual candidate merge is impossible", async () => {
+    const user = userEvent.setup();
+    mockedGetAnalysis.mockResolvedValue(makeTrackedJob());
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+    mockedGetPlayerCandidates.mockResolvedValue(
+      makePlayerCandidateCollection({
+        candidates: [
+          makePlayerCandidate(),
+          makePlayerCandidate({
+            candidate_id: "pc-player-two",
+            source_raw_track_ids: [2],
+          }),
+        ],
+      }),
+    );
+    mockedMergePlayerCandidates.mockRejectedValue(
+      new Court4ApiError(
+        "These candidates appear at the same time and cannot be merged safely.",
+        { code: "impossible_candidate_merge", status: 409 },
+      ),
+    );
+
+    renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+    const playerOne = (await screen.findByText("Player 1")).closest("article") as HTMLElement;
+    const playerTwo = screen.getByText("Player 2").closest("article") as HTMLElement;
+    await user.click(within(playerOne).getByRole("button", { name: /same player/i }));
+    await user.click(within(playerTwo).getByRole("button", { name: /merge with this/i }));
+    await user.click(screen.getByRole("button", { name: /confirm merge/i }));
+
+    expect(
+      await screen.findByText("These candidates cannot be merged safely"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "These candidates appear at the same time and cannot be merged safely.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("generates Match IQ after player selection", async () => {
     const user = userEvent.setup();
     mockedGetAnalysis.mockResolvedValue(makePlayerSelectedJob());
     mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
-    mockedGetPlayers.mockResolvedValue(makePlayersResponse({ selected_player_track_id: 1 }));
+    mockedGetPlayerCandidates.mockResolvedValue(
+      makePlayerCandidateCollection({ selected_candidate_id: "pc-player-one" }),
+    );
     mockedGenerateAnalytics.mockResolvedValue(makeAnalyticsGenerationResponse());
 
     renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);

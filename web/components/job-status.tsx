@@ -222,12 +222,6 @@ export function JobStatus({ job }: { job: AnalysisJob }) {
         ))}
       </ol>
 
-      {job.status === "failed" && job.error ? (
-        <details className="mt-5 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-court-red">
-          <summary className="cursor-pointer font-semibold">Technical details</summary>
-          <p className="mt-2 break-words">{job.error}</p>
-        </details>
-      ) : null}
     </section>
   );
 }

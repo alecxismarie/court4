@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import (
     AliasChoices,
@@ -9,7 +10,7 @@ from pydantic import (
     ValidationInfo,
     field_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -23,7 +24,12 @@ class Settings(BaseSettings):
     output_dir: Path = Path("data/output")
     default_sample_interval_seconds: PositiveFloat = Field(default=30)
     max_upload_size_bytes: PositiveInt = Field(default=1_073_741_824)
-    supported_extensions: tuple[str, ...] = (".mp4", ".mov", ".avi", ".mkv")
+    supported_extensions: Annotated[tuple[str, ...], NoDecode] = (
+        ".mp4",
+        ".mov",
+        ".avi",
+        ".mkv",
+    )
     logging_level: str = "INFO"
     calibration_output_dir: Path = Path("data/output")
     calibration_top_down_width_pixels: PositiveInt = Field(default=1000)
@@ -60,7 +66,7 @@ class Settings(BaseSettings):
     court_detection_calibration_id: str = "auto-court-detection"
     court_detection_min_confidence: float = Field(default=0.72, ge=0, le=1)
     court_detection_low_confidence_threshold: float = Field(default=0.25, ge=0, le=1)
-    frontend_allowed_origins: tuple[str, ...] = (
+    frontend_allowed_origins: Annotated[tuple[str, ...], NoDecode] = (
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     )

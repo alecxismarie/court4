@@ -323,14 +323,15 @@ def test_full_controlled_api_workflow(
         },
     )
     players = client.get(f"/api/v1/analyses/{analysis_id}/players")
+    candidates = client.get(f"/api/v1/analyses/{analysis_id}/player-candidates")
+    candidate_id = candidates.json()["candidates"][0]["candidate_id"]
     invalid_selection = client.post(
         f"/api/v1/analyses/{analysis_id}/players/select",
         json={"track_id": 99},
     )
     analytics_before_selection = client.post(f"/api/v1/analyses/{analysis_id}/analytics")
     selection = client.post(
-        f"/api/v1/analyses/{analysis_id}/players/select",
-        json={"track_id": 1},
+        f"/api/v1/analyses/{analysis_id}/player-candidates/{candidate_id}/select"
     )
     analytics = client.post(f"/api/v1/analyses/{analysis_id}/analytics")
     retrieved_analytics = client.get(f"/api/v1/analyses/{analysis_id}/analytics")
@@ -347,16 +348,23 @@ def test_full_controlled_api_workflow(
     assert players.json()["track_summaries"][0]["preview_image"] == (
         "tracking/player_previews/track_1.jpg"
     )
+    assert candidates.status_code == 200
+    assert candidates.json()["candidates"][0]["source_raw_track_ids"] == [1]
+    assert candidates.json()["candidates"][0]["candidate_id"].startswith("pc_")
+    assert candidates.json()["candidates"][0]["representative_crop_artifact"] is not None
     assert invalid_selection.status_code == 400
     assert analytics_before_selection.status_code == 409
     assert selection.status_code == 200
-    assert selection.json()["selected_player_track_id"] == 1
+    assert selection.json()["selected_candidate_id"] == candidate_id
     assert analytics.status_code == 200
     assert analytics.json()["analytics"]["timeline_observation_count"] == 15
-    assert analytics.json()["match_iq"]["status"] == "generated"
-    assert (
-        analytics.json()["match_iq"]["insights"][0]["rule_id"] == "positioning-high-transition-v1"
-    )
+    assert analytics.json()["analytics"]["selected_player_candidate_id"] == candidate_id
+    assert analytics.json()["analytics"]["source_raw_track_ids"] == [1]
+    assert analytics.json()["match_iq"]["status"] == "insufficient_data"
+    assert analytics.json()["match_iq"]["quality_gate"] == "INSUFFICIENT_EVIDENCE"
+    assert analytics.json()["match_iq"]["insights"] == []
+    assert tracking.json()["job"]["upload_preflight"]["status"] == "UNSUITABLE"
+    assert tracking.json()["job"]["analysis_readiness"]["status"] == "UNSUITABLE"
     assert (output_dir / analysis_id / "analytics" / "match_iq.json").is_file()
     assert retrieved_analytics.status_code == 200
     assert retrieved_analytics.json()["analytics"]["artifacts"]["heatmap_png"] == "heatmap.png"

@@ -21,6 +21,12 @@ from app.schemas.jobs import (
     TrackingResponse,
     UploadVideoResponse,
 )
+from app.schemas.player_candidates import (
+    CandidateMergeRequest,
+    CandidateRejectRequest,
+    CandidateUnmergeRequest,
+    PlayerCandidateCollection,
+)
 from app.services.jobs import AnalysisWorkflowService
 
 router = APIRouter(prefix="/analyses", tags=["analyses"])
@@ -165,6 +171,105 @@ def start_tracking(
     workflow: WorkflowDependency,
 ) -> TrackingResponse:
     return workflow.start_tracking(analysis_id, request)
+
+
+@router.get(
+    "/{analysis_id}/player-candidates",
+    response_model=PlayerCandidateCollection,
+    summary="List stable player candidates",
+    description="Return ranked player candidates, review state, previews, and suitability.",
+    responses=ERROR_RESPONSES,
+)
+def list_player_candidates(
+    analysis_id: str,
+    workflow: WorkflowDependency,
+) -> PlayerCandidateCollection:
+    return workflow.list_player_candidates(analysis_id)
+
+
+@router.post(
+    "/{analysis_id}/player-candidates/generate",
+    response_model=PlayerCandidateCollection,
+    summary="Generate stable player candidates",
+    description="Deterministically regenerate candidates while preserving compatible review state.",
+    responses=ERROR_RESPONSES,
+)
+def generate_player_candidates(
+    analysis_id: str,
+    workflow: WorkflowDependency,
+) -> PlayerCandidateCollection:
+    return workflow.generate_player_candidates(analysis_id)
+
+
+@router.post(
+    "/{analysis_id}/player-candidates/{candidate_id}/select",
+    response_model=PlayerCandidateCollection,
+    summary="Select a player candidate",
+    responses=ERROR_RESPONSES,
+)
+def select_player_candidate(
+    analysis_id: str,
+    candidate_id: str,
+    workflow: WorkflowDependency,
+) -> PlayerCandidateCollection:
+    return workflow.select_player_candidate(analysis_id, candidate_id)
+
+
+@router.post(
+    "/{analysis_id}/player-candidates/{candidate_id}/reject",
+    response_model=PlayerCandidateCollection,
+    summary="Exclude a candidate from player selection",
+    responses=ERROR_RESPONSES,
+)
+def reject_player_candidate(
+    analysis_id: str,
+    candidate_id: str,
+    request: CandidateRejectRequest,
+    workflow: WorkflowDependency,
+) -> PlayerCandidateCollection:
+    return workflow.reject_player_candidate(analysis_id, candidate_id, request.reason)
+
+
+@router.post(
+    "/{analysis_id}/player-candidates/{candidate_id}/restore",
+    response_model=PlayerCandidateCollection,
+    summary="Restore an excluded player candidate",
+    responses=ERROR_RESPONSES,
+)
+def restore_player_candidate(
+    analysis_id: str,
+    candidate_id: str,
+    workflow: WorkflowDependency,
+) -> PlayerCandidateCollection:
+    return workflow.restore_player_candidate(analysis_id, candidate_id)
+
+
+@router.post(
+    "/{analysis_id}/player-candidates/merge",
+    response_model=PlayerCandidateCollection,
+    summary="Manually merge two player candidates",
+    responses=ERROR_RESPONSES,
+)
+def merge_player_candidates(
+    analysis_id: str,
+    request: CandidateMergeRequest,
+    workflow: WorkflowDependency,
+) -> PlayerCandidateCollection:
+    return workflow.merge_player_candidates(analysis_id, request.candidate_ids)
+
+
+@router.post(
+    "/{analysis_id}/player-candidates/unmerge",
+    response_model=PlayerCandidateCollection,
+    summary="Undo a manual candidate merge",
+    responses=ERROR_RESPONSES,
+)
+def unmerge_player_candidates(
+    analysis_id: str,
+    request: CandidateUnmergeRequest,
+    workflow: WorkflowDependency,
+) -> PlayerCandidateCollection:
+    return workflow.unmerge_player_candidates(analysis_id, request.candidate_id)
 
 
 @router.get(

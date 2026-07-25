@@ -87,17 +87,17 @@ describe("workspace data aggregation", () => {
     expect(
       getHumanMatchStatus(makeJob({ status: "failed", error: "tracking failed" })),
     ).toBe("Needs attention");
-    expect(getMatchIqAvailability(record)).toBe("Match IQ available");
+    expect(getMatchIqAvailability(record)).toBe("Analysis under review");
     expect(
       getMatchIqAvailability(makeRecord("legacy", { matchIQ: null })),
-    ).toBe("Match IQ unavailable");
+    ).toBe("No verified insight yet");
     expect(
       getMatchIqAvailability({
         analysisId: "pending",
         job: makeJob({ analysis_id: "pending", tracking_completed: true }),
         analytics: null,
       }),
-    ).toBe("Match IQ pending");
+    ).toBe("Analysis under review");
   });
 });
 

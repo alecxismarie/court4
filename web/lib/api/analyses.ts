@@ -16,6 +16,7 @@ import {
   type CalibrationResponse,
   type CourtDetectionResponse,
   type PlayerSelectionResponse,
+  type PlayerCandidateCollection,
   type PlayersResponse,
   type SampledFramesResponse,
   type TrackingRequest,
@@ -27,6 +28,7 @@ import {
   calibrationResponseSchema,
   courtDetectionResponseSchema,
   playerSelectionResponseSchema,
+  playerCandidateCollectionSchema,
   playersResponseSchema,
   sampledFramesResponseSchema,
   trackingResponseSchema,
@@ -139,6 +141,67 @@ export function selectPlayer(
     `/api/v1/analyses/${encodeURIComponent(analysisId)}/players/select`,
     playerSelectionResponseSchema,
     { track_id: trackId },
+  );
+}
+
+export function getPlayerCandidates(analysisId: string): Promise<PlayerCandidateCollection> {
+  return requestJson(
+    `/api/v1/analyses/${encodeURIComponent(analysisId)}/player-candidates`,
+    playerCandidateCollectionSchema,
+  );
+}
+
+export function selectPlayerCandidate(
+  analysisId: string,
+  candidateId: string,
+): Promise<PlayerCandidateCollection> {
+  return postJson(
+    `/api/v1/analyses/${encodeURIComponent(analysisId)}/player-candidates/${encodeURIComponent(candidateId)}/select`,
+    playerCandidateCollectionSchema,
+  );
+}
+
+export function rejectPlayerCandidate(
+  analysisId: string,
+  candidateId: string,
+  reason = "not_a_player",
+): Promise<PlayerCandidateCollection> {
+  return postJson(
+    `/api/v1/analyses/${encodeURIComponent(analysisId)}/player-candidates/${encodeURIComponent(candidateId)}/reject`,
+    playerCandidateCollectionSchema,
+    { reason },
+  );
+}
+
+export function restorePlayerCandidate(
+  analysisId: string,
+  candidateId: string,
+): Promise<PlayerCandidateCollection> {
+  return postJson(
+    `/api/v1/analyses/${encodeURIComponent(analysisId)}/player-candidates/${encodeURIComponent(candidateId)}/restore`,
+    playerCandidateCollectionSchema,
+  );
+}
+
+export function mergePlayerCandidates(
+  analysisId: string,
+  candidateIds: [string, string],
+): Promise<PlayerCandidateCollection> {
+  return postJson(
+    `/api/v1/analyses/${encodeURIComponent(analysisId)}/player-candidates/merge`,
+    playerCandidateCollectionSchema,
+    { candidate_ids: candidateIds },
+  );
+}
+
+export function unmergePlayerCandidate(
+  analysisId: string,
+  candidateId: string,
+): Promise<PlayerCandidateCollection> {
+  return postJson(
+    `/api/v1/analyses/${encodeURIComponent(analysisId)}/player-candidates/unmerge`,
+    playerCandidateCollectionSchema,
+    { candidate_id: candidateId },
   );
 }
 

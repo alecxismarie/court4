@@ -7,7 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from app.schemas.analytics import AnalyticsReport
 from app.schemas.calibration import CourtCalibrationReport
 from app.schemas.match_iq import MatchIQReport
+from app.schemas.player_candidates import PlayerCandidateCollection
 from app.schemas.player_tracking import PlayerTrackingReport, TrackSummary
+from app.schemas.recording_quality import RecordingQualityAssessment
 from app.schemas.video import VideoMetadataReport
 
 
@@ -91,6 +93,8 @@ class AnalysisJob(BaseModel):
     court_detection_confidence: float | None = Field(default=None, ge=0, le=1)
     court_detection_selected_frame: str | None = None
     court_detection_detected_corners: DetectedCourtCorners | None = None
+    upload_preflight: RecordingQualityAssessment | None = None
+    analysis_readiness: RecordingQualityAssessment | None = None
     available_artifacts: list[AnalysisArtifact] = Field(default_factory=list)
 
 
@@ -192,6 +196,7 @@ class TrackingResponse(BaseModel):
     tracking: PlayerTrackingReport
     artifacts: list[AnalysisArtifact]
     job: AnalysisJobResponse
+    player_candidates: PlayerCandidateCollection | None = None
 
 
 class PlayerSelectionRequest(BaseModel):

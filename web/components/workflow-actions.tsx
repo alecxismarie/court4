@@ -9,34 +9,39 @@ import {
   Crosshair,
   Loader2,
   RefreshCw,
-  Settings2,
   UserCheck,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import type { BaseSyntheticEvent, ReactNode } from "react";
-import { useRef } from "react";
+import type { BaseSyntheticEvent } from "react";
+import { useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
 import {
   detectCourt,
   generateAnalytics,
-  getPlayers,
-  selectPlayer,
+  getPlayerCandidates,
+  mergePlayerCandidates,
+  rejectPlayerCandidate,
+  restorePlayerCandidate,
+  selectPlayerCandidate,
   startTracking,
+  unmergePlayerCandidate,
 } from "@/lib/api/analyses";
 import { getArtifactUrl, normalizeApiError } from "@/lib/api/client";
 import type {
   AnalysisArtifact,
   AnalysisJob,
   CourtDetectionResponse,
-  TrackSummary,
+  PlayerCandidate,
+  PlayerCandidateCollection,
   TrackingBackend,
   TrackingRequest,
 } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Skeleton } from "@/components/skeleton";
+import { RecordingQualityCard } from "@/components/recording-quality-card";
 
 const trackingFormSchema = z
   .object({
@@ -70,26 +75,65 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
       await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId] });
     },
   });
-  const playersQuery = useQuery({
-    queryKey: ["analysis", analysisId, "players"],
-    queryFn: () => getPlayers(analysisId),
+  const candidatesQuery = useQuery({
+    queryKey: ["analysis", analysisId, "player-candidates"],
+    queryFn: () => getPlayerCandidates(analysisId),
     enabled: job.tracking_completed,
   });
   const trackingMutation = useMutation({
     mutationFn: (request: TrackingRequest) => startTracking(analysisId, request),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId] });
-      await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId, "players"] });
+      await queryClient.invalidateQueries({
+        queryKey: ["analysis", analysisId, "player-candidates"],
+      });
     },
     onSettled: () => {
       trackingRequestInFlight.current = false;
     },
   });
   const selectionMutation = useMutation({
-    mutationFn: (trackId: number) => selectPlayer(analysisId, trackId),
+    mutationFn: (candidateId: string) => selectPlayerCandidate(analysisId, candidateId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId] });
-      await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId, "players"] });
+      await queryClient.invalidateQueries({
+        queryKey: ["analysis", analysisId, "player-candidates"],
+      });
+    },
+  });
+  const rejectionMutation = useMutation({
+    mutationFn: (candidateId: string) => rejectPlayerCandidate(analysisId, candidateId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId] });
+      await queryClient.invalidateQueries({
+        queryKey: ["analysis", analysisId, "player-candidates"],
+      });
+    },
+  });
+  const mergeMutation = useMutation({
+    mutationFn: (candidateIds: [string, string]) =>
+      mergePlayerCandidates(analysisId, candidateIds),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["analysis", analysisId, "player-candidates"],
+      });
+    },
+  });
+  const restoreMutation = useMutation({
+    mutationFn: (candidateId: string) => restorePlayerCandidate(analysisId, candidateId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["analysis", analysisId, "player-candidates"],
+      });
+    },
+  });
+  const unmergeMutation = useMutation({
+    mutationFn: (candidateId: string) => unmergePlayerCandidate(analysisId, candidateId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId] });
+      await queryClient.invalidateQueries({
+        queryKey: ["analysis", analysisId, "player-candidates"],
+      });
     },
   });
   const analyticsMutation = useMutation({
@@ -108,8 +152,6 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
       frameInterval: 1,
     },
   });
-  const trackingBackend = trackingForm.watch("backend");
-
   const submitTracking = trackingForm.handleSubmit((values) => {
     if (trackingMutation.isPending || trackingRequestInFlight.current) {
       return;
@@ -141,24 +183,40 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
           analysisId={analysisId}
           job={job}
           calibrationIds={calibrationIds}
-          trackingBackend={trackingBackend}
           trackingForm={trackingForm}
           submitTracking={submitTracking}
           trackingError={trackingMutation.error}
           isTracking={trackingMutation.isPending}
-          playersQuery={{
-            tracks: playersQuery.data?.track_summaries ?? [],
-            selectedTrackId: playersQuery.data?.selected_player_track_id ?? null,
-            artifact: playersQuery.data?.player_selection_artifact ?? null,
-            isLoading: playersQuery.isLoading,
-            error: playersQuery.error,
-            onRetry: () => void playersQuery.refetch(),
+          candidatesQuery={{
+            collection: candidatesQuery.data ?? null,
+            isLoading: candidatesQuery.isLoading,
+            error: candidatesQuery.error,
+            onRetry: () => void candidatesQuery.refetch(),
           }}
-          selection={{
-            selectingTrackId: selectionMutation.variables ?? null,
-            isSelecting: selectionMutation.isPending,
-            error: selectionMutation.error,
-            onSelect: (trackId) => selectionMutation.mutate(trackId),
+          review={{
+            pendingCandidateId:
+              selectionMutation.variables ??
+              rejectionMutation.variables ??
+              unmergeMutation.variables ??
+              restoreMutation.variables ??
+              null,
+            isPending:
+              selectionMutation.isPending ||
+              rejectionMutation.isPending ||
+              mergeMutation.isPending ||
+              restoreMutation.isPending ||
+              unmergeMutation.isPending,
+            error:
+              selectionMutation.error ??
+              rejectionMutation.error ??
+              mergeMutation.error ??
+              restoreMutation.error ??
+              unmergeMutation.error,
+            onSelect: (candidateId) => selectionMutation.mutate(candidateId),
+            onReject: (candidateId) => rejectionMutation.mutate(candidateId),
+            onMerge: (candidateIds) => mergeMutation.mutate(candidateIds),
+            onUnmerge: (candidateId) => unmergeMutation.mutate(candidateId),
+            onRestore: (candidateId) => restoreMutation.mutate(candidateId),
           }}
         />
       ) : null}
@@ -191,12 +249,8 @@ function CourtRecognitionPanel({
 }) {
   const artifacts = result?.artifacts.length ? result.artifacts : job.available_artifacts;
   const verification = findArtifact(artifacts, "verification.jpg");
-  const topDown = findArtifact(artifacts, "top_down.jpg");
   const detectionStatus = job.court_detection_status ?? result?.status ?? null;
   const detectionConfidence = job.court_detection_confidence ?? result?.confidence ?? null;
-  const detectionSelectedFrame =
-    job.court_detection_selected_frame ?? result?.selected_frame ?? null;
-  const detectionCorners = job.court_detection_detected_corners ?? result?.detected_corners ?? null;
   const detectionNeedsManualCalibration =
     detectionStatus === "failed" ||
     detectionStatus === "low_confidence" ||
@@ -269,40 +323,13 @@ function CourtRecognitionPanel({
             />
           </div>
 
-          {verification || topDown ? (
-            <div className="grid gap-4 md:grid-cols-2">
-              {verification ? (
-                <ArtifactPreview
-                  analysisId={job.analysis_id}
-                  artifact={verification}
-                  label="Detected court"
-                />
-              ) : null}
-              {topDown ? (
-                <ArtifactPreview
-                  analysisId={job.analysis_id}
-                  artifact={topDown}
-                  label="Top-down court view"
-                />
-              ) : null}
-            </div>
+          {verification ? (
+            <ArtifactPreview
+              analysisId={job.analysis_id}
+              artifact={verification}
+              label="Detected court"
+            />
           ) : null}
-
-          <TechnicalDetails>
-            <dl className="grid gap-3 text-sm text-court-muted sm:grid-cols-2">
-              <DetailItem label="Internal status" value={detectionStatus ?? job.current_stage} />
-              <DetailItem label="Calibration source" value={getPrimaryCalibrationId(job, result)} />
-              {detectionConfidence !== null ? (
-                <DetailItem label="Confidence value" value={detectionConfidence.toFixed(3)} />
-              ) : null}
-              {detectionSelectedFrame ? (
-                <DetailItem label="Selected frame" value={detectionSelectedFrame} />
-              ) : null}
-              {detectionCorners ? (
-                <DetailItem label="Detected corners" value={JSON.stringify(detectionCorners)} />
-              ) : null}
-            </dl>
-          </TechnicalDetails>
         </div>
       ) : null}
 
@@ -360,15 +387,6 @@ function DetectionResultMessage({
       <p className="mt-1 text-sm text-court-muted">
         Confidence was {toPercent(result.confidence)}%. Manual calibration is required.
       </p>
-      <TechnicalDetails className="mt-4">
-        <dl className="grid gap-3 text-sm text-court-muted sm:grid-cols-2">
-          <DetailItem label="Internal status" value={result.status} />
-          <DetailItem label="Confidence value" value={result.confidence.toFixed(3)} />
-          {result.selected_frame ? (
-            <DetailItem label="Selected frame" value={result.selected_frame} />
-          ) : null}
-        </dl>
-      </TechnicalDetails>
       <ButtonLink className="mt-4" href={`/matches/${analysisId}/calibrate`} variant="secondary">
         Calibrate Manually
       </ButtonLink>
@@ -410,14 +428,6 @@ function PersistedDetectionMessage({
           ? `Confidence was ${toPercent(confidence)}%. Manual calibration is required.`
           : "Manual calibration is required."}
       </p>
-      <TechnicalDetails className="mt-4">
-        <dl className="grid gap-3 text-sm text-court-muted sm:grid-cols-2">
-          <DetailItem label="Internal status" value={status} />
-          {confidence !== null ? (
-            <DetailItem label="Confidence value" value={confidence.toFixed(3)} />
-          ) : null}
-        </dl>
-      </TechnicalDetails>
       {manualCalibrationRequired ? (
         <ButtonLink className="mt-4" href={`/matches/${analysisId}/calibrate`} variant="secondary">
           Calibrate Manually
@@ -431,35 +441,35 @@ function PlayerTrackingPanel({
   analysisId,
   job,
   calibrationIds,
-  trackingBackend,
   trackingForm,
   submitTracking,
   trackingError,
   isTracking,
-  playersQuery,
-  selection,
+  candidatesQuery,
+  review,
 }: {
   analysisId: string;
   job: AnalysisJob;
   calibrationIds: string[];
-  trackingBackend: TrackingBackend;
   trackingForm: ReturnType<typeof useForm<TrackingFormValues>>;
   submitTracking: (event?: BaseSyntheticEvent) => Promise<void>;
   trackingError: unknown;
   isTracking: boolean;
-  playersQuery: {
-    tracks: TrackSummary[];
-    selectedTrackId: number | null;
-    artifact: AnalysisArtifact | null;
+  candidatesQuery: {
+    collection: PlayerCandidateCollection | null;
     isLoading: boolean;
     error: unknown;
     onRetry: () => void;
   };
-  selection: {
-    selectingTrackId: number | null;
-    isSelecting: boolean;
+  review: {
+    pendingCandidateId: string | null;
+    isPending: boolean;
     error: unknown;
-    onSelect: (trackId: number) => void;
+    onSelect: (candidateId: string) => void;
+    onReject: (candidateId: string) => void;
+    onMerge: (candidateIds: [string, string]) => void;
+    onUnmerge: (candidateId: string) => void;
+    onRestore: (candidateId: string) => void;
   };
 }) {
   return (
@@ -490,13 +500,6 @@ function PlayerTrackingPanel({
 
       {!job.tracking_completed ? (
         <form onSubmit={submitTracking} className="mt-5 space-y-4">
-          <AdvancedSettings
-            calibrationIds={calibrationIds}
-            isTracking={isTracking}
-            trackingBackend={trackingBackend}
-            trackingForm={trackingForm}
-          />
-
           <div className="flex flex-wrap items-center gap-3">
             <Button type="submit" disabled={isTracking || calibrationIds.length === 0}>
               {isTracking ? (
@@ -517,127 +520,62 @@ function PlayerTrackingPanel({
           <WorkflowError
             error={trackingError}
             title="We could not identify the players"
-            message="Try the analysis again or open advanced settings to adjust processing options."
+            message="Try the analysis again. If the problem continues, use a clearer recording."
             onRetry={() => void submitTracking()}
           />
         </form>
       ) : (
         <PlayerSelectionPanel
           analysisId={analysisId}
-          tracks={playersQuery.tracks}
-          selectedTrackId={playersQuery.selectedTrackId}
-          artifact={playersQuery.artifact}
-          isLoading={playersQuery.isLoading}
-          error={playersQuery.error}
-          selectingTrackId={selection.selectingTrackId}
-          isSelecting={selection.isSelecting}
-          selectionError={selection.error}
-          onSelect={selection.onSelect}
-          onRetry={playersQuery.onRetry}
+          collection={candidatesQuery.collection}
+          isLoading={candidatesQuery.isLoading}
+          error={candidatesQuery.error}
+          pendingCandidateId={review.pendingCandidateId}
+          isPending={review.isPending}
+          reviewError={review.error}
+          onSelect={review.onSelect}
+          onReject={review.onReject}
+          onMerge={review.onMerge}
+          onUnmerge={review.onUnmerge}
+          onRestore={review.onRestore}
+          onRetry={candidatesQuery.onRetry}
         />
       )}
     </section>
   );
 }
 
-function AdvancedSettings({
-  calibrationIds,
-  isTracking,
-  trackingBackend,
-  trackingForm,
-}: {
-  calibrationIds: string[];
-  isTracking: boolean;
-  trackingBackend: TrackingBackend;
-  trackingForm: ReturnType<typeof useForm<TrackingFormValues>>;
-}) {
-  return (
-    <details className="rounded-md border border-court-line bg-court-panel p-4">
-      <summary className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-court-ink">
-        <Settings2 aria-hidden="true" className="h-4 w-4" />
-        Advanced settings
-      </summary>
-      <div className="mt-4 grid gap-4 lg:grid-cols-4">
-        <label className="grid gap-2 text-sm font-medium text-court-ink">
-          Calibration source
-          <select
-            {...trackingForm.register("calibrationId")}
-            className="rounded-md border border-court-line px-3 py-2 text-sm"
-            disabled={calibrationIds.length === 0 || isTracking}
-          >
-            {calibrationIds.length === 0 ? (
-              <option value="">No calibration found</option>
-            ) : (
-              calibrationIds.map((calibrationId) => (
-                <option key={calibrationId} value={calibrationId}>
-                  {displayCalibrationSource(calibrationId)}
-                </option>
-              ))
-            )}
-          </select>
-        </label>
-        <label className="grid gap-2 text-sm font-medium text-court-ink">
-          Detector backend
-          <select
-            {...trackingForm.register("backend")}
-            className="rounded-md border border-court-line px-3 py-2 text-sm"
-            disabled={isTracking}
-          >
-            <option value="ultralytics">Ultralytics detector</option>
-            <option value="controlled-json">Controlled JSON</option>
-          </select>
-        </label>
-        {trackingBackend === "controlled-json" ? (
-          <label className="grid gap-2 text-sm font-medium text-court-ink lg:col-span-2">
-            Detections JSONL artifact
-            <input
-              {...trackingForm.register("detectionsJsonl")}
-              className="rounded-md border border-court-line px-3 py-2 text-sm"
-              placeholder="uploads/detections.jsonl"
-              disabled={isTracking}
-            />
-          </label>
-        ) : null}
-        <label className="grid gap-2 text-sm font-medium text-court-ink">
-          Frame interval
-          <input
-            {...trackingForm.register("frameInterval")}
-            type="number"
-            min={1}
-            className="rounded-md border border-court-line px-3 py-2 text-sm"
-            disabled={isTracking}
-          />
-        </label>
-      </div>
-    </details>
-  );
-}
-
 function PlayerSelectionPanel({
   analysisId,
-  tracks,
-  selectedTrackId,
-  artifact,
+  collection,
   isLoading,
   error,
-  selectingTrackId,
-  isSelecting,
-  selectionError,
+  pendingCandidateId,
+  isPending,
+  reviewError,
   onSelect,
+  onReject,
+  onMerge,
+  onUnmerge,
+  onRestore,
   onRetry,
 }: {
   analysisId: string;
-  tracks: TrackSummary[];
-  selectedTrackId: number | null;
-  artifact: AnalysisArtifact | null;
+  collection: PlayerCandidateCollection | null;
   isLoading: boolean;
   error: unknown;
-  selectingTrackId: number | null;
-  isSelecting: boolean;
-  selectionError: unknown;
-  onSelect: (trackId: number) => void;
+  pendingCandidateId: string | null;
+  isPending: boolean;
+  reviewError: unknown;
+  onSelect: (candidateId: string) => void;
+  onReject: (candidateId: string) => void;
+  onMerge: (candidateIds: [string, string]) => void;
+  onUnmerge: (candidateId: string) => void;
+  onRestore: (candidateId: string) => void;
   onRetry: () => void;
 }) {
+  const [mergeSourceId, setMergeSourceId] = useState<string | null>(null);
+  const [mergeTargetId, setMergeTargetId] = useState<string | null>(null);
   if (isLoading) {
     return <Skeleton className="mt-5 h-64" />;
   }
@@ -654,26 +592,59 @@ function PlayerSelectionPanel({
     );
   }
 
-  const eligibleTracks = tracks
-    .filter((track) => track.eligible_for_selection)
-    .sort(compareTrackSelectionPriority);
-  const playerCards = eligibleTracks.map((track, index) => ({
-    track,
+  const candidates = (collection?.candidates ?? [])
+    .filter((candidate) => candidate.selection_eligible)
+    .slice(0, 4);
+  const restorableExcludedCandidates =
+    collection?.excluded_candidates.filter((candidate) => candidate.selection_eligible) ?? [];
+  const playerCards = candidates.map((candidate, index) => ({
+    candidate,
     label: `Player ${index + 1}`,
   }));
-  const selectedPlayer = playerCards.find((player) => player.track.track_id === selectedTrackId);
-  const cardsMissingPreviews = playerCards.filter(({ track }) => !track.preview_image).length;
+  const selectedPlayer = playerCards.find(
+    (player) => player.candidate.candidate_id === collection?.selected_candidate_id,
+  );
+  const mergeSource = playerCards.find(
+    (player) => player.candidate.candidate_id === mergeSourceId,
+  );
+  const mergeTarget = playerCards.find(
+    (player) => player.candidate.candidate_id === mergeTargetId,
+  );
 
-  if (eligibleTracks.length === 0) {
+  if (!collection || candidates.length === 0) {
     return (
       <div className="mt-5 rounded-md border border-amber-200 bg-amber-50 p-4">
-        <p className="text-sm font-semibold text-court-ink">No selectable players were found.</p>
+        <p className="text-sm font-semibold text-court-ink">
+          Court4 found people in the video, but none were tracked long enough to analyze reliably.
+        </p>
         <p className="mt-1 text-sm text-court-muted">
           Try finding players again with adjusted processing options.
         </p>
-        <TechnicalDetails className="mt-4">
-          <TrackDetails tracks={tracks} />
-        </TechnicalDetails>
+        {restorableExcludedCandidates.length ? (
+          <details className="mt-4 rounded-md border border-court-line bg-white p-4 text-sm">
+            <summary className="cursor-pointer font-semibold text-court-ink">
+              Excluded candidates ({restorableExcludedCandidates.length})
+            </summary>
+            <div className="mt-3 space-y-2">
+              {restorableExcludedCandidates.map((candidate, index) => (
+                <div
+                  key={candidate.candidate_id}
+                  className="flex items-center justify-between gap-3"
+                >
+                  <p>Excluded player {index + 1}</p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={isPending}
+                    onClick={() => onRestore(candidate.candidate_id)}
+                  >
+                    Restore
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </details>
+        ) : null}
       </div>
     );
   }
@@ -686,15 +657,66 @@ function PlayerSelectionPanel({
         </div>
       ) : null}
 
+      <RecordingQualityCard
+        assessment={collection.analysis_readiness}
+        title="Analysis readiness"
+        showRetry={collection.analysis_readiness?.status === "UNSUITABLE"}
+      />
+
+      {candidates.every((candidate) => candidate.quality === "UNCERTAIN") ? (
+        <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-court-muted">
+          Court4 found possible players, but they need your review.
+        </div>
+      ) : null}
+
+      {mergeSource && mergeTarget ? (
+        <div className="rounded-md border border-court-line bg-court-panel p-4">
+          <p className="font-semibold text-court-ink">
+            Confirm that {mergeSource.label} and {mergeTarget.label} are the same player
+          </p>
+          <p className="mt-1 text-sm text-court-muted">
+            Court4 will combine their non-overlapping tracked sections. Inconsistent or
+            simultaneous candidates are blocked.
+          </p>
+          <div className="mt-3 flex gap-3">
+            <Button
+              type="button"
+              disabled={isPending}
+              onClick={() => {
+                onMerge([
+                  mergeSource.candidate.candidate_id,
+                  mergeTarget.candidate.candidate_id,
+                ]);
+                setMergeSourceId(null);
+                setMergeTargetId(null);
+              }}
+            >
+              Confirm merge
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setMergeSourceId(null);
+                setMergeTargetId(null);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {playerCards.map(({ track, label }) => {
-          const isSelected = selectedTrackId === track.track_id;
-          const isCurrentSelectionPending = isSelecting && selectingTrackId === track.track_id;
-          const previewPath = track.preview_image ?? null;
+        {playerCards.map(({ candidate, label }) => {
+          const isSelected = collection.selected_candidate_id === candidate.candidate_id;
+          const isCurrentSelectionPending =
+            isPending && pendingCandidateId === candidate.candidate_id;
+          const previewPath = candidate.representative_crop_artifact;
 
           return (
             <article
-              key={track.track_id}
+              key={candidate.candidate_id}
               className={cn(
                 "rounded-md border p-4 transition",
                 isSelected
@@ -704,11 +726,7 @@ function PlayerSelectionPanel({
             >
               <div className="flex items-start justify-between gap-3">
                 <h3 className="text-base font-semibold text-court-ink">{label}</h3>
-                {isSelected ? (
-                  <span className="rounded-md bg-white px-2 py-1 text-xs font-semibold text-court-green">
-                    Selected
-                  </span>
-                ) : null}
+                <CandidateQualityBadge quality={candidate.quality} />
               </div>
 
               <div className="mt-4 overflow-hidden rounded-md border border-court-line bg-court-panel">
@@ -729,44 +747,123 @@ function PlayerSelectionPanel({
               </div>
 
               <p className="mt-3 text-sm text-court-muted">
-                Tracked for {formatTrackedDuration(track.duration_seconds)} across{" "}
-                {track.observation_count} observations.
+                Tracked for {formatTrackedDuration(candidate.total_observed_duration)} across{" "}
+                {candidate.total_observed_frames} observations.
               </p>
+              {candidate.court_side_estimate === "NEAR" ||
+              candidate.court_side_estimate === "FAR" ? (
+                <p className="mt-1 text-sm text-court-muted">
+                  Estimated {candidate.court_side_estimate.toLowerCase()} court side
+                </p>
+              ) : null}
+              {candidate.warnings.length ? (
+                <p className="mt-2 text-sm text-amber-700">
+                  {candidateWarningLabel(candidate.warnings[0])}
+                </p>
+              ) : null}
 
               <Button
                 className="mt-4 w-full"
                 type="button"
-                disabled={isSelecting}
-                onClick={() => onSelect(track.track_id)}
+                disabled={isPending}
+                onClick={() => onSelect(candidate.candidate_id)}
               >
                 <UserCheck aria-hidden="true" className="h-4 w-4" />
-                {isCurrentSelectionPending ? "Selecting" : "This is me"}
+                {isCurrentSelectionPending ? "Saving" : isSelected ? "Selected" : "This is me"}
               </Button>
 
-              <TechnicalDetails className="mt-4">
-                <TrackDetails tracks={[track]} />
-              </TechnicalDetails>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={isPending}
+                  onClick={() => onReject(candidate.candidate_id)}
+                >
+                  Not a player
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={isPending || candidates.length < 2}
+                  onClick={() => {
+                    if (mergeSourceId && mergeSourceId !== candidate.candidate_id) {
+                      setMergeTargetId(candidate.candidate_id);
+                    } else {
+                      setMergeSourceId(candidate.candidate_id);
+                      setMergeTargetId(null);
+                    }
+                  }}
+                >
+                  {mergeSourceId && mergeSourceId !== candidate.candidate_id
+                    ? "Merge with this"
+                    : "Same player"}
+                </Button>
+              </div>
+
+              {candidate.manual_merge_id ? (
+                <Button
+                  className="mt-2 w-full"
+                  type="button"
+                  variant="secondary"
+                  disabled={isPending}
+                  onClick={() => onUnmerge(candidate.candidate_id)}
+                >
+                  Undo merge
+                </Button>
+              ) : null}
+
+              <details className="mt-4 rounded-md border border-court-line bg-court-panel p-3">
+                <summary className="cursor-pointer text-sm font-semibold text-court-ink">
+                  Preview candidate
+                </summary>
+                <div className="mt-3 grid gap-2">
+                  {candidate.preview_frames.map((preview) =>
+                    preview.full_frame_artifact ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        key={`${candidate.candidate_id}-${preview.frame_index}`}
+                        src={getArtifactUrl(analysisId, preview.full_frame_artifact)}
+                        alt={`${label} at ${preview.timestamp_seconds.toFixed(1)} seconds`}
+                        className="w-full rounded-md border border-court-line"
+                      />
+                    ) : null,
+                  )}
+                </div>
+              </details>
+
             </article>
           );
         })}
       </div>
 
-      {artifact && cardsMissingPreviews > 0 ? (
+      {restorableExcludedCandidates.length ? (
         <details className="rounded-md border border-court-line bg-white p-4 text-sm">
           <summary className="cursor-pointer font-semibold text-court-ink">
-            Player reference sheet
+            Excluded candidates ({restorableExcludedCandidates.length})
           </summary>
-          <div className="mt-4 overflow-auto rounded-md border border-court-line bg-white p-3">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={getArtifactUrl(analysisId, artifact.path)}
-              alt="Player reference sheet"
-              className="mx-auto max-h-[520px] max-w-full object-contain"
-            />
+          <div className="mt-3 space-y-2 text-court-muted">
+            {restorableExcludedCandidates.map((candidate, index) => (
+              <div key={candidate.candidate_id} className="flex items-center justify-between gap-3">
+                <p>
+                  Excluded player {index + 1}: {candidate.rejection_reason ?? "not a player"}
+                </p>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={isPending}
+                  onClick={() => onRestore(candidate.candidate_id)}
+                >
+                  Restore
+                </Button>
+              </div>
+            ))}
           </div>
         </details>
       ) : null}
-      <WorkflowError error={selectionError} title="Court4 could not save your selection" />
+      <WorkflowError
+        error={reviewError}
+        title="Court4 could not save the candidate review"
+      />
     </div>
   );
 }
@@ -870,28 +967,26 @@ function WorkflowError({
   const normalized = normalizeApiError(error);
   const isBackendUnavailable = normalized.code === "backend_unavailable";
   const isDetectorModelMissing = normalized.code === "detector_model_missing";
+  const isImpossibleMerge = normalized.code === "impossible_candidate_merge";
   const visibleTitle = isBackendUnavailable
     ? "Court4 cannot connect to the analysis service"
     : isDetectorModelMissing
       ? "Player detection model is missing"
+    : isImpossibleMerge
+      ? "These candidates cannot be merged safely"
     : title ?? "Court4 could not complete this step";
   const visibleMessage = isBackendUnavailable
     ? "Make sure the Court4 backend is running, then try again."
     : isDetectorModelMissing
       ? "Player detection is not available because the detector model is missing."
-    : message ?? "Try again, or open technical details for more information.";
+    : isImpossibleMerge
+      ? normalized.message
+    : message ?? "Try again. If the problem continues, use a clearer recording.";
 
   return (
     <div className={cn("mt-4 rounded-md border border-red-200 bg-red-50 p-4", className)}>
       <p className="text-sm font-semibold text-court-red">{visibleTitle}</p>
       <p className="mt-1 text-sm text-court-red">{visibleMessage}</p>
-      <TechnicalDetails className="mt-4">
-        <dl className="grid gap-3 text-sm text-court-red sm:grid-cols-2">
-          <DetailItem label="Code" value={normalized.code} />
-          {normalized.status ? <DetailItem label="Status" value={String(normalized.status)} /> : null}
-          <DetailItem label="Message" value={normalized.message} />
-        </dl>
-      </TechnicalDetails>
       {onRetry ? (
         <Button className="mt-4" type="button" variant="secondary" onClick={onRetry}>
           <RefreshCw aria-hidden="true" className="h-4 w-4" />
@@ -902,57 +997,31 @@ function WorkflowError({
   );
 }
 
-function TechnicalDetails({
-  children,
-  className,
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
+function CandidateQualityBadge({ quality }: { quality: PlayerCandidate["quality"] }) {
+  const label = {
+    STRONG: "Strong candidate",
+    USABLE: "Usable candidate",
+    UNCERTAIN: "Needs review",
+    REJECTED: "Not enough tracking data",
+  }[quality];
   return (
-    <details className={cn("text-sm", className)}>
-      <summary className="cursor-pointer font-semibold text-court-ink">Technical details</summary>
-      <div className="mt-3">{children}</div>
-    </details>
+    <span className="rounded-md bg-court-panel px-2 py-1 text-xs font-semibold text-court-ink">
+      {label}
+    </span>
   );
 }
 
-function DetailItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <dt className="font-semibold text-court-ink">{label}</dt>
-      <dd className="mt-1 break-words">{value}</dd>
-    </div>
-  );
-}
-
-function TrackDetails({ tracks }: { tracks: TrackSummary[] }) {
-  return (
-    <dl className="grid gap-3 text-sm text-court-muted">
-      {tracks.map((track) => (
-        <div key={track.track_id} className="grid gap-1">
-          <DetailItem label="Observations" value={String(track.observation_count)} />
-          <DetailItem label="Court movement" value={formatFeet(track.court_distance_feet ?? 0)} />
-          <DetailItem
-            label="Court movement rate"
-            value={`${(track.court_movement_rate_feet_per_second ?? 0).toFixed(2)} ft/sec`}
-          />
-          <DetailItem label="Average confidence" value={`${toPercent(track.average_confidence)}%`} />
-          <DetailItem
-            label="Inside detected court"
-            value={`${toPercent(getInsideCourtRatio(track))}%`}
-          />
-          <DetailItem
-            label="Inside extended court"
-            value={`${toPercent(track.inside_extended_court_ratio)}%`}
-          />
-          {track.rejection_reasons.length ? (
-            <DetailItem label="Rejection reasons" value={track.rejection_reasons.join(", ")} />
-          ) : null}
-        </div>
-      ))}
-    </dl>
-  );
+function candidateWarningLabel(reason: string): string {
+  const labels: Record<string, string> = {
+    short_track_duration: "Only a short tracked section is available.",
+    low_in_court_ratio: "Much of this track falls outside the recognized court.",
+    high_fragment_count: "This candidate combines several tracked sections.",
+    candidate_preview_generation_failure: "Preview images could not be generated.",
+    small_subject: "The player appears small in the recording.",
+    court_side_inconsistent: "Court-side estimates are inconsistent.",
+    vertical_video_limitation: "Vertical video may reduce tracking reliability.",
+  };
+  return labels[reason] ?? "This candidate needs review.";
 }
 
 function FormError({ message }: { message?: string }) {
@@ -992,30 +1061,6 @@ function getCalibrationIds(job: AnalysisJob): string[] {
   });
 }
 
-function getPrimaryCalibrationId(
-  job: AnalysisJob,
-  result?: CourtDetectionResponse,
-): string {
-  return result?.calibration?.calibration_id ?? getCalibrationIds(job)[0] ?? "Unavailable";
-}
-
-function displayCalibrationSource(value: string): string {
-  if (value === "auto-court-detection") {
-    return "Automatic court recognition";
-  }
-  return value;
-}
-
-function compareTrackSelectionPriority(first: TrackSummary, second: TrackSummary): number {
-  return (
-    (second.court_distance_feet ?? 0) - (first.court_distance_feet ?? 0) ||
-    second.duration_seconds - first.duration_seconds ||
-    second.observation_count - first.observation_count ||
-    second.average_confidence - first.average_confidence ||
-    first.track_id - second.track_id
-  );
-}
-
 function formatTrackedDuration(seconds: number): string {
   if (seconds < 60) {
     return `${seconds.toFixed(1)} sec`;
@@ -1023,17 +1068,6 @@ function formatTrackedDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = Math.round(seconds % 60);
   return `${minutes} min ${remainingSeconds} sec`;
-}
-
-function formatFeet(value: number): string {
-  return `${value.toFixed(1)} ft`;
-}
-
-function getInsideCourtRatio(track: TrackSummary): number {
-  if (track.observation_count === 0) {
-    return 0;
-  }
-  return track.court_observation_count / track.observation_count;
 }
 
 function toPercent(value: number): number {

@@ -82,6 +82,36 @@ def test_metadata_extraction(
     assert result.report.codec is not None
 
 
+def test_vertical_video_gets_limited_suitability_guidance(
+    tmp_path: Path,
+    synthetic_video_factory: Callable[..., Path],
+) -> None:
+    video_path = synthetic_video_factory(
+        tmp_path / "vertical.avi",
+        width=360,
+        height=640,
+        frame_count=40,
+        fps=10,
+    )
+
+    result = inspect_video(
+        input_path=video_path,
+        output_dir=tmp_path / "output",
+        sample_interval_seconds=1,
+        supported_extensions=(".avi",),
+        max_file_size_bytes=5_000_000,
+        analysis_id="vertical-test",
+    )
+
+    assert result.report.rotation_degrees in {0, 90, 180, 270}
+    assert result.report.recording_suitability is not None
+    assert result.report.recording_suitability.status == "LIMITED"
+    assert "vertical_video_limitation" in result.report.recording_suitability.reasons
+    assert "Use landscape orientation when possible." in (
+        result.report.recording_suitability.guidance
+    )
+
+
 def test_frame_sampling(
     tmp_path: Path,
     synthetic_video_factory: Callable[..., Path],

@@ -144,19 +144,6 @@ export function ManualCalibrationWorkspace({ analysisId }: { analysisId: string 
       <div className="rounded-md border border-red-200 bg-red-50 p-6">
         <h1 className="text-xl font-semibold text-court-red">Calibration frames could not be loaded</h1>
         <p className="mt-2 text-sm text-court-red">{error.message}</p>
-        <details className="mt-4 text-sm text-court-red">
-          <summary className="cursor-pointer font-semibold">Technical details</summary>
-          <dl className="mt-2 grid gap-1">
-            <div>
-              <dt className="font-semibold">Code</dt>
-              <dd>{error.code}</dd>
-            </div>
-            <div>
-              <dt className="font-semibold">Message</dt>
-              <dd>{error.message}</dd>
-            </div>
-          </dl>
-        </details>
       </div>
     );
   }
@@ -299,14 +286,6 @@ export function ManualCalibrationWorkspace({ analysisId }: { analysisId: string 
             >
               {calibrationMutation.isPending ? "Saving calibration" : "Save Manual Calibration"}
             </Button>
-            <details className="mt-4 text-sm text-court-muted">
-              <summary className="cursor-pointer font-semibold text-court-ink">
-                Technical details
-              </summary>
-              <pre className="mt-3 max-h-56 overflow-auto rounded-md bg-court-panel p-3 text-xs">
-                {JSON.stringify({ imageSize, points }, null, 2)}
-              </pre>
-            </details>
           </section>
         </aside>
       </section>
@@ -415,19 +394,6 @@ function CalibrationError({ error }: { error: unknown }) {
     <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-4 text-sm text-court-red">
       <p className="font-semibold">Manual calibration could not be saved</p>
       <p className="mt-1">{normalized.message}</p>
-      <details className="mt-3">
-        <summary className="cursor-pointer font-semibold">Technical details</summary>
-        <dl className="mt-2 grid gap-1">
-          <div>
-            <dt className="font-semibold">Code</dt>
-            <dd>{normalized.code}</dd>
-          </div>
-          <div>
-            <dt className="font-semibold">Message</dt>
-            <dd>{normalized.message}</dd>
-          </div>
-        </dl>
-      </details>
     </div>
   );
 }

@@ -1,0 +1,802 @@
+{
+  "common_failure_reasons": {
+    "candidate_quality_usable": 1,
+    "tracked_duration_limited": 2,
+    "tracking_gaps_present": 1,
+    "upload_preflight_blocked": 1,
+    "upload_preflight_limited": 1
+  },
+  "dataset_balance": {
+    "categories": [
+      {
+        "category": "environment",
+        "counts": {
+          "INDOOR": 2,
+          "OUTDOOR": 0
+        },
+        "missing": [
+          "OUTDOOR"
+        ],
+        "represented": [
+          "INDOOR"
+        ],
+        "underrepresented": []
+      },
+      {
+        "category": "match_format",
+        "counts": {
+          "DOUBLES": 1,
+          "SINGLES": 0
+        },
+        "missing": [
+          "SINGLES"
+        ],
+        "represented": [
+          "DOUBLES"
+        ],
+        "underrepresented": [
+          "DOUBLES"
+        ]
+      },
+      {
+        "category": "recording_condition",
+        "counts": {
+          "IDEAL": 0,
+          "POOR": 2
+        },
+        "missing": [
+          "IDEAL"
+        ],
+        "represented": [
+          "POOR"
+        ],
+        "underrepresented": []
+      },
+      {
+        "category": "orientation",
+        "counts": {
+          "LANDSCAPE": 1,
+          "VERTICAL": 1
+        },
+        "missing": [],
+        "represented": [
+          "LANDSCAPE",
+          "VERTICAL"
+        ],
+        "underrepresented": [
+          "LANDSCAPE",
+          "VERTICAL"
+        ]
+      },
+      {
+        "category": "camera_position",
+        "counts": {
+          "BASELINE": 2,
+          "DIAGONAL": 0
+        },
+        "missing": [
+          "DIAGONAL"
+        ],
+        "represented": [
+          "BASELINE"
+        ],
+        "underrepresented": []
+      },
+      {
+        "category": "camera_distance",
+        "counts": {
+          "DISTANT": 0,
+          "NEAR": 0
+        },
+        "missing": [
+          "NEAR",
+          "DISTANT"
+        ],
+        "represented": [],
+        "underrepresented": []
+      },
+      {
+        "category": "resolution",
+        "counts": {
+          "1080P": 0,
+          "720P": 1
+        },
+        "missing": [
+          "1080P"
+        ],
+        "represented": [
+          "720P"
+        ],
+        "underrepresented": [
+          "720P"
+        ]
+      },
+      {
+        "category": "recording_stability",
+        "counts": {
+          "STABLE": 0,
+          "UNSTABLE": 0
+        },
+        "missing": [
+          "STABLE",
+          "UNSTABLE"
+        ],
+        "represented": [],
+        "underrepresented": []
+      },
+      {
+        "category": "obstruction",
+        "counts": {
+          "MINOR": 0,
+          "MODERATE": 1,
+          "NONE": 0,
+          "SEVERE": 0
+        },
+        "missing": [
+          "NONE",
+          "MINOR",
+          "SEVERE"
+        ],
+        "represented": [
+          "MODERATE"
+        ],
+        "underrepresented": [
+          "MODERATE"
+        ]
+      },
+      {
+        "category": "tracking",
+        "counts": {
+          "FRAGMENTED": 1,
+          "STRONG": 1
+        },
+        "missing": [],
+        "represented": [
+          "STRONG",
+          "FRAGMENTED"
+        ],
+        "underrepresented": [
+          "STRONG",
+          "FRAGMENTED"
+        ]
+      },
+      {
+        "category": "quality",
+        "counts": {
+          "EXCELLENT": 0,
+          "GOOD": 0,
+          "LIMITED": 1,
+          "UNSUITABLE": 1
+        },
+        "missing": [
+          "EXCELLENT",
+          "GOOD"
+        ],
+        "represented": [
+          "LIMITED",
+          "UNSUITABLE"
+        ],
+        "underrepresented": [
+          "LIMITED",
+          "UNSUITABLE"
+        ]
+      },
+      {
+        "category": "dataset_split",
+        "counts": {
+          "DEVELOPMENT": 1,
+          "HOLDOUT": 0,
+          "VALIDATION": 1
+        },
+        "missing": [
+          "HOLDOUT"
+        ],
+        "represented": [
+          "DEVELOPMENT",
+          "VALIDATION"
+        ],
+        "underrepresented": [
+          "DEVELOPMENT",
+          "VALIDATION"
+        ]
+      }
+    ],
+    "minimum_per_category": 2,
+    "provisional_warnings": [
+      "Dataset has 2 samples; recommended collection size is 20-30.",
+      "environment: missing OUTDOOR",
+      "match_format: missing SINGLES",
+      "match_format: underrepresented DOUBLES (<2 samples)",
+      "recording_condition: missing IDEAL",
+      "orientation: underrepresented LANDSCAPE, VERTICAL (<2 samples)",
+      "camera_position: missing DIAGONAL",
+      "camera_distance: missing NEAR, DISTANT",
+      "resolution: missing 1080P",
+      "resolution: underrepresented 720P (<2 samples)",
+      "recording_stability: missing STABLE, UNSTABLE",
+      "obstruction: missing NONE, MINOR, SEVERE",
+      "obstruction: underrepresented MODERATE (<2 samples)",
+      "tracking: underrepresented STRONG, FRAGMENTED (<2 samples)",
+      "quality: missing EXCELLENT, GOOD",
+      "quality: underrepresented LIMITED, UNSUITABLE (<2 samples)",
+      "dataset_split: missing HOLDOUT",
+      "dataset_split: underrepresented DEVELOPMENT, VALIDATION (<2 samples)",
+      "No holdout samples are present; final generalization is unmeasured."
+    ],
+    "recommended_maximum_samples": 30,
+    "recommended_minimum_samples": 20,
+    "sample_count": 2
+  },
+  "dataset_id": "court4-real-video-expansion",
+  "dataset_limitations": [
+    "The dataset contains 2 samples; balance and review coverage must be assessed before interpreting aggregate metrics.",
+    "Sample count is below the manifest minimum of 5.",
+    "Unreviewed and unknown labels are excluded; incomplete coverage remains provisional.",
+    "This report is a deterministic framework evaluation, not scientific validation.",
+    "Some reusable artifacts are legacy-compatible rather than current.",
+    "At least one sample has a partial artifact chain.",
+    "No holdout sample exists; generalization remains unmeasured.",
+    "No interval-level tracking ground truth is currently reviewed."
+  ],
+  "dataset_version": "2.0.0",
+  "disagreements": [
+    {
+      "affected_threshold_or_rule": null,
+      "artifact_evidence": [
+        "inspection_metadata:READY",
+        "analysis_job:READY",
+        "tracking:READY",
+        "player_candidates:LEGACY_COMPATIBLE",
+        "analytics:READY",
+        "timeline:READY",
+        "match_iq:LEGACY_COMPATIBLE",
+        "court_calibration:READY"
+      ],
+      "category": "INCOMPLETE_ANNOTATION",
+      "court4_output": "PARTIAL",
+      "human_expectation": "Complete independent review",
+      "reason": "Unreviewed fields: review_status, camera_distance, lighting_condition, recording_stability, human_review.player_candidates.stable_real_players, human_review.player_candidates.candidate_mappings, human_review.player_candidates.selected_player_identity_correct, human_review.tracking.intervals, human_review.insight.generated_insights",
+      "sample_id": "landscape-indoor-doubles-01"
+    },
+    {
+      "affected_threshold_or_rule": null,
+      "artifact_evidence": [
+        "inspection_metadata:READY",
+        "analysis_job:READY",
+        "tracking:READY",
+        "player_candidates:LEGACY_COMPATIBLE",
+        "analytics:MISSING",
+        "timeline:MISSING",
+        "match_iq:MISSING",
+        "court_calibration:READY"
+      ],
+      "category": "INCOMPLETE_ANNOTATION",
+      "court4_output": "PARTIAL",
+      "human_expectation": "Complete independent review",
+      "reason": "Unreviewed fields: review_status, match_format, camera_distance, lighting_condition, recording_stability, human_review.player_candidates.stable_real_players, human_review.player_candidates.candidate_mappings, human_review.player_candidates.selected_player_identity_correct, human_review.tracking.intervals, human_review.insight.generated_insights",
+      "sample_id": "vertical-indoor-drill-01"
+    }
+  ],
+  "expensive_inference_runs": 0,
+  "expensive_recomputation_enabled": false,
+  "generated_at": "2026-07-25T00:00:00Z",
+  "manifest_sha256": "a10bc6660136365b660a9bffd96d8fa7bc37377dceb3e14d871a02d9fe9f2f2c",
+  "metrics": {
+    "candidate_reliability": {
+      "candidate_precision": {
+        "denominator": 0,
+        "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+        "numerator": 0,
+        "percentage": null,
+        "provisional": true
+      },
+      "candidate_to_player_mapping_accuracy": {
+        "denominator": 0,
+        "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+        "numerator": 0,
+        "percentage": null,
+        "provisional": true
+      },
+      "duplicate_candidate_count": null,
+      "duplicate_candidates_per_sample": {
+        "denominator": 0,
+        "note": "Raw total across 0 labeled samples; a percentage is not meaningful. Coverage is provisional below 5 reviewed samples.",
+        "numerator": 0,
+        "percentage": null,
+        "provisional": true
+      },
+      "expected_player_recall": {
+        "denominator": 6,
+        "note": "Provisional: reviewed sample count 2 is below the recommended minimum of 5.",
+        "numerator": 6,
+        "percentage": 100.0,
+        "provisional": true
+      },
+      "labeled_sample_counts": {
+        "candidate_mapping_accuracy": 0,
+        "candidate_precision": 0,
+        "duplicate_candidates": 0,
+        "missed_players": 2,
+        "player_recall": 2,
+        "selected_identity": 0,
+        "spectator_promotions": 0
+      },
+      "missed_player_count": 0,
+      "missed_players_per_sample": {
+        "denominator": 2,
+        "note": "Raw total across 2 labeled samples; a percentage is not meaningful. Coverage is provisional below 5 reviewed samples.",
+        "numerator": 0,
+        "percentage": null,
+        "provisional": true
+      },
+      "selected_player_identity_accuracy": {
+        "denominator": 0,
+        "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+        "numerator": 0,
+        "percentage": null,
+        "provisional": true
+      },
+      "spectator_promotion_count": null
+    },
+    "evidence_gates": {
+      "unsuitable_insights_correctly_suppressed": {
+        "denominator": 1,
+        "note": "Provisional: reviewed sample count 1 is below the recommended minimum of 5.",
+        "numerator": 1,
+        "percentage": 100.0,
+        "provisional": true
+      },
+      "unsuitable_insights_incorrectly_allowed": 0,
+      "valid_insights_correctly_allowed": {
+        "denominator": 0,
+        "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+        "numerator": 0,
+        "percentage": null,
+        "provisional": true
+      },
+      "valid_insights_incorrectly_suppressed": 0,
+      "weak_insights_correctly_measurement_only": {
+        "denominator": 1,
+        "note": "Provisional: reviewed sample count 1 is below the recommended minimum of 5.",
+        "numerator": 1,
+        "percentage": 100.0,
+        "provisional": true
+      },
+      "weak_insights_incorrectly_allowed": 0
+    },
+    "insight_integrity": {
+      "fields": {
+        "action_appropriately_conservative": {
+          "denominator": 2,
+          "note": "Provisional: reviewed sample count 2 is below the recommended minimum of 5.",
+          "numerator": 2,
+          "percentage": 100.0,
+          "provisional": true
+        },
+        "confidence_levels_justified": {
+          "denominator": 1,
+          "note": "Provisional: reviewed sample count 1 is below the recommended minimum of 5.",
+          "numerator": 1,
+          "percentage": 100.0,
+          "provisional": true
+        },
+        "generated_confidence_appropriateness": {
+          "denominator": 0,
+          "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+          "numerator": 0,
+          "percentage": null,
+          "provisional": true
+        },
+        "generated_conservative_action_agreement": {
+          "denominator": 0,
+          "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+          "numerator": 0,
+          "percentage": null,
+          "provisional": true
+        },
+        "generated_interpretation_justification": {
+          "denominator": 0,
+          "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+          "numerator": 0,
+          "percentage": null,
+          "provisional": true
+        },
+        "generated_limitation_accuracy": {
+          "denominator": 0,
+          "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+          "numerator": 0,
+          "percentage": null,
+          "provisional": true
+        },
+        "generated_measurement_correctness": {
+          "denominator": 0,
+          "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+          "numerator": 0,
+          "percentage": null,
+          "provisional": true
+        },
+        "generated_wording_understandability": {
+          "denominator": 0,
+          "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+          "numerator": 0,
+          "percentage": null,
+          "provisional": true
+        },
+        "interpretation_justified": {
+          "denominator": 0,
+          "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+          "numerator": 0,
+          "percentage": null,
+          "provisional": true
+        },
+        "limitations_accurate": {
+          "denominator": 2,
+          "note": "Provisional: reviewed sample count 2 is below the recommended minimum of 5.",
+          "numerator": 2,
+          "percentage": 100.0,
+          "provisional": true
+        },
+        "measurement_only_decision_correct": {
+          "denominator": 1,
+          "note": "Provisional: reviewed sample count 1 is below the recommended minimum of 5.",
+          "numerator": 1,
+          "percentage": 100.0,
+          "provisional": true
+        },
+        "recording_guidance_accurate": {
+          "denominator": 1,
+          "note": "Provisional: reviewed sample count 1 is below the recommended minimum of 5.",
+          "numerator": 1,
+          "percentage": 100.0,
+          "provisional": true
+        },
+        "recording_quality_verdict_correct": {
+          "denominator": 2,
+          "note": "Provisional: reviewed sample count 2 is below the recommended minimum of 5.",
+          "numerator": 2,
+          "percentage": 100.0,
+          "provisional": true
+        },
+        "suppression_decision_correct": {
+          "denominator": 2,
+          "note": "Provisional: reviewed sample count 2 is below the recommended minimum of 5.",
+          "numerator": 2,
+          "percentage": 100.0,
+          "provisional": true
+        },
+        "wording_understandable": {
+          "denominator": 0,
+          "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+          "numerator": 0,
+          "percentage": null,
+          "provisional": true
+        }
+      }
+    },
+    "recording_quality": {
+      "acceptable_agreement": {
+        "denominator": 2,
+        "note": "Provisional: reviewed sample count 2 is below the recommended minimum of 5.",
+        "numerator": 2,
+        "percentage": 100.0,
+        "provisional": true
+      },
+      "confusion_matrix": {
+        "EXCELLENT": {
+          "EXCELLENT": 0,
+          "GOOD": 0,
+          "LIMITED": 0,
+          "UNSUITABLE": 0
+        },
+        "GOOD": {
+          "EXCELLENT": 0,
+          "GOOD": 0,
+          "LIMITED": 0,
+          "UNSUITABLE": 0
+        },
+        "LIMITED": {
+          "EXCELLENT": 0,
+          "GOOD": 0,
+          "LIMITED": 1,
+          "UNSUITABLE": 0
+        },
+        "UNSUITABLE": {
+          "EXCELLENT": 0,
+          "GOOD": 0,
+          "LIMITED": 0,
+          "UNSUITABLE": 1
+        }
+      },
+      "exact_agreement": {
+        "denominator": 2,
+        "note": "Provisional: reviewed sample count 2 is below the recommended minimum of 5.",
+        "numerator": 2,
+        "percentage": 100.0,
+        "provisional": true
+      },
+      "overestimation_count": 0,
+      "per_expected_status_count": {
+        "EXCELLENT": 0,
+        "GOOD": 0,
+        "LIMITED": 1,
+        "UNSUITABLE": 1
+      },
+      "underestimation_count": 0
+    },
+    "tracking_continuity": {
+      "correctly_maintained_identity_intervals": {
+        "denominator": 0,
+        "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+        "numerator": 0,
+        "percentage": null,
+        "provisional": true
+      },
+      "fragmented_intervals": 0,
+      "gap_label_agreement": {
+        "denominator": 0,
+        "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+        "numerator": 0,
+        "percentage": null,
+        "provisional": true
+      },
+      "identity_switch_intervals": 0,
+      "reviewed_interval_count": 0,
+      "valid_observed_time_agreement": {
+        "denominator": 0,
+        "note": "Provisional: reviewed sample count 0 is below the recommended minimum of 5.",
+        "numerator": 0,
+        "percentage": null,
+        "provisional": true
+      }
+    }
+  },
+  "policy_error_reasons": {
+    "false_acceptance": {},
+    "false_suppression": {},
+    "quality_overestimation": {},
+    "quality_underestimation": {}
+  },
+  "reviewed_sample_count": 2,
+  "sample_count": 2,
+  "samples": [
+    {
+      "acceptable_quality_agreement": true,
+      "artifact_readiness": "LEGACY_COMPATIBLE",
+      "artifacts": [
+        {
+          "artifact": "inspection_metadata",
+          "compatibility": "READY",
+          "expected_version": "UNVERSIONED",
+          "message": "The persisted artifact was reused.",
+          "reference": "data/output/dc4b4effac81444da71bd848a51ed590/metadata.json",
+          "schema_or_engine_version": "UNVERSIONED",
+          "status": "AVAILABLE"
+        },
+        {
+          "artifact": "analysis_job",
+          "compatibility": "READY",
+          "expected_version": "UNVERSIONED",
+          "message": "The persisted artifact was reused.",
+          "reference": "data/output/dc4b4effac81444da71bd848a51ed590/job.json",
+          "schema_or_engine_version": "UNVERSIONED",
+          "status": "AVAILABLE"
+        },
+        {
+          "artifact": "tracking",
+          "compatibility": "READY",
+          "expected_version": "UNVERSIONED",
+          "message": "The persisted artifact was reused.",
+          "reference": "data/output/phase13a-landscape-yolo-repro-20260722/tracking/tracking.json",
+          "schema_or_engine_version": "UNVERSIONED",
+          "status": "AVAILABLE"
+        },
+        {
+          "artifact": "player_candidates",
+          "compatibility": "LEGACY_COMPATIBLE",
+          "expected_version": "3",
+          "message": "The artifact is readable but uses a stale schema or engine version.",
+          "reference": "data/output/phase13a-landscape-yolo-repro-20260722/tracking/player_candidates.json",
+          "schema_or_engine_version": "1",
+          "status": "STALE"
+        },
+        {
+          "artifact": "analytics",
+          "compatibility": "READY",
+          "expected_version": "UNVERSIONED",
+          "message": "The persisted artifact was reused.",
+          "reference": "data/output/dc4b4effac81444da71bd848a51ed590/analytics/analytics.json",
+          "schema_or_engine_version": "UNVERSIONED",
+          "status": "AVAILABLE"
+        },
+        {
+          "artifact": "timeline",
+          "compatibility": "READY",
+          "expected_version": "UNVERSIONED",
+          "message": "The persisted artifact was reused.",
+          "reference": "data/output/dc4b4effac81444da71bd848a51ed590/analytics/timeline.json",
+          "schema_or_engine_version": "UNVERSIONED",
+          "status": "AVAILABLE"
+        },
+        {
+          "artifact": "match_iq",
+          "compatibility": "LEGACY_COMPATIBLE",
+          "expected_version": "match-iq-rules-v2",
+          "message": "The artifact is readable but uses a stale schema or engine version.",
+          "reference": "data/output/dc4b4effac81444da71bd848a51ed590/analytics/match_iq.json",
+          "schema_or_engine_version": "match-iq-rules-v1",
+          "status": "STALE"
+        },
+        {
+          "artifact": "court_calibration",
+          "compatibility": "READY",
+          "expected_version": "UNVERSIONED",
+          "message": "A persisted court calibration is available.",
+          "reference": "data/output/dc4b4effac81444da71bd848a51ed590/calibrations/auto-court-detection/calibration.json",
+          "schema_or_engine_version": "UNVERSIONED",
+          "status": "AVAILABLE"
+        }
+      ],
+      "candidate_count": 80,
+      "errors": [],
+      "exact_quality_agreement": true,
+      "expected_insight_eligibility": "INSUFFICIENT_EVIDENCE",
+      "expected_recording_quality": "UNSUITABLE",
+      "inference_recomputed": false,
+      "insight_eligibility_agreement": true,
+      "recording_quality_delta": 0,
+      "review_status": "PARTIALLY_REVIEWED",
+      "sample_id": "landscape-indoor-doubles-01",
+      "selectable_candidate_count": 4,
+      "selected_candidate_id": null,
+      "status": "PARTIAL",
+      "system_insight_eligibility": "INSUFFICIENT_EVIDENCE",
+      "system_recording_quality": "UNSUITABLE",
+      "warnings": [
+        "stale_artifact:player_candidates",
+        "stale_artifact:match_iq",
+        "quality_policy:upload_preflight_blocked",
+        "quality_policy:tracked_duration_limited",
+        "quality_policy:tracking_gaps_present"
+      ]
+    },
+    {
+      "acceptable_quality_agreement": true,
+      "artifact_readiness": "PARTIAL",
+      "artifacts": [
+        {
+          "artifact": "inspection_metadata",
+          "compatibility": "READY",
+          "expected_version": "UNVERSIONED",
+          "message": "The persisted artifact was reused.",
+          "reference": "data/output/f54693f1003849fdb456247322925258/metadata.json",
+          "schema_or_engine_version": "UNVERSIONED",
+          "status": "AVAILABLE"
+        },
+        {
+          "artifact": "analysis_job",
+          "compatibility": "READY",
+          "expected_version": "UNVERSIONED",
+          "message": "The persisted artifact was reused.",
+          "reference": "data/output/f54693f1003849fdb456247322925258/job.json",
+          "schema_or_engine_version": "UNVERSIONED",
+          "status": "AVAILABLE"
+        },
+        {
+          "artifact": "tracking",
+          "compatibility": "READY",
+          "expected_version": "UNVERSIONED",
+          "message": "The persisted artifact was reused.",
+          "reference": "data/output/phase13a-vertical-yolo-repro-20260722/tracking/tracking.json",
+          "schema_or_engine_version": "UNVERSIONED",
+          "status": "AVAILABLE"
+        },
+        {
+          "artifact": "player_candidates",
+          "compatibility": "LEGACY_COMPATIBLE",
+          "expected_version": "3",
+          "message": "The artifact is readable but uses a stale schema or engine version.",
+          "reference": "data/output/phase13a-vertical-yolo-repro-20260722/tracking/player_candidates.json",
+          "schema_or_engine_version": "1",
+          "status": "STALE"
+        },
+        {
+          "artifact": "analytics",
+          "compatibility": "MISSING",
+          "expected_version": null,
+          "message": "No artifact reference was supplied for this stage.",
+          "reference": null,
+          "schema_or_engine_version": null,
+          "status": "NOT_REFERENCED"
+        },
+        {
+          "artifact": "timeline",
+          "compatibility": "MISSING",
+          "expected_version": null,
+          "message": "No artifact reference was supplied for this stage.",
+          "reference": null,
+          "schema_or_engine_version": null,
+          "status": "NOT_REFERENCED"
+        },
+        {
+          "artifact": "match_iq",
+          "compatibility": "MISSING",
+          "expected_version": null,
+          "message": "No artifact reference was supplied for this stage.",
+          "reference": null,
+          "schema_or_engine_version": null,
+          "status": "NOT_REFERENCED"
+        },
+        {
+          "artifact": "court_calibration",
+          "compatibility": "READY",
+          "expected_version": "UNVERSIONED",
+          "message": "A persisted court calibration is available.",
+          "reference": "data/output/f54693f1003849fdb456247322925258/calibrations/auto-court-detection/calibration.json",
+          "schema_or_engine_version": "UNVERSIONED",
+          "status": "AVAILABLE"
+        }
+      ],
+      "candidate_count": 2,
+      "errors": [],
+      "exact_quality_agreement": true,
+      "expected_insight_eligibility": "MEASUREMENT_ONLY",
+      "expected_recording_quality": "LIMITED",
+      "inference_recomputed": false,
+      "insight_eligibility_agreement": true,
+      "recording_quality_delta": 0,
+      "review_status": "PARTIALLY_REVIEWED",
+      "sample_id": "vertical-indoor-drill-01",
+      "selectable_candidate_count": 1,
+      "selected_candidate_id": null,
+      "status": "PARTIAL",
+      "system_insight_eligibility": "MEASUREMENT_ONLY",
+      "system_recording_quality": "LIMITED",
+      "warnings": [
+        "stale_artifact:player_candidates",
+        "quality_policy:upload_preflight_limited",
+        "quality_policy:candidate_quality_usable",
+        "quality_policy:tracked_duration_limited"
+      ]
+    }
+  ],
+  "samples_requiring_manual_review": [
+    "landscape-indoor-doubles-01",
+    "vertical-indoor-drill-01"
+  ],
+  "schema_version": 2,
+  "threshold_analysis": [
+    {
+      "affected_samples": [
+        "landscape-indoor-doubles-01"
+      ],
+      "current_value": 480.0,
+      "excluded_samples": [
+        "vertical-indoor-drill-01"
+      ],
+      "exploratory": true,
+      "improvements": [],
+      "proposed_value": 360.0,
+      "regressions": [
+        "landscape-indoor-doubles-01"
+      ],
+      "remaining_uncertainty": "Exploratory development-split simulation only. Validation and holdout samples are excluded. The dataset is too small for a production recommendation, and production policy is not mutated.",
+      "threshold": "blocking_short_edge_pixels",
+      "unchanged_samples": 0
+    },
+    {
+      "affected_samples": [],
+      "current_value": 5.0,
+      "excluded_samples": [
+        "vertical-indoor-drill-01"
+      ],
+      "exploratory": true,
+      "improvements": [],
+      "proposed_value": 15.0,
+      "regressions": [],
+      "remaining_uncertainty": "Exploratory development-split simulation only. Validation and holdout samples are excluded. The dataset is too small for a production recommendation, and production policy is not mutated.",
+      "threshold": "minimum_tracked_seconds",
+      "unchanged_samples": 1
+    }
+  ],
+  "unreviewed_sample_count": 0
+}

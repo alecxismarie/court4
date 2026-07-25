@@ -1,0 +1,205 @@
+{
+  "schema_version": 2,
+  "dataset_id": "court4-real-video-expansion",
+  "dataset_version": "2.0.0",
+  "description": "Phase 1.5A expansion manifest. The two legacy samples are preserved with additive metadata and deliberately incomplete detailed annotations.",
+  "reference_time": "2026-07-25T00:00:00Z",
+  "minimum_recommended_sample_size": 5,
+  "threshold_simulations": [
+    {
+      "threshold": "blocking_short_edge_pixels",
+      "proposed_value": 360,
+      "rationale": "Exploratory development-split sensitivity check only.",
+      "exploratory": true
+    },
+    {
+      "threshold": "minimum_tracked_seconds",
+      "proposed_value": 15,
+      "rationale": "Exploratory development-split sensitivity check; validation and holdout samples are excluded.",
+      "exploratory": true
+    }
+  ],
+  "samples": [
+    {
+      "sample_id": "landscape-indoor-doubles-01",
+      "dataset_split": "DEVELOPMENT",
+      "video_reference": "data/output/dc4b4effac81444da71bd848a51ed590/uploads/source.mp4",
+      "external_video_reference": null,
+      "local_video_reference": "data/output/dc4b4effac81444da71bd848a51ed590/uploads/source.mp4",
+      "recording_environment": "Indoor doubles match",
+      "environment_type": "INDOOR",
+      "match_format": "DOUBLES",
+      "orientation": "LANDSCAPE",
+      "resolution": {
+        "width": 640,
+        "height": 368
+      },
+      "fps": 30,
+      "camera_position": "Behind the near baseline",
+      "camera_position_label": "BASELINE",
+      "camera_distance": "NOT_REVIEWED",
+      "lighting_condition": "NOT_REVIEWED",
+      "recording_stability": "NOT_REVIEWED",
+      "court_visibility": "FULL",
+      "expected_players_on_court": 4,
+      "known_spectators_or_irrelevant_detections": [
+        "Spectators are visible along both sidelines.",
+        "Raw person tracking includes background people."
+      ],
+      "expected_recording_quality": "UNSUITABLE",
+      "expected_insight_eligibility": "INSUFFICIENT_EVIDENCE",
+      "reviewer_notes": "The Phase 1.5 label is preserved. New identity and interval fields remain unreviewed rather than inferred.",
+      "review_status": "PARTIALLY_REVIEWED",
+      "reviewer_confidence": "LOW",
+      "artifacts": {
+        "artifact_root": "data/output",
+        "inspection_analysis_id": "dc4b4effac81444da71bd848a51ed590",
+        "court_analysis_id": "dc4b4effac81444da71bd848a51ed590",
+        "tracking_analysis_id": "phase13a-landscape-yolo-repro-20260722",
+        "candidates_analysis_id": "phase13a-landscape-yolo-repro-20260722",
+        "analytics_analysis_id": "dc4b4effac81444da71bd848a51ed590",
+        "match_iq_analysis_id": "dc4b4effac81444da71bd848a51ed590",
+        "inference_run_id": "phase13a-landscape-yolo-repro-20260722",
+        "reuse_notes": "Reuse existing local uncommitted video and preserved artifacts. Do not copy the video or rerun inference."
+      },
+      "human_review": {
+        "recording": {
+          "full_court_visible": true,
+          "camera_stable": null,
+          "players_large_enough": null,
+          "obstruction_severity": "UNKNOWN",
+          "recording_quality_verdict": "UNSUITABLE",
+          "notes": "Low resolution is a current blocking condition. Stability, obstruction, and player image size need independent review.",
+          "reviewer_confidence": "LOW"
+        },
+        "player_candidates": {
+          "expected_court_player_count": 4,
+          "expected_players_represented": 4,
+          "duplicate_candidates": null,
+          "missed_players": 0,
+          "spectators_incorrectly_promoted": null,
+          "selected_player_identity_correct": null,
+          "stable_real_players": [],
+          "candidate_mappings": [],
+          "selected_player_id": null,
+          "selected_candidate_id": null,
+          "notes": "The four represented appearances are preserved. Stable identities, fragments, duplicates, spectators, and selection identity are not independently labeled.",
+          "reviewer_confidence": "LOW"
+        },
+        "tracking": {
+          "continuity_acceptable": false,
+          "fragmentation_severity": "SEVERE",
+          "excessive_gaps": true,
+          "observed_gameplay_coverage_acceptable": false,
+          "intervals": [],
+          "notes": "Aggregate Phase 1.5 labels are preserved; no interval-level ground truth exists.",
+          "reviewer_confidence": "LOW"
+        },
+        "insight": {
+          "recording_quality_verdict_correct": true,
+          "confidence_levels_justified": true,
+          "measurement_only_decision_correct": null,
+          "suppression_decision_correct": true,
+          "interpretation_justified": null,
+          "limitations_accurate": true,
+          "wording_understandable": null,
+          "action_appropriately_conservative": true,
+          "recording_guidance_accurate": null,
+          "generated_insights": [],
+          "notes": "Aggregate Phase 1.5 review is preserved. Individual insight wording and measurements are not reviewed.",
+          "reviewer_confidence": "LOW"
+        }
+      }
+    },
+    {
+      "sample_id": "vertical-indoor-drill-01",
+      "dataset_split": "VALIDATION",
+      "video_reference": "data/output/f54693f1003849fdb456247322925258/uploads/source.mp4",
+      "external_video_reference": null,
+      "local_video_reference": "data/output/f54693f1003849fdb456247322925258/uploads/source.mp4",
+      "recording_environment": "Indoor drill or singles-like point with social-video text overlay",
+      "environment_type": "INDOOR",
+      "match_format": "UNKNOWN",
+      "orientation": "VERTICAL",
+      "resolution": {
+        "width": 720,
+        "height": 1280
+      },
+      "fps": 30,
+      "camera_position": "Behind the near baseline in vertical orientation",
+      "camera_position_label": "BASELINE",
+      "camera_distance": "NOT_REVIEWED",
+      "lighting_condition": "NOT_REVIEWED",
+      "recording_stability": "NOT_REVIEWED",
+      "court_visibility": "PARTIAL",
+      "expected_players_on_court": 2,
+      "known_spectators_or_irrelevant_detections": [
+        "Text overlay obstructs part of the vertical frame."
+      ],
+      "expected_recording_quality": "LIMITED",
+      "expected_insight_eligibility": "MEASUREMENT_ONLY",
+      "reviewer_notes": "The Phase 1.5 label is preserved. The clip is assigned to validation so it cannot influence threshold simulations.",
+      "review_status": "PARTIALLY_REVIEWED",
+      "reviewer_confidence": "MODERATE",
+      "artifacts": {
+        "artifact_root": "data/output",
+        "inspection_analysis_id": "f54693f1003849fdb456247322925258",
+        "court_analysis_id": "f54693f1003849fdb456247322925258",
+        "tracking_analysis_id": "phase13a-vertical-yolo-repro-20260722",
+        "candidates_analysis_id": "phase13a-vertical-yolo-repro-20260722",
+        "analytics_analysis_id": null,
+        "match_iq_analysis_id": null,
+        "inference_run_id": "phase13a-vertical-yolo-repro-20260722",
+        "reuse_notes": "Reuse existing local uncommitted video and preserved artifacts. Analytics and Match IQ are intentionally absent."
+      },
+      "human_review": {
+        "recording": {
+          "full_court_visible": false,
+          "camera_stable": null,
+          "players_large_enough": null,
+          "obstruction_severity": "MODERATE",
+          "recording_quality_verdict": "LIMITED",
+          "notes": "Vertical framing and overlay text limit coverage. Stability and player image size need independent review.",
+          "reviewer_confidence": "MODERATE"
+        },
+        "player_candidates": {
+          "expected_court_player_count": 2,
+          "expected_players_represented": 2,
+          "duplicate_candidates": null,
+          "missed_players": 0,
+          "spectators_incorrectly_promoted": null,
+          "selected_player_identity_correct": null,
+          "stable_real_players": [],
+          "candidate_mappings": [],
+          "selected_player_id": null,
+          "selected_candidate_id": null,
+          "notes": "Represented-player count is preserved. Identity and mapping fields remain unreviewed.",
+          "reviewer_confidence": "LOW"
+        },
+        "tracking": {
+          "continuity_acceptable": true,
+          "fragmentation_severity": "NONE",
+          "excessive_gaps": false,
+          "observed_gameplay_coverage_acceptable": false,
+          "intervals": [],
+          "notes": "Aggregate continuity review is preserved; no interval-level annotation exists.",
+          "reviewer_confidence": "MODERATE"
+        },
+        "insight": {
+          "recording_quality_verdict_correct": true,
+          "confidence_levels_justified": null,
+          "measurement_only_decision_correct": true,
+          "suppression_decision_correct": true,
+          "interpretation_justified": null,
+          "limitations_accurate": true,
+          "wording_understandable": null,
+          "action_appropriately_conservative": true,
+          "recording_guidance_accurate": true,
+          "generated_insights": [],
+          "notes": "Aggregate Phase 1.5 review is preserved. No generated selected-player insight exists for per-insight review.",
+          "reviewer_confidence": "MODERATE"
+        }
+      }
+    }
+  ]
+}

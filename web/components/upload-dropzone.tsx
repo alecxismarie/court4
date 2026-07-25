@@ -99,6 +99,19 @@ export function UploadDropzone({
 
   return (
     <form onSubmit={submit} className="space-y-5" aria-label="Upload match video">
+      <section className="rounded-md border border-court-line bg-court-panel p-5">
+        <h2 className="text-lg font-semibold text-court-ink">How to record for Court4</h2>
+        <ul className="mt-3 grid list-disc gap-2 pl-5 text-sm text-court-muted md:grid-cols-2">
+          <li>Place the camera behind or diagonally behind the baseline.</li>
+          <li>Keep the full court visible.</li>
+          <li>Use landscape orientation when possible.</li>
+          <li>Keep the camera stable.</li>
+          <li>Record at 720p minimum; 1080p is recommended.</li>
+          <li>Capture enough continuous gameplay.</li>
+          <li>Usable tracked time matters more than total duration.</li>
+        </ul>
+      </section>
+
       <div
         role="button"
         tabIndex={0}

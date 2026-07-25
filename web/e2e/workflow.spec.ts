@@ -1,6 +1,13 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
-type Scenario = "happy" | "manual" | "model-missing";
+type Scenario =
+  | "happy"
+  | "limited"
+  | "unsuitable"
+  | "manual"
+  | "model-missing"
+  | "fragmented"
+  | "review";
 type WorkflowStage =
   | "inspected"
   | "manual_required"
@@ -13,6 +20,8 @@ type MockState = {
   analysisId: string;
   scenario: Scenario;
   stage: WorkflowStage;
+  rejectedCandidateIds?: string[];
+  merged?: boolean;
 };
 
 test("controlled happy path persists Match IQ and renders share preview", async ({ page }) => {
@@ -33,8 +42,6 @@ test("controlled happy path persists Match IQ and renders share preview", async 
   await page.getByRole("button", { name: /recognize court/i }).click();
   await expect(page.getByText("Court recognized with 91% confidence.")).toBeVisible();
 
-  await page.getByText("Advanced settings").click();
-  await page.getByLabel("Detector backend").selectOption("controlled-json");
   await page.getByRole("button", { name: /find players/i }).click();
   await expect(page.getByText("Player 1")).toBeVisible();
 
@@ -42,16 +49,49 @@ test("controlled happy path persists Match IQ and renders share preview", async 
   await expect(page.getByText("You selected Player 1")).toBeVisible();
   await page.getByRole("button", { name: /generate my match iq/i }).click();
 
-  await expect(page.getByRole("heading", { name: "Match IQ Summary" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Movement insight" })).toBeVisible();
   await expect(
     page.getByText("Court4 measured 60.0% of tracked time in the transition zone.", {
       exact: true,
     }),
   ).toBeVisible();
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Match IQ Summary" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Movement insight" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Share Performance Card" })).toBeVisible();
   await expect(page.locator("canvas[aria-label^='Court4 share card preview']")).toBeVisible();
+});
+
+test("limited recording persists measurement-only output after refresh", async ({ page }) => {
+  const state: MockState = {
+    analysisId: "e2e-limited",
+    scenario: "limited",
+    stage: "completed",
+  };
+  await installApiMocks(page, state);
+
+  await page.goto("/matches/e2e-limited/analytics");
+  await expect(page.getByText("Limited", { exact: true })).toBeVisible();
+  await expect(page.getByText("Limited by recording quality")).toBeVisible();
+  await expect(
+    page.getByText("Interpretation is suppressed because the evidence is limited."),
+  ).toBeVisible();
+  await page.reload();
+  await expect(page.getByText("Limited by recording quality")).toBeVisible();
+});
+
+test("unsuitable recording suppresses normal Match IQ and offers retry", async ({ page }) => {
+  const state: MockState = {
+    analysisId: "e2e-unsuitable",
+    scenario: "unsuitable",
+    stage: "completed",
+  };
+  await installApiMocks(page, state);
+
+  await page.goto("/matches/e2e-unsuitable/analytics");
+  await expect(page.getByText("Unsuitable")).toBeVisible();
+  await expect(page.getByText("Normal Match IQ is suppressed")).toBeVisible();
+  await expect(page.getByRole("link", { name: /try another recording/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Share Performance Card" })).toHaveCount(0);
 });
 
 test("manual calibration fallback saves four ordered points", async ({ page }) => {
@@ -94,6 +134,52 @@ test("detector model missing is recoverable", async ({ page }) => {
     }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: /find players/i })).toBeEnabled();
+});
+
+test("fragmented player is reviewed as one stable candidate", async ({ page }) => {
+  const state: MockState = {
+    analysisId: "e2e-fragmented",
+    scenario: "fragmented",
+    stage: "tracked",
+  };
+  await installApiMocks(page, state);
+
+  await page.goto("/matches/e2e-fragmented");
+  await expect(page.getByText("Player 1")).toBeVisible();
+  await expect(page.getByText("This candidate combines several tracked sections.")).toBeVisible();
+  await expect(page.getByText("Technical details")).toHaveCount(0);
+  await expect(page.getByText("Source fragment count")).toHaveCount(0);
+  await page.getByRole("button", { name: /this is me/i }).click();
+  await expect(page.getByText("You selected Player 1")).toBeVisible();
+});
+
+test("manual review rejects a spectator, merges fragments, and preserves review on refresh", async ({
+  page,
+}) => {
+  const state: MockState = {
+    analysisId: "e2e-review",
+    scenario: "review",
+    stage: "tracked",
+    rejectedCandidateIds: [],
+    merged: false,
+  };
+  await installApiMocks(page, state);
+
+  await page.goto("/matches/e2e-review");
+  const playerThree = page.locator("article").filter({ hasText: "Player 3" });
+  await playerThree.getByRole("button", { name: /not a player/i }).click();
+  await expect(page.getByText("Excluded candidates (1)")).toBeVisible();
+
+  const playerOne = page.locator("article").filter({ hasText: "Player 1" });
+  await playerOne.getByRole("button", { name: /same player/i }).click();
+  const playerTwo = page.locator("article").filter({ hasText: "Player 2" });
+  await playerTwo.getByRole("button", { name: /merge with this/i }).click();
+  await page.getByRole("button", { name: /confirm merge/i }).click();
+  await expect(page.getByRole("button", { name: /undo merge/i })).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByText("Excluded candidates (1)")).toBeVisible();
+  await expect(page.getByRole("button", { name: /undo merge/i })).toBeVisible();
 });
 
 async function clickImagePoint(
@@ -173,6 +259,35 @@ async function installApiMocks(page: Page, state: MockState) {
   await page.route("**/api/v1/analyses/*/players", async (route) => {
     await route.fulfill({ status: 200, json: playersResponse(state) });
   });
+  await page.route("**/api/v1/analyses/*/player-candidates/*/select", async (route) => {
+    state.stage = "selected";
+    await route.fulfill({ status: 200, json: candidateCollection(state) });
+  });
+  await page.route("**/api/v1/analyses/*/player-candidates/*/reject", async (route) => {
+    const parts = new URL(route.request().url()).pathname.split("/");
+    const candidateId = parts.at(-2) ?? "";
+    state.rejectedCandidateIds = [...(state.rejectedCandidateIds ?? []), candidateId];
+    await route.fulfill({ status: 200, json: candidateCollection(state) });
+  });
+  await page.route("**/api/v1/analyses/*/player-candidates/*/restore", async (route) => {
+    const parts = new URL(route.request().url()).pathname.split("/");
+    const candidateId = parts.at(-2) ?? "";
+    state.rejectedCandidateIds = (state.rejectedCandidateIds ?? []).filter(
+      (item) => item !== candidateId,
+    );
+    await route.fulfill({ status: 200, json: candidateCollection(state) });
+  });
+  await page.route("**/api/v1/analyses/*/player-candidates/merge", async (route) => {
+    state.merged = true;
+    await route.fulfill({ status: 200, json: candidateCollection(state) });
+  });
+  await page.route("**/api/v1/analyses/*/player-candidates/unmerge", async (route) => {
+    state.merged = false;
+    await route.fulfill({ status: 200, json: candidateCollection(state) });
+  });
+  await page.route("**/api/v1/analyses/*/player-candidates", async (route) => {
+    await route.fulfill({ status: 200, json: candidateCollection(state) });
+  });
   await page.route("**/api/v1/analyses/*/analytics", async (route) => {
     state.stage = "completed";
     const payload = analyticsResponse(state);
@@ -214,6 +329,10 @@ function job(state: MockState) {
     court_detection_confidence: state.stage === "manual_required" ? 0 : state.stage === "inspected" ? null : 0.91,
     court_detection_selected_frame: state.stage === "inspected" ? null : "frames/frame_000001.jpg",
     court_detection_detected_corners: state.stage === "inspected" ? null : detectedCorners(),
+    upload_preflight: recordingQuality(state, "UPLOAD_PREFLIGHT"),
+    analysis_readiness: ["tracked", "selected", "completed"].includes(state.stage)
+      ? recordingQuality(state, "ANALYSIS_READINESS")
+      : null,
     available_artifacts: state.stage === "inspected" || state.stage === "manual_required" ? [] : calibrationArtifacts(state),
   };
 }
@@ -372,7 +491,124 @@ function trackSummary() {
   };
 }
 
+function candidateCollection(state: MockState) {
+  const all =
+    state.scenario === "review"
+      ? [
+          candidate("pc-one", [1], "STRONG"),
+          candidate("pc-two", [2], "USABLE"),
+          candidate("pc-spectator", [9], "UNCERTAIN"),
+        ]
+      : state.scenario === "fragmented"
+        ? [candidate("pc-fragmented", [1, 8], "USABLE", ["high_fragment_count"])]
+        : [candidate("pc-one", [1], "STRONG")];
+  const rejectedIds = new Set(state.rejectedCandidateIds ?? []);
+  const excluded = all
+    .filter((item) => rejectedIds.has(item.candidate_id))
+    .map((item) => ({ ...item, review_status: "REJECTED", rejection_reason: "not_a_player" }));
+  let active = all.filter((item) => !rejectedIds.has(item.candidate_id));
+  if (state.merged) {
+    active = [
+      candidate("pc-merged", [1, 2], "USABLE", ["high_fragment_count"], "merge-review"),
+    ];
+  }
+  return {
+    schema_version: 1,
+    analysis_id: state.analysisId,
+    candidates: active,
+    excluded_candidates: excluded,
+    selected_candidate_id:
+      state.stage === "selected" || state.stage === "completed"
+        ? active[0]?.candidate_id ?? null
+        : null,
+    manual_merge_decisions: state.merged
+      ? [
+          {
+            merge_id: "merge-review",
+            source_candidate_ids: ["pc-one", "pc-two"],
+            source_raw_track_ids: [1, 2],
+            merged_candidate_id: "pc-merged",
+            active: true,
+            created_at: "2026-07-22T00:02:00Z",
+            undone_at: null,
+          },
+        ]
+      : [],
+    recording_suitability: {
+      status: "SUITABLE",
+      reasons: [],
+      guidance: [],
+      orientation: "landscape",
+      detected_people: all.length,
+      usable_candidate_count: active.length,
+    },
+    analysis_readiness: recordingQuality(state, "ANALYSIS_READINESS"),
+    performance: { candidate_build_seconds: 0.01, preview_generation_seconds: 0.02 },
+    generated_at: "2026-07-22T00:02:00Z",
+    updated_at: "2026-07-22T00:02:00Z",
+  };
+}
+
+function candidate(
+  candidateId: string,
+  trackIds: number[],
+  quality: "STRONG" | "USABLE" | "UNCERTAIN",
+  warnings: string[] = [],
+  manualMergeId: string | null = null,
+) {
+  return {
+    candidate_id: candidateId,
+    source_raw_track_ids: trackIds,
+    first_observed_timestamp: 0,
+    last_observed_timestamp: 5,
+    total_observed_duration: 5,
+    total_observed_frames: 51,
+    court_distance_feet: 46,
+    court_movement_rate_feet_per_second: 9.2,
+    in_court_observation_ratio: quality === "UNCERTAIN" ? 0.2 : 0.9,
+    selection_eligible: true,
+    selection_exclusion_reasons: [],
+    representative_frame: 25,
+    representative_crop_artifact: `tracking/player_candidates/${candidateId}/crop_2.jpg`,
+    representative_full_frame_artifact: `tracking/player_candidates/${candidateId}/frame_2.jpg`,
+    preview_frames: [
+      {
+        timestamp_seconds: 2.5,
+        frame_index: 25,
+        full_frame_artifact: `tracking/player_candidates/${candidateId}/frame_2.jpg`,
+        crop_artifact: `tracking/player_candidates/${candidateId}/crop_2.jpg`,
+      },
+    ],
+    average_bounding_box: { width_pixels: 40, height_pixels: 110, area_ratio: 0.01 },
+    court_side_estimate: "NEAR",
+    quality,
+    quality_reasons: warnings,
+    warnings,
+    automatic_merge_evidence:
+      trackIds.length > 1
+        ? [
+            {
+              from_track_id: trackIds[0],
+              to_track_id: trackIds[1],
+              temporal_gap_seconds: 0.2,
+              endpoint_distance_feet: 1,
+              required_speed_feet_per_second: 5,
+              bounding_box_area_ratio: 1.1,
+              appearance_similarity: 0.9,
+              court_side_consistent: true,
+              reasons: ["short_temporal_gap"],
+            },
+          ]
+        : [],
+    review_status: "PENDING",
+    rejection_reason: null,
+    manual_merge_id: manualMergeId,
+  };
+}
+
 function analyticsResponse(state: MockState) {
+  const unsuitable = state.scenario === "unsuitable";
+  const measurementOnly = state.scenario === "limited" || state.scenario === "fragmented";
   return {
     analysis_id: state.analysisId,
     analytics: {
@@ -406,17 +642,22 @@ function analyticsResponse(state: MockState) {
     },
     match_iq: {
       analysis_id: state.analysisId,
-      status: "generated",
-      engine_version: "match-iq-rules-v1",
+      status: unsuitable ? "insufficient_data" : "generated",
+      engine_version: "match-iq-rules-v2",
       summary:
-        "Match IQ found 2 movement observations. Top signal: Court4 measured 60.0% of tracked time in the transition zone.",
-      insights: [
+        unsuitable
+          ? "Insufficient evidence for a verified movement insight."
+          : measurementOnly
+            ? "Court4 measured movement, but recording or tracking limitations mean interpretation and advice are suppressed."
+            : "Court4 verified one movement observation in the tracked sample.",
+      insights: unsuitable ? [] : [
         {
           id: "transition-occupancy",
-          rule_id: "positioning-high-transition-v1",
+          rule_id: "positioning-high-transition-v2",
           priority: 30,
           title: "Transition-zone time was the largest positioning signal",
           statement: "Court4 measured 60.0% of tracked time in the transition zone.",
+          observation: "Court4 measured 60.0% of tracked time in the transition zone.",
           evidence: [
             {
               metric: "zone_occupancy.transition_zone.percentage",
@@ -426,9 +667,16 @@ function analyticsResponse(state: MockState) {
               threshold: ">= 55.0%",
             },
           ],
+          confidence: null,
+          interpretation: measurementOnly
+            ? null
+            : "The transition zone was the largest measured location category.",
+          limitations: ["This observation covers tracked time only."],
+          action: measurementOnly ? null : "Review the heatmap.",
+          quality_gate: measurementOnly ? "MEASUREMENT_ONLY" : "CAUTIOUS",
         },
       ],
-      focus: {
+      focus: unsuitable || measurementOnly ? null : {
         title: "Focus area: positioning mix",
         statement:
           "Use the zone-occupancy insight as the main movement focus for this match. Court4 is only reporting where tracked time was spent.",
@@ -436,8 +684,70 @@ function analyticsResponse(state: MockState) {
       },
       limitations: ["Match IQ uses movement metrics only."],
       metrics_used: ["zone_occupancy.transition_zone.percentage"],
+      quality_gate: unsuitable
+        ? "INSUFFICIENT_EVIDENCE"
+        : measurementOnly
+          ? "MEASUREMENT_ONLY"
+          : "CAUTIOUS",
+      confidence: null,
+      recording_quality: recordingQuality(state, "ANALYSIS_READINESS"),
       created_at: "2026-07-22T00:03:00Z",
     },
+  };
+}
+
+function recordingQuality(
+  state: MockState,
+  stage: "UPLOAD_PREFLIGHT" | "ANALYSIS_READINESS",
+) {
+  const unsuitable = state.scenario === "unsuitable";
+  const limited = state.scenario === "limited" || state.scenario === "fragmented";
+  const status = unsuitable ? "UNSUITABLE" : limited ? "LIMITED" : "GOOD";
+  return {
+    stage,
+    status,
+    passed_checks: unsuitable
+      ? []
+      : [
+          {
+            code: "calibration_available",
+            label: "Court calibration",
+            status: "PASSED",
+            message: "Court calibration is available.",
+            measured_value: null,
+          },
+        ],
+    warnings: limited
+      ? [
+          {
+            code: "tracking_gaps_present",
+            label: "Tracking gaps",
+            status: "WARNING",
+            message: "The candidate contains unobserved gaps.",
+            measured_value: "4.0 seconds",
+          },
+        ]
+      : [],
+    blocking_failures: unsuitable
+      ? [
+          {
+            code: "tracking_gaps_excessive",
+            label: "Tracking gaps",
+            status: "FAILED",
+            message: "Unobserved gaps exceed half of the selected candidate span.",
+            measured_value: "72%",
+          },
+        ]
+      : [],
+    reason_codes: unsuitable
+      ? ["tracking_gaps_excessive"]
+      : limited
+        ? ["tracking_gaps_present"]
+        : [],
+    guidance: unsuitable || limited ? ["Keep the full court visible and the camera stable."] : [],
+    upload_signals: null,
+    analysis_signals: null,
+    assessed_at: "2026-07-22T00:02:00Z",
   };
 }
 

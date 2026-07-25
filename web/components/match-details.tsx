@@ -12,6 +12,7 @@ import { SampledFrames } from "@/components/sampled-frames";
 import { Skeleton } from "@/components/skeleton";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { MatchWorkflow } from "@/components/workflow-actions";
+import { RecordingQualityCard } from "@/components/recording-quality-card";
 
 export function MatchDetails({ analysisId }: { analysisId: string }) {
   const jobQuery = useQuery({
@@ -44,19 +45,6 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
             ? "Make sure the Court4 backend is running, then try again."
             : error.message}
         </p>
-        <details className="mt-4 text-sm text-court-red">
-          <summary className="cursor-pointer font-semibold">Technical details</summary>
-          <dl className="mt-2 grid gap-1">
-            <div>
-              <dt className="font-semibold">Code</dt>
-              <dd>{error.code}</dd>
-            </div>
-            <div>
-              <dt className="font-semibold">Message</dt>
-              <dd>{error.message}</dd>
-            </div>
-          </dl>
-        </details>
         <Button className="mt-5" type="button" variant="secondary" onClick={() => void jobQuery.refetch()}>
           <RefreshCw aria-hidden="true" className="h-4 w-4" />
           Try Again
@@ -77,8 +65,8 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
             <p className="text-sm font-semibold uppercase tracking-wide text-court-green">
               Match details
             </p>
-            <h1 className="mt-2 break-all text-2xl font-semibold text-court-ink md:text-3xl">
-              {job.analysis_id}
+            <h1 className="mt-2 text-2xl font-semibold text-court-ink md:text-3xl">
+              Recording review
             </h1>
             <p className="mt-2 text-sm text-court-muted">
               Current step: {currentStep.currentLabel}
@@ -90,12 +78,20 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
         <dl className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <MetaItem label="Created" value={formatDateTime(job.created_at)} />
           <MetaItem label="Updated" value={formatDateTime(job.updated_at)} />
-          <MetaItem label="Source video" value={job.source_video ?? "Unavailable"} />
           <MetaItem label="Workflow stage" value={getStageLabel(job.current_stage)} />
         </dl>
       </section>
 
       <JobStatus job={job} />
+
+      <RecordingQualityCard
+        assessment={job.analysis_readiness ?? job.upload_preflight}
+        title={job.analysis_readiness ? "Analysis readiness" : "Upload preflight"}
+        showRetry={
+          job.analysis_readiness?.status === "UNSUITABLE" ||
+          job.upload_preflight?.status === "UNSUITABLE"
+        }
+      />
 
       {framesQuery.isError ? (
         <div className="rounded-md border border-red-200 bg-red-50 p-5 text-sm text-court-red">

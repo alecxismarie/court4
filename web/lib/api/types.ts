@@ -21,6 +21,57 @@ export const detectedCourtCornersSchema = z.object({
 
 export const courtDetectionOutcomeSchema = z.enum(["detected", "low_confidence", "failed"]);
 
+export const recordingQualityLevelSchema = z.enum([
+  "EXCELLENT",
+  "GOOD",
+  "LIMITED",
+  "UNSUITABLE",
+]);
+
+export const qualityCheckSchema = z.object({
+  code: z.string(),
+  label: z.string(),
+  status: z.enum(["PASSED", "WARNING", "FAILED"]),
+  message: z.string(),
+  measured_value: z.string().nullable(),
+});
+
+export const recordingQualityAssessmentSchema = z.object({
+  stage: z.enum(["UPLOAD_PREFLIGHT", "ANALYSIS_READINESS"]),
+  status: recordingQualityLevelSchema,
+  passed_checks: z.array(qualityCheckSchema),
+  warnings: z.array(qualityCheckSchema),
+  blocking_failures: z.array(qualityCheckSchema),
+  reason_codes: z.array(z.string()),
+  guidance: z.array(z.string()),
+  upload_signals: z
+    .object({
+      format: z.string(),
+      orientation: z.string(),
+      width: z.number().int().positive(),
+      height: z.number().int().positive(),
+      fps: z.number().positive(),
+      duration_seconds: z.number().positive(),
+    })
+    .nullable(),
+  analysis_signals: z
+    .object({
+      court_detection_status: z.string().nullable(),
+      court_detection_confidence: z.number().min(0).max(1).nullable(),
+      calibration_completed: z.boolean(),
+      detected_people: z.number().int().nonnegative(),
+      selectable_candidate_count: z.number().int().nonnegative(),
+      candidate_quality: z.string().nullable(),
+      player_visibility_ratio: z.number().min(0).max(1).nullable(),
+      tracked_duration_seconds: z.number().nonnegative(),
+      unobserved_gap_seconds: z.number().nonnegative(),
+      tracking_gap_ratio: z.number().min(0).max(1),
+      fragment_count: z.number().int().nonnegative(),
+    })
+    .nullable(),
+  assessed_at: z.string(),
+});
+
 function missingAsNull<TSchema extends z.ZodTypeAny>(schema: TSchema) {
   return z
     .union([schema, z.null(), z.undefined()])
@@ -45,6 +96,8 @@ export const analysisJobSchema = z.object({
   court_detection_confidence: missingAsNull(z.number().min(0).max(1)),
   court_detection_selected_frame: missingAsNull(z.string()),
   court_detection_detected_corners: missingAsNull(detectedCourtCornersSchema),
+  upload_preflight: missingAsNull(recordingQualityAssessmentSchema),
+  analysis_readiness: missingAsNull(recordingQualityAssessmentSchema),
   available_artifacts: z.array(analysisArtifactSchema),
 });
 
@@ -136,6 +189,94 @@ export const trackSummarySchema = z.object({
   rejection_reasons: z.array(z.string()),
 });
 
+export const candidateQualitySchema = z.enum(["STRONG", "USABLE", "UNCERTAIN", "REJECTED"]);
+export const candidateReviewStatusSchema = z.enum(["PENDING", "SELECTED", "REJECTED", "MERGED"]);
+export const courtSideSchema = z.enum(["NEAR", "FAR", "MIXED", "UNKNOWN"]);
+
+export const candidatePreviewSchema = z.object({
+  timestamp_seconds: z.number().nonnegative(),
+  frame_index: z.number().int().nonnegative(),
+  full_frame_artifact: z.string().nullable(),
+  crop_artifact: z.string().nullable(),
+});
+
+export const playerCandidateSchema = z.object({
+  candidate_id: z.string(),
+  source_raw_track_ids: z.array(z.number().int().nonnegative()).min(1),
+  first_observed_timestamp: z.number().nonnegative(),
+  last_observed_timestamp: z.number().nonnegative(),
+  total_observed_duration: z.number().nonnegative(),
+  total_observed_frames: z.number().int().nonnegative(),
+  court_distance_feet: z.number().nonnegative(),
+  court_movement_rate_feet_per_second: z.number().nonnegative(),
+  in_court_observation_ratio: z.number().min(0).max(1),
+  selection_eligible: z.boolean(),
+  selection_exclusion_reasons: z.array(z.string()),
+  representative_frame: z.number().int().nonnegative().nullable(),
+  representative_crop_artifact: z.string().nullable(),
+  representative_full_frame_artifact: z.string().nullable(),
+  preview_frames: z.array(candidatePreviewSchema),
+  average_bounding_box: z.object({
+    width_pixels: z.number().nonnegative(),
+    height_pixels: z.number().nonnegative(),
+    area_ratio: z.number().min(0).max(1),
+  }),
+  court_side_estimate: courtSideSchema,
+  quality: candidateQualitySchema,
+  quality_reasons: z.array(z.string()),
+  warnings: z.array(z.string()),
+  automatic_merge_evidence: z.array(
+    z.object({
+      from_track_id: z.number().int().nonnegative(),
+      to_track_id: z.number().int().nonnegative(),
+      temporal_gap_seconds: z.number().nonnegative(),
+      endpoint_distance_feet: z.number().nonnegative(),
+      required_speed_feet_per_second: z.number().nonnegative(),
+      bounding_box_area_ratio: z.number().min(1),
+      appearance_similarity: z.number().min(0).max(1).nullable().optional(),
+      court_side_consistent: z.boolean(),
+      reasons: z.array(z.string()),
+    }),
+  ),
+  review_status: candidateReviewStatusSchema,
+  rejection_reason: z.string().nullable(),
+  manual_merge_id: z.string().nullable(),
+});
+
+export const playerCandidateCollectionSchema = z.object({
+  schema_version: z.number().int().positive(),
+  analysis_id: z.string(),
+  candidates: z.array(playerCandidateSchema),
+  excluded_candidates: z.array(playerCandidateSchema),
+  selected_candidate_id: z.string().nullable(),
+  manual_merge_decisions: z.array(
+    z.object({
+      merge_id: z.string(),
+      source_candidate_ids: z.array(z.string()),
+      source_raw_track_ids: z.array(z.number().int().nonnegative()),
+      merged_candidate_id: z.string(),
+      active: z.boolean(),
+      created_at: z.string(),
+      undone_at: z.string().nullable(),
+    }),
+  ),
+  recording_suitability: z.object({
+    status: z.enum(["SUITABLE", "LIMITED", "UNSUITABLE"]),
+    reasons: z.array(z.string()),
+    guidance: z.array(z.string()),
+    orientation: z.string(),
+    detected_people: z.number().int().nonnegative(),
+    usable_candidate_count: z.number().int().nonnegative(),
+  }),
+  analysis_readiness: missingAsNull(recordingQualityAssessmentSchema),
+  performance: z.object({
+    candidate_build_seconds: z.number().nonnegative(),
+    preview_generation_seconds: z.number().nonnegative(),
+  }),
+  generated_at: z.string(),
+  updated_at: z.string(),
+});
+
 export const trackingReportSchema = z.object({
   analysis_id: z.string(),
   source_video: z.string(),
@@ -147,6 +288,8 @@ export const trackingReportSchema = z.object({
   track_count: z.number().int().nonnegative(),
   eligible_player_track_ids: z.array(z.number().int().nonnegative()),
   selected_player_track_id: z.number().int().nonnegative().nullable(),
+  selected_player_candidate_id: z.string().nullable().optional(),
+  selected_player_source_track_ids: z.array(z.number().int().nonnegative()).optional(),
   selected_player_saved_at: z.string().nullable(),
   court_inclusion_margin_feet: z.number().nonnegative(),
   track_summaries: z.array(trackSummarySchema),
@@ -173,6 +316,7 @@ export const trackingResponseSchema = z.object({
   tracking: trackingReportSchema,
   artifacts: z.array(analysisArtifactSchema),
   job: analysisJobSchema,
+  player_candidates: playerCandidateCollectionSchema.nullable().optional(),
 });
 
 export const playersResponseSchema = z.object({
@@ -204,6 +348,12 @@ export const analyticsReportSchema = z.object({
   source_observations: z.string(),
   calibration_id: z.string(),
   selected_player_track_id: z.number().int().nonnegative(),
+  selected_player_candidate_id: z.string().nullable().optional(),
+  source_fragment_count: z.number().int().positive().optional(),
+  source_raw_track_ids: z.array(z.number().int().nonnegative()).optional(),
+  observed_duration_seconds: z.number().nonnegative().optional(),
+  unobserved_gap_seconds: z.number().nonnegative().optional(),
+  continuity_warnings: z.array(z.string()).optional(),
   distance: z.object({
     total_distance_feet: z.number().nonnegative(),
     total_distance_meters: z.number().nonnegative(),
@@ -238,6 +388,25 @@ export const matchIQInsightSchema = z.object({
   title: z.string(),
   statement: z.string(),
   evidence: z.array(matchIQEvidenceSchema),
+  observation: z.string().optional().default(""),
+  confidence: z
+    .object({
+      recording: z.object({ level: z.string(), rationale: z.string() }),
+      tracking: z.object({ level: z.string(), rationale: z.string() }),
+      measurement: z.object({ level: z.string(), rationale: z.string() }),
+      interpretation: z.object({ level: z.string(), rationale: z.string() }),
+      recommendation: z.object({ level: z.string(), rationale: z.string() }),
+    })
+    .nullable()
+    .optional()
+    .default(null),
+  interpretation: z.string().nullable().optional().default(null),
+  limitations: z.array(z.string()).optional().default([]),
+  action: z.string().nullable().optional().default(null),
+  quality_gate: z
+    .enum(["NORMAL", "CAUTIOUS", "MEASUREMENT_ONLY", "INSUFFICIENT_EVIDENCE"])
+    .optional()
+    .default("MEASUREMENT_ONLY"),
 });
 
 export const matchIQFocusSchema = z.object({
@@ -255,6 +424,12 @@ export const matchIQReportSchema = z.object({
   focus: matchIQFocusSchema.nullable(),
   limitations: z.array(z.string()),
   metrics_used: z.array(z.string()),
+  quality_gate: z
+    .enum(["NORMAL", "CAUTIOUS", "MEASUREMENT_ONLY", "INSUFFICIENT_EVIDENCE"])
+    .optional()
+    .default("MEASUREMENT_ONLY"),
+  confidence: matchIQInsightSchema.shape.confidence,
+  recording_quality: missingAsNull(recordingQualityAssessmentSchema),
   created_at: z.string(),
 });
 
@@ -290,6 +465,9 @@ export type MatchIQReport = z.infer<typeof matchIQReportSchema>;
 export type CourtDetectionResponse = z.infer<typeof courtDetectionResponseSchema>;
 export type PlayersResponse = z.infer<typeof playersResponseSchema>;
 export type PlayerSelectionResponse = z.infer<typeof playerSelectionResponseSchema>;
+export type PlayerCandidate = z.infer<typeof playerCandidateSchema>;
+export type PlayerCandidateCollection = z.infer<typeof playerCandidateCollectionSchema>;
+export type RecordingQualityAssessment = z.infer<typeof recordingQualityAssessmentSchema>;
 export type SampledFrame = z.infer<typeof sampledFrameSchema>;
 export type SampledFramesResponse = z.infer<typeof sampledFramesResponseSchema>;
 export type TrackSummary = z.infer<typeof trackSummarySchema>;

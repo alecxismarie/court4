@@ -37,6 +37,7 @@ from app.services.video.player_selection import load_tracking_report
 logger = logging.getLogger(__name__)
 
 FEET_TO_METERS = 0.3048
+MAX_OBSERVED_GAP_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -87,9 +88,14 @@ def generate_match_analytics(
         )
 
     observations_path = tracking_path.parent / tracking_report.artifacts.observations_jsonl
+    source_track_ids = (
+        tracking_report.selected_player_source_track_ids
+        if tracking_report.selected_player_source_track_ids
+        else [selected_track_id]
+    )
     selected_observations = _load_selected_observations(
         observations_path=observations_path,
-        selected_track_id=selected_track_id,
+        selected_track_ids=source_track_ids,
     )
     timeline_positions = _timeline_positions(selected_observations)
     if not timeline_positions:
@@ -105,7 +111,17 @@ def generate_match_analytics(
     analytics_dir.mkdir(parents=True, exist_ok=False)
 
     created_at = datetime.now(tz=UTC)
-    distance = calculate_distance_metrics(timeline_positions)
+    observed_duration_seconds, unobserved_gap_seconds = _observation_durations(
+        selected_observations
+    )
+    distance = _calculate_candidate_distance_metrics(
+        selected_observations,
+        observed_duration_seconds=observed_duration_seconds,
+    )
+    continuity_warnings = _continuity_warnings(
+        source_track_ids,
+        unobserved_gap_seconds=unobserved_gap_seconds,
+    )
     zone_occupancy = calculate_zone_occupancy(
         selected_observations,
         transition_area_depth_feet=transition_area_depth_feet,
@@ -115,6 +131,8 @@ def generate_match_analytics(
     timeline = TimelineReport(
         analysis_id=tracking_report.analysis_id,
         selected_player_track_id=selected_track_id,
+        selected_player_candidate_id=tracking_report.selected_player_candidate_id,
+        source_raw_track_ids=source_track_ids,
         observation_count=len(timeline_positions),
         positions=list(timeline_positions),
         created_at=created_at,
@@ -130,6 +148,11 @@ def generate_match_analytics(
         average_court_position=average_court_position,
         zone_occupancy=zone_occupancy,
         created_at=created_at,
+        selected_player_candidate_id=tracking_report.selected_player_candidate_id,
+        source_raw_track_ids=source_track_ids,
+        observed_duration_seconds=observed_duration_seconds,
+        unobserved_gap_seconds=unobserved_gap_seconds,
+        continuity_warnings=continuity_warnings,
     )
 
     analytics_path = analytics_dir / "analytics.json"
@@ -155,6 +178,12 @@ def generate_match_analytics(
         source_observations=str(observations_path.relative_to(analysis_dir)),
         calibration_id=tracking_report.calibration_id,
         selected_player_track_id=selected_track_id,
+        selected_player_candidate_id=tracking_report.selected_player_candidate_id,
+        source_fragment_count=len(source_track_ids),
+        source_raw_track_ids=source_track_ids,
+        observed_duration_seconds=observed_duration_seconds,
+        unobserved_gap_seconds=unobserved_gap_seconds,
+        continuity_warnings=continuity_warnings,
         distance=distance,
         timeline_observation_count=len(timeline_positions),
         average_court_position=average_court_position,
@@ -234,7 +263,7 @@ def _load_calibration_report_for_analytics(calibration_path: Path) -> CourtCalib
 def _load_selected_observations(
     *,
     observations_path: Path,
-    selected_track_id: int,
+    selected_track_ids: Sequence[int],
 ) -> list[PlayerObservation]:
     if not observations_path.exists():
         raise MissingTrackingForAnalyticsError(
@@ -258,16 +287,94 @@ def _load_selected_observations(
             raise MissingTrackingForAnalyticsError(
                 f"Invalid observation JSONL line {line_number}: {observations_path}"
             ) from exc
-        if observation.track_id == selected_track_id:
+        if observation.track_id in selected_track_ids:
             _validate_court_position(observation)
             observations.append(observation)
 
     observations.sort(key=lambda item: (item.timestamp_seconds, item.frame_index))
+    observations = _deduplicate_observations(observations)
     if not observations:
         raise NoPlayerTrajectoryError(
-            f"Selected track ID {selected_track_id} has no observations in observations.jsonl."
+            "Selected player candidate has no observations in observations.jsonl."
         )
     return observations
+
+
+def _deduplicate_observations(
+    observations: Sequence[PlayerObservation],
+) -> list[PlayerObservation]:
+    by_frame: dict[int, PlayerObservation] = {}
+    for observation in observations:
+        current = by_frame.get(observation.frame_index)
+        if current is None or (
+            observation.confidence,
+            -observation.track_id,
+        ) > (
+            current.confidence,
+            -current.track_id,
+        ):
+            by_frame[observation.frame_index] = observation
+    return sorted(
+        by_frame.values(),
+        key=lambda item: (item.timestamp_seconds, item.frame_index, item.track_id),
+    )
+
+
+def _calculate_candidate_distance_metrics(
+    observations: Sequence[PlayerObservation],
+    *,
+    observed_duration_seconds: float,
+) -> DistanceMetrics:
+    inside = [observation for observation in observations if observation.inside_court]
+    total_distance_feet = 0.0
+    for current, next_observation in zip(inside, inside[1:], strict=False):
+        gap = next_observation.timestamp_seconds - current.timestamp_seconds
+        if current.track_id != next_observation.track_id:
+            continue
+        if gap <= 0 or gap > MAX_OBSERVED_GAP_SECONDS:
+            continue
+        total_distance_feet += math.hypot(
+            next_observation.court_position[0] - current.court_position[0],
+            next_observation.court_position[1] - current.court_position[1],
+        )
+    average_feet_per_second = (
+        total_distance_feet / observed_duration_seconds if observed_duration_seconds > 0 else 0.0
+    )
+    return DistanceMetrics(
+        total_distance_feet=total_distance_feet,
+        total_distance_meters=total_distance_feet * FEET_TO_METERS,
+        average_movement_feet_per_second=average_feet_per_second,
+        average_movement_meters_per_second=average_feet_per_second * FEET_TO_METERS,
+    )
+
+
+def _observation_durations(
+    observations: Sequence[PlayerObservation],
+) -> tuple[float, float]:
+    observed = 0.0
+    for current, next_observation in zip(observations, observations[1:], strict=False):
+        gap = next_observation.timestamp_seconds - current.timestamp_seconds
+        if current.track_id == next_observation.track_id and 0 < gap <= MAX_OBSERVED_GAP_SECONDS:
+            observed += gap
+    span = (
+        observations[-1].timestamp_seconds - observations[0].timestamp_seconds
+        if len(observations) >= 2
+        else 0.0
+    )
+    return observed, max(0.0, span - observed)
+
+
+def _continuity_warnings(
+    source_track_ids: Sequence[int],
+    *,
+    unobserved_gap_seconds: float,
+) -> list[str]:
+    warnings: list[str] = []
+    if len(source_track_ids) > 1:
+        warnings.append("movement_combines_multiple_track_fragments")
+    if unobserved_gap_seconds > 0:
+        warnings.append("unobserved_gaps_not_interpolated")
+    return warnings
 
 
 def _timeline_positions(observations: Sequence[PlayerObservation]) -> tuple[TimelinePosition, ...]:

@@ -107,6 +107,51 @@ def test_generate_match_analytics_outputs(
     assert len(timeline["positions"]) == 4
 
 
+def test_candidate_analytics_combines_fragments_without_cross_fragment_jump(
+    tmp_path: Path,
+    synthetic_court_image_factory: Callable[..., Path],
+) -> None:
+    observations = [
+        *_observations_for_track(1, [(0.0, 1.0, 1.0), (1.0, 2.0, 1.0)]),
+        *_observations_for_track(2, [(2.0, 19.0, 40.0), (3.0, 18.0, 40.0)]),
+    ]
+    _create_analytics_case(
+        tmp_path,
+        synthetic_court_image_factory,
+        observations=observations,
+    )
+    tracking_path = tmp_path / "output" / "analytics-case" / "tracking" / "tracking.json"
+    tracking = PlayerTrackingReport.model_validate_json(tracking_path.read_text(encoding="utf-8"))
+    tracking = tracking.model_copy(
+        update={
+            "selected_player_candidate_id": "pc-fragmented",
+            "selected_player_source_track_ids": [1, 2],
+        }
+    )
+    tracking_path.write_text(
+        json.dumps(tracking.model_dump(mode="json"), indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    result = generate_match_analytics(
+        analysis_id="analytics-case",
+        output_dir=tmp_path / "output",
+        transition_area_depth_feet=8,
+        image_width_pixels=500,
+    )
+
+    assert result.report.selected_player_candidate_id == "pc-fragmented"
+    assert result.report.source_fragment_count == 2
+    assert result.report.source_raw_track_ids == [1, 2]
+    assert result.report.distance.total_distance_feet == pytest.approx(2)
+    assert result.report.observed_duration_seconds == pytest.approx(2)
+    assert result.report.unobserved_gap_seconds == pytest.approx(1)
+    assert result.report.continuity_warnings == [
+        "movement_combines_multiple_track_fragments",
+        "unobserved_gaps_not_interpolated",
+    ]
+
+
 def test_missing_tracking_report(tmp_path: Path) -> None:
     with pytest.raises(MissingTrackingForAnalyticsError, match="does not exist"):
         generate_match_analytics(
@@ -338,6 +383,22 @@ def _selected_observations(points: list[tuple[float, float, float]]) -> list[Pla
             excluded_from_player_tracks=False,
         )
         for index, (timestamp_seconds, x, y) in enumerate(points)
+    ]
+
+
+def _observations_for_track(
+    track_id: int,
+    points: list[tuple[float, float, float]],
+) -> list[PlayerObservation]:
+    observations = _selected_observations(points)
+    return [
+        observation.model_copy(
+            update={
+                "track_id": track_id,
+                "frame_index": int(round(observation.timestamp_seconds * 10)),
+            }
+        )
+        for observation in observations
     ]
 
 

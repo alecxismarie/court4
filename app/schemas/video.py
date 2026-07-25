@@ -2,6 +2,9 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.player_candidates import RecordingSuitability
+from app.schemas.recording_quality import RecordingQualityAssessment
+
 
 class VideoMetadataReport(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -17,4 +20,7 @@ class VideoMetadataReport(BaseModel):
     codec: str | None
     sample_interval_seconds: float = Field(gt=0)
     sampled_frames: int = Field(ge=0)
+    rotation_degrees: int = 0
+    recording_suitability: RecordingSuitability | None = None
+    upload_preflight: RecordingQualityAssessment | None = None
     created_at: datetime

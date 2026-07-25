@@ -38,6 +38,7 @@ def calculate_zone_occupancy(
     observations: Sequence[PlayerObservation],
     *,
     transition_area_depth_feet: float,
+    max_observation_gap_seconds: float = 1.0,
 ) -> ZoneOccupancyReport:
     zone_seconds = {KITCHEN: 0.0, TRANSITION_ZONE: 0.0, BASELINE_AREA: 0.0}
     inside_observations = [
@@ -57,7 +58,11 @@ def calculate_zone_occupancy(
         inside_observations[1:],
         strict=False,
     ):
+        if current.track_id != next_observation.track_id:
+            continue
         duration = max(0.0, next_observation.timestamp_seconds - current.timestamp_seconds)
+        if duration > max_observation_gap_seconds:
+            continue
         zone = classify_court_zone(
             current.court_position,
             transition_area_depth_feet=transition_area_depth_feet,

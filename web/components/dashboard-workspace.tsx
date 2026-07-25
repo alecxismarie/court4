@@ -9,7 +9,7 @@ import {
   formatTrackedTime,
   getDominantZone,
 } from "@/lib/workspace-data";
-import { formatDateTime, shortenAnalysisId } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import { EmptyState } from "@/components/empty-state";
 import { RecentMatches } from "@/components/recent-matches";
 import { ButtonLink } from "@/components/ui/button";
@@ -53,7 +53,13 @@ export function DashboardWorkspace() {
               Latest Match IQ
             </p>
             <h2 className="mt-2 text-xl font-semibold text-court-ink">
-              {latest ? shortenAnalysisId(latest.analysisId) : "No completed Match IQ yet"}
+              {latest
+                ? latestMatchIQ?.quality_gate === "NORMAL"
+                  ? "Verified movement insight"
+                  : latestMatchIQ?.quality_gate === "CAUTIOUS"
+                    ? "Analysis under review"
+                    : "Limited by recording quality"
+                : "No verified insight yet"}
             </h2>
           </div>
           {latest ? (
@@ -81,11 +87,11 @@ export function DashboardWorkspace() {
               <p className="mt-3 text-base leading-7 text-court-muted">
                 {latestMatchIQ.summary}
               </p>
-              {latestInsight ? (
+              {latestInsight && latestMatchIQ.quality_gate !== "INSUFFICIENT_EVIDENCE" ? (
                 <div className="mt-4 rounded-md border border-court-line bg-court-panel p-4">
                   <p className="text-sm font-semibold text-court-ink">{latestInsight.title}</p>
                   <p className="mt-1 text-sm leading-6 text-court-muted">
-                    {latestInsight.statement}
+                    {latestInsight.observation || latestInsight.statement}
                   </p>
                 </div>
               ) : null}

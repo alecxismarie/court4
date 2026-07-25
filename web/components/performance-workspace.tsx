@@ -7,7 +7,7 @@ import {
   formatDistanceFeet,
   formatTrackedTime,
 } from "@/lib/workspace-data";
-import { formatDateTime, shortenAnalysisId } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 import { EmptyState } from "@/components/empty-state";
 import { ButtonLink } from "@/components/ui/button";
 
@@ -72,7 +72,11 @@ export function PerformanceWorkspace() {
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <h3 className="font-semibold text-court-ink">
-                    {shortenAnalysisId(record.analysisId)}
+                    {record.analytics?.match_iq?.quality_gate === "NORMAL"
+                      ? "Verified movement insight"
+                      : record.analytics?.match_iq?.quality_gate === "CAUTIOUS"
+                        ? "Analysis under review"
+                        : "Limited by recording quality"}
                   </h3>
                   <span className="text-sm text-court-muted">
                     {record.analytics

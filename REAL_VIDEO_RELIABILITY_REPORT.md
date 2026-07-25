@@ -1,6 +1,6 @@
 # Court4 Real-Video Reliability Report
 
-Date: 2026-07-22
+Date: 2026-07-23
 
 ## Environment
 
@@ -45,6 +45,10 @@ Duplicate uploads `7a693b3f4ab74002a5692cf1eb4b2697` and `b1723142bfec4959a48219
 
 ## Real-Model Results
 
+The following table is the Phase 1.3A raw-track baseline. Phase 1.3B preserves
+these CPU YOLO/ByteTrack observations and adds deterministic post-processing;
+its current results follow the compact baseline metrics.
+
 | Video | Scenario | Expected players | Eligible tracks | Tracking quality | Processing time | Result | Limitations |
 | --- | --- | ---: | ---: | --- | ---: | --- | --- |
 | Landscape 61.2 s indoor doubles | Doubles | 4 | 4 | Raw detector created 161 tracks, but eligibility reduced selection candidates to track IDs `1,141,146,192`. Candidate previews were generated for all eligible tracks. | 168.62 s | PASS WITH LIMITATION | Track identities are fragmented; candidates cover 8.53-16.17 s each, not the full 61.2 s. Raw report still contains spectators/background people for audit. Duplicate-player fragments are possible without labeled ground truth. |
@@ -56,6 +60,26 @@ Compact metrics:
 | --- | ---: | ---: | ---: | --- | ---: |
 | `phase13a-landscape-yolo-repro-20260722` | 1,836 | 161 | 12,152 | `1,141,146,192` | 10.89 |
 | `phase13a-vertical-yolo-repro-20260722` | 432 | 2 | 842 | none | 9.50 |
+
+### Phase 1.3B candidate results
+
+| Run | Raw tracks | Candidates | Quality | Suitability | Candidate build | Previews |
+| --- | ---: | ---: | --- | --- | ---: | ---: |
+| Landscape | 161 | 80 | 5 STRONG, 25 USABLE, 50 UNCERTAIN | LIMITED: low resolution | 2.149 s | 11.343 s |
+| Vertical | 2 | 2 | 1 USABLE, 1 UNCERTAIN | LIMITED: vertical orientation | 2.116 s | 2.011 s |
+
+The landscape association includes multi-fragment candidates such as `1,141`,
+`104,193`, `243,296,299`, and `59,192,288`. Visual review found all five STRONG
+representatives on court. The candidate list includes the two near-court and two
+small far-court player appearances, but still has obvious duplicate-player and
+spectator candidates. A seated spectator formerly promoted by coordinate jitter
+is no longer STRONG because meaningful court-position span is required.
+
+The vertical failure root cause was eligibility rather than missing detections:
+the on-court raw track's 0.926 ft/s movement rate was below the legacy 1.2 ft/s
+threshold. Phase 1.3B does not weaken that global filter. It exposes the same
+14.27-second on-court evidence as a USABLE candidate, retains the outside-court
+track as UNCERTAIN, and warns that the recording is LIMITED.
 
 Eligible landscape track details:
 
@@ -121,6 +145,10 @@ Covered scenarios:
 - Court failure fallback: automatic court recognition failure -> manual calibration -> verification/top-down artifacts -> continue to tracking.
 - Detector model missing: typed error appears and the UI remains retryable.
 
+Phase 1.3B extends this suite to five passing scenarios (`5 passed (18.7s)`):
+the existing three paths plus a fragmented-player candidate path and a manual
+reject/merge/refresh-persistence path.
+
 ## Defects Found and Fixed
 
 - Frontend manual calibration was a placeholder; replaced with a usable calibrated-corner workflow.
@@ -135,10 +163,12 @@ Covered scenarios:
 ## Remaining Limitations
 
 - Real YOLO/ByteTrack tracking remains experimental.
-- Raw tracking can include spectators and background people; eligibility filtering controls selectable candidates but does not make YOLO player-specific.
-- Track IDs fragment across occlusions and missed detections.
-- Duplicate selectable fragments for the same real player are still possible.
-- The vertical real clip failed to produce any selectable player.
+- Raw tracking can include spectators and background people; candidate ranking
+  and review do not make YOLO player-specific.
+- Track IDs still fragment across occlusions and missed detections. Association
+  reduces 161 raw tracks to 80 candidates but leaves duplicates and ambiguous chains.
+- The vertical clip now has one selectable USABLE candidate with an accurate
+  LIMITED warning.
 - No labeled ground truth exists, so identity switches, missing-player intervals, and duplicate-track counts are manually reviewed, not scored.
 - Processing is synchronous and CPU-only in the validated environment.
 - Contact-sheet text can overlap on compact generated sheets; the main UI uses individual previews.
@@ -150,5 +180,9 @@ Ready for a controlled real-match demonstration
 Evidence:
 
 - Controlled backend, frontend unit, browser E2E, Docker, health, and docs validation pass.
-- The landscape real match produced four selectable player candidates from a local YOLO model with networking disabled.
-- The vertical real clip failed, and the landscape run still shows fragmented track identities. That prevents design-partner or external beta readiness without careful demo video selection and manual review.
+- The landscape ranked list represents the four visible court-player appearances,
+  and no obvious seated spectator is in the STRONG set.
+- The vertical clip now produces a selectable candidate, while remaining clearly
+  labeled LIMITED.
+- Duplicate candidates and the landscape review volume prevent design-partner or
+  external beta readiness without careful demo selection and manual review.

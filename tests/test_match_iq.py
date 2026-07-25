@@ -9,6 +9,11 @@ from app.schemas.analytics import (
     ZoneOccupancyMetric,
     ZoneOccupancyReport,
 )
+from app.schemas.recording_quality import (
+    PreflightStage,
+    RecordingQualityAssessment,
+    RecordingQualityLevel,
+)
 from app.services.match_iq import MATCH_IQ_ENGINE_VERSION, generate_match_iq
 
 CREATED_AT = datetime(2026, 7, 22, tzinfo=UTC)
@@ -41,20 +46,26 @@ def test_match_iq_generates_factual_evidence_backed_insights() -> None:
 
     assert report.status == "generated"
     assert report.engine_version == MATCH_IQ_ENGINE_VERSION
-    assert report.summary.startswith("Match IQ found")
+    assert report.quality_gate == "MEASUREMENT_ONLY"
+    assert report.summary.startswith("Court4 measured movement")
     assert [insight.rule_id for insight in report.insights] == [
-        "positioning-high-transition-v1",
-        "movement-short-total-distance-v1",
-        "movement-measured-distance-v1",
+        "positioning-high-transition-v2",
+        "movement-short-total-distance-v2",
+        "movement-measured-distance-v2",
     ]
     assert report.insights[0].statement == (
-        "Court4 measured 100.0% of tracked time in the transition zone."
+        "In the observed sample, 100.0% of continuity-safe tracked time "
+        "was assigned to the transition zone."
     )
     assert report.insights[0].evidence[0].metric == "zone_occupancy.transition_zone.percentage"
     assert report.insights[0].evidence[0].formatted_value == "100.0%"
     assert report.insights[0].evidence[0].threshold == ">= 55.0%"
-    assert report.focus is not None
-    assert report.focus.supporting_insight_ids == ["transition-occupancy"]
+    assert report.insights[0].interpretation is None
+    assert report.insights[0].action is None
+    assert report.focus is None
+    assert report.confidence is not None
+    assert report.confidence.recording.level == "NOT_AVAILABLE"
+    assert report.confidence.measurement.level == "MODERATE"
     assert "distance.total_distance_feet" in report.metrics_used
 
 
@@ -72,15 +83,72 @@ def test_match_iq_returns_insufficient_data_without_insights() -> None:
     report = generate_match_iq(analytics=analytics, timeline=None, created_at=CREATED_AT)
 
     assert report.status == "insufficient_data"
-    assert report.summary == (
-        "Court4 does not have enough movement data to generate a reliable Match IQ."
-    )
+    assert report.summary == "Insufficient evidence for a verified movement insight."
+    assert report.quality_gate == "INSUFFICIENT_EVIDENCE"
     assert report.insights == []
     assert report.focus is None
     assert (
         report.limitations[0]
-        == "Insufficient data: fewer than 3 timeline observations were available."
+        == "Insufficient evidence: fewer than 3 valid court observations were available."
     )
+
+
+def test_unsuitable_recording_suppresses_insights_and_separates_confidence() -> None:
+    analytics = _analytics_report(
+        total_distance_feet=45.0,
+        average_movement_feet_per_second=1.5,
+        observation_count=120,
+        tracked_time_seconds=30,
+        kitchen_percentage=60,
+        transition_percentage=20,
+        baseline_percentage=20,
+    )
+    quality = RecordingQualityAssessment(
+        stage=PreflightStage.analysis,
+        status=RecordingQualityLevel.unsuitable,
+        reason_codes=["tracking_gaps_excessive"],
+        assessed_at=CREATED_AT,
+    )
+
+    report = generate_match_iq(
+        analytics=analytics,
+        timeline=None,
+        recording_quality=quality,
+        created_at=CREATED_AT,
+    )
+
+    assert report.status == "insufficient_data"
+    assert report.quality_gate == "INSUFFICIENT_EVIDENCE"
+    assert report.insights == []
+    assert report.confidence is not None
+    assert report.confidence.recording.level == "LOW"
+    assert report.confidence.interpretation.level == "NOT_AVAILABLE"
+    assert report.confidence.recommendation.level == "NOT_AVAILABLE"
+
+
+def test_fragmented_track_is_measurement_only_and_half_rules_are_disabled() -> None:
+    analytics = _analytics_report(
+        total_distance_feet=45.0,
+        average_movement_feet_per_second=1.5,
+        observation_count=120,
+        tracked_time_seconds=30,
+        kitchen_percentage=60,
+        transition_percentage=20,
+        baseline_percentage=20,
+    ).model_copy(
+        update={
+            "source_fragment_count": 2,
+            "unobserved_gap_seconds": 12.0,
+            "observed_duration_seconds": 30.0,
+        }
+    )
+
+    report = generate_match_iq(analytics=analytics, timeline=None, created_at=CREATED_AT)
+
+    assert report.quality_gate == "MEASUREMENT_ONLY"
+    assert all(insight.interpretation is None for insight in report.insights)
+    assert all(insight.action is None for insight in report.insights)
+    assert not any("timeline-" in insight.rule_id for insight in report.insights)
 
 
 def _analytics_report(
@@ -99,6 +167,7 @@ def _analytics_report(
         source_observations="tracking/observations.jsonl",
         calibration_id="auto-court-detection",
         selected_player_track_id=2,
+        observed_duration_seconds=tracked_time_seconds,
         distance=DistanceMetrics(
             total_distance_feet=total_distance_feet,
             total_distance_meters=total_distance_feet * 0.3048,

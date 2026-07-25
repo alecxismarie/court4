@@ -6,12 +6,53 @@ import type {
   CalibrationResponse,
   CourtDetectionResponse,
   MatchIQReport,
+  PlayerCandidate,
+  PlayerCandidateCollection,
   PlayerSelectionResponse,
   PlayersResponse,
+  RecordingQualityAssessment,
   SampledFrame,
   TrackSummary,
   TrackingResponse,
 } from "@/lib/api/types";
+
+export function makeRecordingQuality(
+  overrides: Partial<RecordingQualityAssessment> = {},
+): RecordingQualityAssessment {
+  return {
+    stage: "ANALYSIS_READINESS",
+    status: "GOOD",
+    passed_checks: [
+      {
+        code: "tracked_duration_passed",
+        label: "Usable tracked time",
+        status: "PASSED",
+        message: "Usable tracked time meets the recommended threshold.",
+        measured_value: "30.0 seconds",
+      },
+    ],
+    warnings: [],
+    blocking_failures: [],
+    reason_codes: [],
+    guidance: [],
+    upload_signals: null,
+    analysis_signals: {
+      court_detection_status: "detected",
+      court_detection_confidence: 0.91,
+      calibration_completed: true,
+      detected_people: 2,
+      selectable_candidate_count: 1,
+      candidate_quality: "STRONG",
+      player_visibility_ratio: 0.92,
+      tracked_duration_seconds: 30,
+      unobserved_gap_seconds: 0,
+      tracking_gap_ratio: 0,
+      fragment_count: 1,
+    },
+    assessed_at: "2026-07-21T00:02:00Z",
+    ...overrides,
+  };
+}
 
 export function makeJob(overrides: Partial<AnalysisJob> = {}): AnalysisJob {
   return {
@@ -32,6 +73,19 @@ export function makeJob(overrides: Partial<AnalysisJob> = {}): AnalysisJob {
     court_detection_confidence: null,
     court_detection_selected_frame: null,
     court_detection_detected_corners: null,
+    upload_preflight: makeRecordingQuality({
+      stage: "UPLOAD_PREFLIGHT",
+      upload_signals: {
+        format: ".mp4",
+        orientation: "landscape",
+        width: 1920,
+        height: 1080,
+        fps: 30,
+        duration_seconds: 60,
+      },
+      analysis_signals: null,
+    }),
+    analysis_readiness: null,
     available_artifacts: [],
     ...overrides,
   };
@@ -202,6 +256,91 @@ export function makePlayersResponse(overrides: Partial<PlayersResponse> = {}): P
   };
 }
 
+export function makePlayerCandidate(
+  overrides: Partial<PlayerCandidate> = {},
+): PlayerCandidate {
+  return {
+    candidate_id: "pc-player-one",
+    source_raw_track_ids: [1],
+    first_observed_timestamp: 0,
+    last_observed_timestamp: 5,
+    total_observed_duration: 5,
+    total_observed_frames: 51,
+    court_distance_feet: 46,
+    court_movement_rate_feet_per_second: 9.2,
+    in_court_observation_ratio: 0.92,
+    selection_eligible: true,
+    selection_exclusion_reasons: [],
+    representative_frame: 25,
+    representative_crop_artifact: "tracking/player_candidates/pc-player-one/crop_2.jpg",
+    representative_full_frame_artifact:
+      "tracking/player_candidates/pc-player-one/frame_2.jpg",
+    preview_frames: [
+      {
+        timestamp_seconds: 0,
+        frame_index: 0,
+        full_frame_artifact: "tracking/player_candidates/pc-player-one/frame_1.jpg",
+        crop_artifact: "tracking/player_candidates/pc-player-one/crop_1.jpg",
+      },
+      {
+        timestamp_seconds: 2.5,
+        frame_index: 25,
+        full_frame_artifact: "tracking/player_candidates/pc-player-one/frame_2.jpg",
+        crop_artifact: "tracking/player_candidates/pc-player-one/crop_2.jpg",
+      },
+      {
+        timestamp_seconds: 5,
+        frame_index: 50,
+        full_frame_artifact: "tracking/player_candidates/pc-player-one/frame_3.jpg",
+        crop_artifact: "tracking/player_candidates/pc-player-one/crop_3.jpg",
+      },
+    ],
+    average_bounding_box: {
+      width_pixels: 42,
+      height_pixels: 116,
+      area_ratio: 0.008,
+    },
+    court_side_estimate: "NEAR",
+    quality: "STRONG",
+    quality_reasons: [],
+    warnings: [],
+    automatic_merge_evidence: [],
+    review_status: "PENDING",
+    rejection_reason: null,
+    manual_merge_id: null,
+    ...overrides,
+  };
+}
+
+export function makePlayerCandidateCollection(
+  overrides: Partial<PlayerCandidateCollection> = {},
+): PlayerCandidateCollection {
+  return {
+    schema_version: 1,
+    analysis_id: "analysis-123",
+    candidates: [makePlayerCandidate()],
+    excluded_candidates: [],
+    selected_candidate_id: null,
+    manual_merge_decisions: [],
+    recording_suitability: {
+      status: "SUITABLE",
+      reasons: [],
+      guidance: [],
+      orientation: "landscape",
+      detected_people: 1,
+      usable_candidate_count: 1,
+    },
+    analysis_readiness: makeRecordingQuality(),
+    performance: {
+      candidate_build_seconds: 0.01,
+      preview_generation_seconds: 0.02,
+    },
+    generated_at: "2026-07-21T00:02:00Z",
+    updated_at: "2026-07-21T00:02:00Z",
+    ...overrides,
+  };
+}
+
 export function makeTrackingResponse(overrides: Partial<TrackingResponse> = {}): TrackingResponse {
   return {
     analysis_id: "analysis-123",
@@ -273,6 +412,12 @@ export function makeAnalyticsReport(overrides: Partial<AnalyticsReport> = {}): A
     source_observations: "tracking/observations.jsonl",
     calibration_id: "auto-court-detection",
     selected_player_track_id: 1,
+    selected_player_candidate_id: "pc-player-one",
+    source_fragment_count: 1,
+    source_raw_track_ids: [1],
+    observed_duration_seconds: 30,
+    unobserved_gap_seconds: 0,
+    continuity_warnings: [],
     distance: {
       total_distance_feet: 42.5,
       total_distance_meters: 13,
@@ -303,7 +448,7 @@ export function makeMatchIQReport(overrides: Partial<MatchIQReport> = {}): Match
   return {
     analysis_id: "analysis-123",
     status: "generated",
-    engine_version: "match-iq-rules-v1",
+    engine_version: "match-iq-rules-v2",
     summary:
       "Match IQ found 3 movement observations. Top signal: Court4 measured 60.0% of tracked time in the transition zone.",
     insights: [
@@ -313,6 +458,7 @@ export function makeMatchIQReport(overrides: Partial<MatchIQReport> = {}): Match
         priority: 30,
         title: "Transition-zone time was the largest positioning signal",
         statement: "Court4 measured 60.0% of tracked time in the transition zone.",
+        observation: "Court4 measured 60.0% of tracked time in the transition zone.",
         evidence: [
           {
             metric: "zone_occupancy.transition_zone.percentage",
@@ -322,6 +468,11 @@ export function makeMatchIQReport(overrides: Partial<MatchIQReport> = {}): Match
             threshold: ">= 55.0%",
           },
         ],
+        confidence: null,
+        interpretation: "The transition zone was the largest measured location category.",
+        limitations: ["This covers tracked time only."],
+        action: "Review the heatmap.",
+        quality_gate: "CAUTIOUS",
       },
       {
         id: "measured-movement",
@@ -329,6 +480,7 @@ export function makeMatchIQReport(overrides: Partial<MatchIQReport> = {}): Match
         priority: 70,
         title: "Movement sample was measured",
         statement: "Court4 measured 42.5 ft over 5.0 seconds, averaging 2.50 ft/s.",
+        observation: "Court4 measured 42.5 ft over 5.0 seconds, averaging 2.50 ft/s.",
         evidence: [
           {
             metric: "distance.total_distance_feet",
@@ -338,6 +490,11 @@ export function makeMatchIQReport(overrides: Partial<MatchIQReport> = {}): Match
             threshold: "reported from analytics distance metric",
           },
         ],
+        confidence: null,
+        interpretation: "This describes the measured sample only.",
+        limitations: ["This covers tracked time only."],
+        action: "Review the trajectory.",
+        quality_gate: "CAUTIOUS",
       },
     ],
     focus: {
@@ -358,6 +515,9 @@ export function makeMatchIQReport(overrides: Partial<MatchIQReport> = {}): Match
       "zone_occupancy.tracked_time_seconds",
       "zone_occupancy.transition_zone.percentage",
     ],
+    quality_gate: "CAUTIOUS",
+    confidence: null,
+    recording_quality: makeRecordingQuality(),
     created_at: "2026-07-21T00:03:00Z",
     ...overrides,
   };

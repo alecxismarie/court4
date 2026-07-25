@@ -1,0 +1,56 @@
+{
+  "artifacts": {
+    "analytics_analysis_id": null,
+    "artifact_root": "data/output",
+    "candidates_analysis_id": null,
+    "court_analysis_id": null,
+    "inference_run_id": null,
+    "inspection_analysis_id": "replace-me",
+    "match_iq_analysis_id": null,
+    "reuse_notes": "Replace the placeholder analysis ID. Keep video files external or ignored.",
+    "tracking_analysis_id": null
+  },
+  "camera_distance": "NOT_REVIEWED",
+  "camera_position": null,
+  "camera_position_label": "NOT_REVIEWED",
+  "court_visibility": "UNKNOWN",
+  "dataset_split": "DEVELOPMENT",
+  "environment_type": "NOT_REVIEWED",
+  "expected_insight_eligibility": "NOT_REVIEWED",
+  "expected_players_on_court": null,
+  "expected_recording_quality": "NOT_REVIEWED",
+  "external_video_reference": null,
+  "fps": null,
+  "human_review": {
+    "insight": {
+      "generated_insights": [],
+      "reviewer_confidence": null
+    },
+    "player_candidates": {
+      "candidate_mappings": [],
+      "reviewer_confidence": null,
+      "stable_real_players": []
+    },
+    "recording": {
+      "recording_quality_verdict": "NOT_REVIEWED",
+      "reviewer_confidence": null
+    },
+    "tracking": {
+      "intervals": [],
+      "reviewer_confidence": null
+    }
+  },
+  "known_spectators_or_irrelevant_detections": [],
+  "lighting_condition": "NOT_REVIEWED",
+  "local_video_reference": null,
+  "match_format": "NOT_REVIEWED",
+  "orientation": "UNKNOWN",
+  "recording_environment": null,
+  "recording_stability": "NOT_REVIEWED",
+  "resolution": null,
+  "review_status": "NOT_REVIEWED",
+  "reviewer_confidence": null,
+  "reviewer_notes": null,
+  "sample_id": "new-recording-template",
+  "video_reference": null
+}

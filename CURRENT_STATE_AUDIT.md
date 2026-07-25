@@ -1,6 +1,6 @@
 # Court4 Current State Audit
 
-Date: 2026-07-22
+Date: 2026-07-23
 
 ## 1. Executive Verdict
 
@@ -10,9 +10,13 @@ Upload match -> inspect video -> recognize court -> find players -> select yours
 
 Overall readiness: CONTROLLED DEMO READY.
 
-The controlled fixture workflow is stable and well covered by tests. Real-video player detection is validated on local videos with CPU-only YOLO/ByteTrack, but remains limited by generic person detection, fragmented identities, and camera-dependent eligibility.
+The controlled fixture workflow is stable and well covered by tests. Phase 1.3B
+adds stable visual player candidates, persisted manual review, candidate analytics,
+and a selectable LIMITED vertical-video result. Real-video detection remains limited
+by generic person detection, duplicate candidates, fragmentation, and camera quality.
 
-Do not start a history/progress feature phase before accepting the remaining real-video limitations or improving track continuity.
+Do not start a history/progress feature phase before measuring and accepting the
+remaining real-video candidate-review load.
 
 ## 2. Repository And Working Tree
 
@@ -39,6 +43,19 @@ Phase 1.3A updates:
 - Added maintained Playwright E2E smoke tests.
 - Generated local real-video validation artifacts under ignored `data/output/phase13a-*`.
 
+Phase 1.3B updates:
+
+- Added the typed, schema-versioned player-candidate domain and deterministic
+  fragment association with centralized safety thresholds.
+- Added persisted candidate selection, rejection/restore, manual merge/undo,
+  representative artifacts, and legacy raw-selection compatibility.
+- Replaced primary raw-ID selection with ranked visual candidate cards.
+- Updated analytics to combine selected candidate fragments without counting
+  overlap, long gaps, or cross-fragment endpoint jumps.
+- Added recording suitability and orientation metadata handling.
+- Revalidated the preserved landscape and vertical CPU YOLO observations; see
+  `TRACK_CONTINUITY_REPORT.md`.
+
 ## 3. Feature Inventory
 
 Status values are one of COMPLETE, PARTIAL, EXPERIMENTAL, PLACEHOLDER, BROKEN, or NOT IMPLEMENTED.
@@ -54,10 +71,11 @@ Status values are one of COMPLETE, PARTIAL, EXPERIMENTAL, PLACEHOLDER, BROKEN, o
 | Manual calibration frontend | COMPLETE | `/matches/{id}/calibrate` supports sampled-frame selection, four corner clicks/taps, validation, submit, verification/top-down artifact display, and continue-to-tracking. |
 | Automatic court recognition | PARTIAL | Deterministic OpenCV heuristic exists, has synthetic tests, and persists detection state. Real videos can still over-detect the court boundary. |
 | Controlled JSON tracking backend | COMPLETE | Deterministic fixture backend is covered by pytest and full API workflow tests. |
-| Ultralytics YOLO plus ByteTrack backend | EXPERIMENTAL | Adapter runs with local `models/yolo11n.pt`; two local real-video clips were validated offline with Docker `--network none`. Landscape demo clip produced selectable candidates; vertical clip did not. |
-| Player filtering and selection | PARTIAL | Eligible cards are filtered by inside-court ratio, extended-court ratio, movement rate, confidence, and top-candidate cap. The raw tracking report can still contain many non-player track IDs. |
-| Player preview images | COMPLETE | Per-track preview images are generated/backfilled for eligible tracks and shown in the UI. |
-| Movement analytics | COMPLETE | Distance, average movement, timeline, average court position, zone occupancy, heatmap, and trajectory are persisted. |
+| Ultralytics YOLO plus ByteTrack backend | EXPERIMENTAL | Adapter runs with local `models/yolo11n.pt`; preserved CPU runs cover landscape and vertical footage. Both now produce selectable candidates, with limitations. |
+| Player-candidate generation | COMPLETE | Deterministic candidate IDs/grouping, typed quality/warnings, suitability, preview artifacts, and lazy legacy generation are implemented. Real grouping quality remains EXPERIMENTAL. |
+| Candidate review and selection | COMPLETE | Visual selection, reject/restore, manual merge/undo, technical lineage, and refresh-safe persistence replace raw IDs in the primary UI. |
+| Player preview images | COMPLETE | Up to three candidate crops and highlighted full frames are generated for sufficiently observed candidates. |
+| Movement analytics | COMPLETE | Distance, average movement, timeline, court position, zones, heatmap, and trajectory use selected candidate fragments and preserve gap/lineage metadata. |
 | Deterministic Match IQ via API | COMPLETE | Rule engine persists `analytics/match_iq.json`; legacy analytics without Match IQ return `match_iq: null`. |
 | Deterministic Match IQ via CLI | COMPLETE | `scripts/analyze_match.py` uses shared Match IQ persistence, writes `match_iq.json`, and reuses existing analytics deterministically. |
 | Analytics results page | COMPLETE | Shows factual metrics, Match IQ, insight evidence, focus, limitations, heatmap, trajectory, and share-card panel. |
@@ -239,17 +257,21 @@ Representative real-model local output:
 
 - Analysis: `phase13a-landscape-yolo-repro-20260722`
 - `track_count`: 161
-- Eligible IDs after filtering: `[1, 141, 146, 192]`
+- Phase 1.3B candidates: 80 (5 STRONG, 25 USABLE, 50 UNCERTAIN)
 - Processing: 1,836 frames, 168.62 seconds, CPU only, Docker `--network none`
-- Result: PASS WITH LIMITATION
+- Candidate post-processing: 2.149 seconds build plus 11.343 seconds previews
+- Result: CONTROLLED DEMO READY WITH REVIEW LIMITATIONS
 
 Interpretation:
 
-- The filter now limits selectable cards to plausible in-court candidates.
-- The underlying tracker still sees many people in the video.
-- This is expected for a generic person detector and should not be represented as "only detects players" yet.
-- The vertical real clip `phase13a-vertical-yolo-repro-20260722` produced 2 raw tracks and 0 eligible tracks, so not every real local pickleball clip is usable yet.
-- Better court masking, duplicate-fragment handling, and track continuity logic are needed.
+- The five STRONG representative crops are visibly on court; a seated sideline
+  spectator was downgraded using factual court-position coverage.
+- All four court-player appearances are available in the ranked review list, but
+  duplicate visible-player and spectator candidates remain.
+- The vertical real clip now produces one USABLE selectable candidate and one
+  UNCERTAIN candidate. Suitability is LIMITED, not silently passed.
+- This is still a generic person detector and must not be described as
+  player-only detection or identity recognition.
 
 ## 8. Share Card Audit
 
@@ -279,13 +301,13 @@ Backend validation:
 
 | Check | Result | Notes |
 | --- | --- | --- |
-| Docker build | COMPLETE | `docker build -t court4:phase-1-3a .` passed. Final image includes detector dependencies and local model mount support. |
-| Pytest | COMPLETE | `77 passed, 1 warning in 7.96s` inside the rebuilt image. Warning is Starlette/httpx deprecation from TestClient. |
+| Docker build | COMPLETE | `docker build -t court4:local .` passed. |
+| Pytest | COMPLETE | `86 passed, 1 warning in 10.56s`. Warning is the upstream Starlette/httpx TestClient deprecation. |
 | Ruff check | COMPLETE | `All checks passed!` |
-| Ruff format check | COMPLETE | `70 files already formatted` after formatter cleanup. |
-| Mypy | COMPLETE | `Success: no issues found in 70 source files`. |
-| Live `/health` | COMPLETE | `{"status":"ok"}` from packaged Docker image on temporary port 8010. |
-| Live `/docs` | COMPLETE | HTTP 200 from packaged Docker image on temporary port 8010. |
+| Ruff format check | COMPLETE | `75 files already formatted`. |
+| Mypy | COMPLETE | `Success: no issues found in 75 source files`. |
+| Live `/health` | COMPLETE | HTTP 200 and `{"status":"ok"}` from `court4:local` on temporary port 18000. |
+| Live `/docs` | COMPLETE | HTTP 200 with Swagger UI from `court4:local` on temporary port 18000. |
 
 Frontend validation:
 
@@ -293,9 +315,9 @@ Frontend validation:
 | --- | --- | --- |
 | Lint | COMPLETE | `next lint` passed with no warnings or errors. |
 | Typecheck | COMPLETE | `tsc --noEmit` passed. |
-| Vitest | COMPLETE | `17 passed (17 files), 68 passed (68 tests)`. Vite CJS API deprecation warning only. |
-| Production build | COMPLETE | Clean build passed with `NEXT_PUBLIC_COURT4_API_URL`, `NEXT_PUBLIC_COURT4_MAX_UPLOAD_BYTES`, and `NEXT_PUBLIC_COURT4_SUPPORTED_VIDEO_EXTENSIONS` set. |
-| Browser E2E | COMPLETE | `npm.cmd run e2e`: `3 passed (20.0s)` for controlled happy path, manual calibration fallback, and missing-model recovery. |
+| Vitest | COMPLETE | `17 passed (17 files), 71 passed (71 tests)`. Vite CJS API deprecation warning only. |
+| Production build | COMPLETE | Build passed with the documented `NEXT_PUBLIC_COURT4_*` variables. |
+| Browser E2E | COMPLETE | `npm.cmd run e2e`: `5 passed (18.7s)` for happy path, fragmented candidate, manual review persistence, manual calibration, and missing-model recovery. |
 
 Environment notes:
 
@@ -309,7 +331,7 @@ Focused smoke validation:
 | --- | --- | --- |
 | Controlled full API workflow | COMPLETE | `test_full_controlled_api_workflow` and `test_full_controlled_api_workflow_with_automatic_court_detection`: `2 passed, 1 warning`. |
 | Tracking eligibility and Match IQ rules | COMPLETE | `test_tracking_pipeline_outputs_and_eligibility` and `test_match_iq_generates_factual_evidence_backed_insights`: `2 passed`. |
-| Real-model smoke | PARTIAL | Two unique local real-video clips were validated offline. Landscape clip passed with limitations; vertical clip failed to produce a selectable player. |
+| Real-model smoke | PARTIAL | Two unique local clips were post-processed from preserved CPU YOLO observations. Landscape is reviewable with duplicate/spectator candidates; vertical now has one USABLE candidate and a LIMITED warning. |
 | Browser E2E smoke | COMPLETE | Maintained Playwright suite exists under `web/e2e/` and is run by `npm.cmd run e2e`. |
 
 ## 10. Test Coverage Audit
@@ -336,7 +358,7 @@ Coverage gaps:
 
 ## 11. Documentation Reconciliation
 
-README is reconciled through Phase 1.3A for the local MVP workflow.
+README is reconciled through Phase 1.3B for the local MVP workflow.
 
 Updated in Phase 1.3A:
 
@@ -359,7 +381,8 @@ Undocumented additions visible since the Phase 1.3 description:
 | Risk | Severity | Status | Notes |
 | --- | --- | --- | --- |
 | Real-video court detection can over-fit the visible scene and include spectators | HIGH | PARTIAL | User-observed issue is mitigated by track eligibility filters, not solved at detection level. |
-| Generic person detector tracks all people before filtering | HIGH | PARTIAL | UI hides ineligible tracks, but raw tracking report can contain many spectator IDs. |
+| Generic person detector tracks all people before filtering | HIGH | PARTIAL | Candidate quality/ranking and rejection help, but the review list can still contain spectator and duplicate candidates. |
+| Fragment association can leave duplicates or build ambiguous long chains | HIGH | PARTIAL | Temporal overlap, side, speed, size, and appearance guards are deterministic; manual review and labeled evaluation remain necessary. |
 | Model dependency requires a local untracked file | HIGH | PARTIAL | Compose now mounts `./models:/app/models:ro`, but `models/yolo11n.pt` must still be provided locally. |
 | Synchronous API processing can time out on long videos | HIGH | PARTIAL | No queue, worker, cancellation, or progress polling beyond frontend pending states. |
 | No auth or user isolation | HIGH | NOT IMPLEMENTED | Local-only MVP assumption. Unsafe for multi-user hosting. |
@@ -374,10 +397,11 @@ Undocumented additions visible since the Phase 1.3 description:
 
 Required before a real beta or a history/progress phase:
 
-1. Improve real-video track continuity and candidate review.
-   - Landscape real-video validation is demo-usable but fragmented.
-   - Vertical real-video validation produced no selectable players.
-   - Do not claim reliable player-only detection until duplicate fragments, missed intervals, and spectator raw tracks are better handled or clearly accepted.
+1. Reduce the real-video candidate-review load.
+   - Landscape validation is demo-usable but still includes duplicate player and
+     spectator candidates.
+   - Far-court subjects remain fragmented and often USABLE rather than STRONG.
+   - Do not claim player-only or identity detection.
 
 2. Decide the expected operating envelope for real uploads.
    - Current validation supports a controlled real-match demonstration, not arbitrary public uploads.
@@ -389,8 +413,80 @@ Recommended before the next feature phase:
 2. Add write locking or idempotency protection around job state transitions.
 3. Add an optional local real-model validation script that summarizes existing videos without committing weights or videos.
 
-## 14. Roadmap Recommendation
+## 14. Phase 1.4 Integrity Update
 
-Recommended next phase: Phase 1.3B - Real-Video Track Continuity and Candidate Review.
+Phase 1.4 now separates recording quality from candidate quality. Video inspection
+persists upload preflight; calibration/tracking/candidate evidence persists analysis
+readiness. Both are exposed in typed job and workflow responses with passed checks,
+warnings, blocking failures, human guidance, and technical reason codes.
 
-Phase 1.4 Player History and Progress should wait until Court4 can reliably produce a selectable player track on the intended real-video operating envelope. Any future history phase must preserve the current Match IQ safety boundary: no unsupported coaching claims, no LLM-generated claims, no ball tracking, no shot/rally/score inference, and no comparison unless stored prior match data supports it.
+Match IQ now uses separate recording, tracking, measurement, interpretation, and
+recommendation confidence. Limited evidence produces measurement-only output, and
+unsuitable evidence suppresses normal insight cards. The unsupported observed-span
+first/second-half rules are disabled because persisted timeline positions do not carry
+fragment continuity.
+
+The thresholds are initial engineering safeguards, not validated quality probabilities.
+The real landscape recording is now `UNSUITABLE` because its 368-pixel short edge is
+below the blocking resolution threshold. The vertical recording is `LIMITED`: it is
+720p/30 FPS and long enough for preflight, but vertical framing, a merely `USABLE`
+candidate, and limited tracked duration suppress interpretation and recommendations.
+
+## 15. Roadmap Recommendation
+
+Recommended next phase: focused real-video continuity hardening with labeled
+tracks, review-list reduction, and broader camera/lighting validation.
+
+Player History and Progress should wait until Court4 can reliably produce a selectable
+player track on the intended real-video operating envelope. Any future history phase
+must preserve the Match IQ safety boundary: no unsupported coaching claims, no
+LLM-generated claims, no ball tracking, no shot/rally/score inference, and no
+comparison unless stored prior match data supports it.
+
+## 16. Phase 1.5 Calibration Update
+
+Court4 now has a strict, versioned real-video calibration manifest and structured human
+review schema. The internal CLI reuses persisted artifacts, recomputes only inexpensive
+Phase 1.4 policies in memory, measures quality/gate/candidate/insight outcomes, reports
+stale or missing artifacts, and continues after individual sample failures.
+
+The two existing real recordings are seeded without copying video files. Current
+policy-consistency results are exact for both documented quality decisions:
+
+- landscape: `UNSUITABLE` with `INSUFFICIENT_EVIDENCE` suppression;
+- vertical: `LIMITED` with measurement-only eligibility.
+
+These are two partially reviewed samples derived from existing reports, not independent
+ground truth. Candidate schema artifacts and the landscape Match IQ artifact are legacy,
+the vertical sample lacks selected-player analytics, and identity/measurement error is
+not labeled. All percentages are provisional. Threshold simulations produced
+regressions for both tested alternatives and did not change production policy.
+
+The calibration tool remains CLI-only and internal. The next evidence milestone is a
+larger, independently reviewed dataset with frame-level identity and continuity labels.
+
+## 17. Phase 1.5A Dataset Expansion Update
+
+The calibration manifest now accepts schema v1 and additive schema v2. Schema v2 adds
+typed recording metadata, development/validation/holdout splits, stable real-player IDs,
+candidate-fragment mappings, optional continuity intervals, and per-insight review
+without requiring complete annotation.
+
+Dataset management remains internal and CLI-based. Commands generate overwrite-safe
+templates, validate one sample, summarize balance, list incomplete reviews, report
+artifact readiness, show unresolved mappings, and identify pending insight review.
+Generated reports cannot edit the manifest.
+
+The two seed samples retain all existing labels. New identity, interval, and per-insight
+fields remain explicitly unreviewed. Landscape is development and vertical is
+validation; no holdout exists, so threshold findings remain exploratory and
+provisional.
+
+Artifact readiness is explicit. The landscape chain is `LEGACY_COMPATIBLE`; the vertical
+chain is `PARTIAL`. Unversioned inspection, court, tracking, and analytics artifacts are
+reported as unversioned rather than assigned invented versions.
+
+The balance report identifies missing outdoor, singles, ideal-quality, diagonal,
+distance, 1080p, stability, several obstruction, `EXCELLENT`, `GOOD`, and holdout
+coverage. Actual collection, consent, independent review, and adjudication remain human
+work.

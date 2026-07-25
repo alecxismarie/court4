@@ -38,12 +38,25 @@ from app.schemas.jobs import (
     UploadVideoResponse,
 )
 from app.schemas.match_iq import MatchIQReport
+from app.schemas.player_candidates import PlayerCandidateCollection
 from app.schemas.player_tracking import PlayerTrackingReport
 from app.services.analytics import (
     AnalyticsError,
     AnalyticsOutputExistsError,
     MissingSelectedPlayerError,
     generate_match_analytics,
+)
+from app.services.candidates import (
+    CANDIDATE_SCHEMA_VERSION,
+    CandidateError,
+    CandidateImpossibleMergeError,
+    build_player_candidates,
+    load_player_candidates,
+    merge_player_candidates,
+    reject_player_candidate,
+    restore_player_candidate,
+    select_player_candidate,
+    unmerge_player_candidates,
 )
 from app.services.court_detection import detect_pickleball_court
 from app.services.jobs.exceptions import (
@@ -59,6 +72,7 @@ from app.services.match_iq import (
     generate_and_write_match_iq,
     load_match_iq_report,
 )
+from app.services.recording_quality import assess_analysis_readiness
 from app.services.tracking import (
     DetectorModelMissingError,
     DetectorRuntimeUnavailableError,
@@ -109,7 +123,7 @@ class AnalysisWorkflowService:
         now = datetime.now(tz=UTC)
 
         try:
-            inspect_video(
+            inspection = inspect_video(
                 input_path=staging_path,
                 output_dir=self.settings.analysis_output_dir,
                 sample_interval_seconds=self.settings.default_sample_interval_seconds,
@@ -128,6 +142,7 @@ class AnalysisWorkflowService:
                 created_at=now,
                 updated_at=datetime.now(tz=UTC),
                 inspection_completed=True,
+                upload_preflight=inspection.report.upload_preflight,
             )
             saved = self.repository.save_job(job)
             return UploadVideoResponse.model_validate(saved.model_dump(mode="json"))
@@ -401,12 +416,201 @@ class AnalysisWorkflowService:
             tracking_completed=True,
         )
         artifacts = self._artifacts_under(analysis_id, tracking_path.parent)
+        candidates = self._ensure_player_candidates(
+            analysis_id,
+            job=updated,
+            tracking=tracking,
+            preserve_review=True,
+        )
+        candidates, updated = self._refresh_analysis_readiness(updated, candidates)
         return TrackingResponse(
             analysis_id=analysis_id,
             tracking=tracking,
             artifacts=artifacts,
             job=AnalysisJobResponse.model_validate(updated.model_dump(mode="json")),
+            player_candidates=candidates,
         )
+
+    def list_player_candidates(self, analysis_id: str) -> PlayerCandidateCollection:
+        job = self.repository.load_job(analysis_id)
+        self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
+        tracking_path = self.repository.analysis_dir(analysis_id) / "tracking" / "tracking.json"
+        collection = self._ensure_player_candidates(
+            analysis_id,
+            job=job,
+            tracking=self._load_tracking(tracking_path),
+            preserve_review=True,
+        )
+        collection, _ = self._refresh_analysis_readiness(job, collection)
+        return collection
+
+    def generate_player_candidates(self, analysis_id: str) -> PlayerCandidateCollection:
+        job = self.repository.load_job(analysis_id)
+        self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
+        tracking_path = self.repository.analysis_dir(analysis_id) / "tracking" / "tracking.json"
+        collection = self._build_player_candidates(
+            analysis_id,
+            job=job,
+            tracking=self._load_tracking(tracking_path),
+            preserve_review=True,
+        )
+        collection, _ = self._refresh_analysis_readiness(job, collection)
+        return collection
+
+    def select_player_candidate(
+        self,
+        analysis_id: str,
+        candidate_id: str,
+    ) -> PlayerCandidateCollection:
+        job = self.repository.load_job(analysis_id)
+        self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
+        tracking_dir = self.repository.analysis_dir(analysis_id) / "tracking"
+        self._ensure_player_candidates(
+            analysis_id,
+            job=job,
+            tracking=self._load_tracking(tracking_dir / "tracking.json"),
+            preserve_review=True,
+        )
+        try:
+            collection = select_player_candidate(
+                candidate_path=tracking_dir / "player_candidates.json",
+                candidate_id=candidate_id,
+                tracking_report_path=tracking_dir / "tracking.json",
+            )
+        except CandidateError as exc:
+            raise JobRequestError(
+                "candidate_selection_failed", "Player candidate selection failed."
+            ) from exc
+        updated = self.repository.update_job(
+            job,
+            status=AnalysisStatus.processing,
+            current_stage=AnalysisStage.player_selected,
+            error=None,
+            player_selected=True,
+        )
+        collection, _ = self._refresh_analysis_readiness(updated, collection)
+        return collection
+
+    def reject_player_candidate(
+        self,
+        analysis_id: str,
+        candidate_id: str,
+        reason: str,
+    ) -> PlayerCandidateCollection:
+        job = self.repository.load_job(analysis_id)
+        self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
+        tracking_dir = self.repository.analysis_dir(analysis_id) / "tracking"
+        self._ensure_player_candidates(
+            analysis_id,
+            job=job,
+            tracking=self._load_tracking(tracking_dir / "tracking.json"),
+            preserve_review=True,
+        )
+        try:
+            collection = reject_player_candidate(
+                candidate_path=tracking_dir / "player_candidates.json",
+                candidate_id=candidate_id,
+                reason=reason,
+                tracking_report_path=tracking_dir / "tracking.json",
+            )
+        except CandidateError as exc:
+            raise JobRequestError(
+                "candidate_rejection_failed", "Player candidate could not be excluded."
+            ) from exc
+        updated_job = job
+        if collection.selected_candidate_id is None and job.player_selected:
+            updated_job = self.repository.update_job(
+                job,
+                status=AnalysisStatus.processing,
+                current_stage=AnalysisStage.tracked,
+                player_selected=False,
+                analytics_completed=False,
+            )
+        collection, _ = self._refresh_analysis_readiness(updated_job, collection)
+        return collection
+
+    def restore_player_candidate(
+        self,
+        analysis_id: str,
+        candidate_id: str,
+    ) -> PlayerCandidateCollection:
+        job = self.repository.load_job(analysis_id)
+        self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
+        candidate_path = (
+            self.repository.analysis_dir(analysis_id) / "tracking" / "player_candidates.json"
+        )
+        self.list_player_candidates(analysis_id)
+        try:
+            collection = restore_player_candidate(
+                candidate_path=candidate_path,
+                candidate_id=candidate_id,
+            )
+        except CandidateError as exc:
+            raise JobRequestError(
+                "candidate_restore_failed", "Excluded candidate could not be restored."
+            ) from exc
+        collection, _ = self._refresh_analysis_readiness(job, collection)
+        return collection
+
+    def merge_player_candidates(
+        self,
+        analysis_id: str,
+        candidate_ids: list[str],
+    ) -> PlayerCandidateCollection:
+        job = self.repository.load_job(analysis_id)
+        self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
+        paths = self._candidate_paths(analysis_id, job)
+        self.list_player_candidates(analysis_id)
+        try:
+            collection = merge_player_candidates(
+                candidate_path=paths["candidate"],
+                candidate_ids=candidate_ids,
+                tracking_report_path=paths["tracking"],
+                observations_path=paths["observations"],
+                source_video_path=paths["source"],
+                metadata_path=paths["metadata"],
+            )
+        except CandidateImpossibleMergeError as exc:
+            raise JobConflictError("impossible_candidate_merge", str(exc)) from exc
+        except CandidateError as exc:
+            raise JobRequestError(
+                "candidate_merge_failed", "Player candidates could not be merged."
+            ) from exc
+        collection, _ = self._refresh_analysis_readiness(job, collection)
+        return collection
+
+    def unmerge_player_candidates(
+        self,
+        analysis_id: str,
+        candidate_id: str,
+    ) -> PlayerCandidateCollection:
+        job = self.repository.load_job(analysis_id)
+        self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
+        paths = self._candidate_paths(analysis_id, job)
+        try:
+            collection = unmerge_player_candidates(
+                candidate_path=paths["candidate"],
+                candidate_id=candidate_id,
+                tracking_report_path=paths["tracking"],
+                observations_path=paths["observations"],
+                source_video_path=paths["source"],
+                metadata_path=paths["metadata"],
+            )
+        except CandidateError as exc:
+            raise JobRequestError(
+                "candidate_unmerge_failed", "Manual candidate merge could not be undone."
+            ) from exc
+        updated_job = job
+        if collection.selected_candidate_id is None and job.player_selected:
+            updated_job = self.repository.update_job(
+                job,
+                status=AnalysisStatus.processing,
+                current_stage=AnalysisStage.tracked,
+                player_selected=False,
+                analytics_completed=False,
+            )
+        collection, _ = self._refresh_analysis_readiness(updated_job, collection)
+        return collection
 
     def list_players(self, analysis_id: str) -> PlayersResponse:
         job = self.repository.load_job(analysis_id)
@@ -441,7 +645,30 @@ class AnalysisWorkflowService:
             tracking = select_player_track(
                 tracking_report_path=tracking_path, track_id=request.track_id
             )
+            candidates = self._ensure_player_candidates(
+                analysis_id,
+                job=job,
+                tracking=tracking,
+                preserve_review=True,
+            )
+            candidate = next(
+                (
+                    item
+                    for item in candidates.candidates
+                    if request.track_id in item.source_raw_track_ids
+                ),
+                None,
+            )
+            if candidate is not None:
+                select_player_candidate(
+                    candidate_path=tracking_path.parent / "player_candidates.json",
+                    candidate_id=candidate.candidate_id,
+                    tracking_report_path=tracking_path,
+                )
+                tracking = self._load_tracking(tracking_path)
         except TrackingError as exc:
+            raise JobRequestError("player_selection_failed", "Player selection failed.") from exc
+        except CandidateError as exc:
             raise JobRequestError("player_selection_failed", "Player selection failed.") from exc
 
         updated = self.repository.update_job(
@@ -488,6 +715,7 @@ class AnalysisWorkflowService:
                     analytics=analytics,
                     timeline=result.timeline,
                     analytics_dir=result.analytics_dir,
+                    recording_quality=job.analysis_readiness,
                 )
             except AnalyticsOutputExistsError as exc:
                 raise JobConflictError(
@@ -668,6 +896,80 @@ class AnalysisWorkflowService:
             for path in sorted(item for item in directory.rglob("*") if item.is_file())
         ]
 
+    def _ensure_player_candidates(
+        self,
+        analysis_id: str,
+        *,
+        job: AnalysisJob,
+        tracking: PlayerTrackingReport,
+        preserve_review: bool,
+    ) -> PlayerCandidateCollection:
+        candidate_path = (
+            self.repository.analysis_dir(analysis_id) / "tracking" / "player_candidates.json"
+        )
+        if candidate_path.is_file():
+            try:
+                collection = load_player_candidates(candidate_path)
+                if collection.schema_version == CANDIDATE_SCHEMA_VERSION:
+                    return collection
+            except CandidateError as exc:
+                raise JobRequestError(
+                    "candidate_persistence_failure",
+                    "Saved player candidates could not be loaded.",
+                ) from exc
+        return self._build_player_candidates(
+            analysis_id,
+            job=job,
+            tracking=tracking,
+            preserve_review=preserve_review,
+        )
+
+    def _build_player_candidates(
+        self,
+        analysis_id: str,
+        *,
+        job: AnalysisJob,
+        tracking: PlayerTrackingReport,
+        preserve_review: bool,
+    ) -> PlayerCandidateCollection:
+        paths = self._candidate_paths(analysis_id, job)
+        try:
+            return build_player_candidates(
+                analysis_id=analysis_id,
+                tracking_report=tracking,
+                observations_path=paths["observations"],
+                source_video_path=paths["source"],
+                metadata_path=paths["metadata"],
+                tracking_dir=paths["tracking"].parent,
+                preserve_review=preserve_review,
+            )
+        except CandidateError as exc:
+            raise JobRequestError(
+                "candidate_generation_failed",
+                "Player candidates could not be generated from the tracking data.",
+            ) from exc
+
+    def _candidate_paths(self, analysis_id: str, job: AnalysisJob) -> dict[str, Path]:
+        analysis_dir = self.repository.analysis_dir(analysis_id)
+        if job.source_video is None:
+            raise JobConflictError("source_video_missing", "Source video is missing.")
+        source_path = self.repository.resolve_artifact(analysis_id, job.source_video)
+        paths = {
+            "candidate": analysis_dir / "tracking" / "player_candidates.json",
+            "tracking": analysis_dir / "tracking" / "tracking.json",
+            "observations": analysis_dir / "tracking" / "observations.jsonl",
+            "source": source_path,
+            "metadata": analysis_dir / "metadata.json",
+        }
+        missing = [
+            name for name, path in paths.items() if name != "candidate" and not path.is_file()
+        ]
+        if missing:
+            raise JobNotFoundError(
+                f"Candidate source artifact is missing: {', '.join(sorted(missing))}."
+            )
+        return paths
+
     def _optional_artifact(self, analysis_id: str, path: Path) -> AnalysisArtifact | None:
         if not path.is_file():
             return None
@@ -769,6 +1071,40 @@ class AnalysisWorkflowService:
             return load_match_iq_report(path)
         except MatchIQPersistenceError as exc:
             raise JobRequestError("invalid_match_iq", "Match IQ report could not be read.") from exc
+
+    def _refresh_analysis_readiness(
+        self,
+        job: AnalysisJob,
+        collection: PlayerCandidateCollection,
+    ) -> tuple[PlayerCandidateCollection, AnalysisJob]:
+        readiness = assess_analysis_readiness(
+            upload_preflight=job.upload_preflight,
+            calibration_completed=job.calibration_completed,
+            court_detection_status=(
+                job.court_detection_status.value if job.court_detection_status is not None else None
+            ),
+            court_detection_confidence=job.court_detection_confidence,
+            detected_people=collection.recording_suitability.detected_people,
+            candidates=collection.candidates,
+            selected_candidate_id=collection.selected_candidate_id,
+            assessed_at=(
+                collection.analysis_readiness.assessed_at
+                if collection.analysis_readiness is not None
+                else None
+            ),
+        )
+        if collection.analysis_readiness == readiness and job.analysis_readiness == readiness:
+            return collection, job
+        updated_collection = collection.model_copy(update={"analysis_readiness": readiness})
+        candidate_path = (
+            self.repository.analysis_dir(job.analysis_id) / "tracking" / "player_candidates.json"
+        )
+        candidate_path.write_text(
+            json.dumps(updated_collection.model_dump(mode="json"), indent=2) + "\n",
+            encoding="utf-8",
+        )
+        updated_job = self.repository.update_job(job, analysis_readiness=readiness)
+        return updated_collection, updated_job
 
 
 def _detected_corners_model(

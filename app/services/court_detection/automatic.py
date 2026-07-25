@@ -16,6 +16,7 @@ from app.sports.pickleball.geometry import Point2D
 logger = logging.getLogger(__name__)
 
 ImageArray = NDArray[np.uint8]
+MAX_AUTOMATIC_COURT_AREA_RATIO = 0.75
 
 
 @dataclass(frozen=True)
@@ -217,6 +218,8 @@ def _candidate_from_contour(
         area = abs(float(cv2.contourArea(np.array(ordered, dtype=np.float32))))
         if area < min_polygon_area_pixels:
             return None
+        if image_area and area / image_area > MAX_AUTOMATIC_COURT_AREA_RATIO:
+            continue
 
         confidence = _score_candidate(
             image_area=image_area,

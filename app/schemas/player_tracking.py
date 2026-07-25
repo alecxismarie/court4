@@ -127,6 +127,8 @@ class PlayerTrackingReport(BaseModel):
     track_count: int = Field(ge=0)
     eligible_player_track_ids: list[int]
     selected_player_track_id: int | None = None
+    selected_player_candidate_id: str | None = None
+    selected_player_source_track_ids: list[int] = Field(default_factory=list)
     selected_player_saved_at: datetime | None = None
     court_inclusion_margin_feet: float = Field(ge=0)
     track_summaries: list[TrackSummary]

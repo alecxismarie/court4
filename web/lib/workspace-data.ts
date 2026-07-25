@@ -65,16 +65,26 @@ export function hasGeneratedMatchIq(record: WorkspaceAnalysisRecord): boolean {
 }
 
 export function getMatchIqAvailability(record: WorkspaceAnalysisRecord): string {
-  if (hasGeneratedMatchIq(record)) {
-    return "Match IQ available";
+  const matchIQ = record.analytics?.match_iq;
+  if (matchIQ?.quality_gate === "NORMAL") {
+    return "Verified movement insight";
+  }
+  if (matchIQ?.quality_gate === "CAUTIOUS") {
+    return "Analysis under review";
+  }
+  if (
+    matchIQ?.quality_gate === "MEASUREMENT_ONLY" ||
+    matchIQ?.quality_gate === "INSUFFICIENT_EVIDENCE"
+  ) {
+    return "Limited by recording quality";
   }
   if (record.job?.status === "failed") {
-    return "Match IQ unavailable";
+    return "No verified insight yet";
   }
   if (record.job?.analytics_completed || record.analytics) {
-    return "Match IQ unavailable";
+    return "No verified insight yet";
   }
-  return "Match IQ pending";
+  return "Analysis under review";
 }
 
 export function getDominantZone(record: WorkspaceAnalysisRecord): WorkspaceZoneSummary | null {

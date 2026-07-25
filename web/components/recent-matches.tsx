@@ -12,7 +12,7 @@ import {
   hasGeneratedMatchIq,
   type WorkspaceAnalysisRecord,
 } from "@/lib/workspace-data";
-import { cn, formatDateTime, shortenAnalysisId } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 import { EmptyState } from "@/components/empty-state";
 import { ButtonLink } from "@/components/ui/button";
 
@@ -70,7 +70,7 @@ function RecentMatchRow({
     return (
       <article className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
         <div>
-          <p className="font-medium text-court-ink">{shortenAnalysisId(record.analysisId)}</p>
+          <p className="font-medium text-court-ink">Saved match</p>
           <p className="text-sm text-court-muted">{message}</p>
         </div>
         <span className="inline-flex items-center gap-2 rounded-md border border-court-line px-3 py-2 text-sm font-semibold text-court-muted">
@@ -85,15 +85,16 @@ function RecentMatchRow({
   const dominantZone = getDominantZone(record);
   const matchIqReady = hasGeneratedMatchIq(record);
   const matchIqAvailability = getMatchIqAvailability(record);
-  const canShare = matchIqReady && Boolean(analytics);
+  const canShare =
+    matchIqReady &&
+    Boolean(analytics) &&
+    record.analytics?.match_iq?.quality_gate !== "INSUFFICIENT_EVIDENCE";
 
   return (
     <article className="grid gap-4 px-5 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
-          <h3 className="break-all font-semibold text-court-ink">
-            {shortenAnalysisId(record.job.analysis_id)}
-          </h3>
+          <h3 className="font-semibold text-court-ink">Movement analysis</h3>
           <span className="rounded-md bg-court-panel px-2 py-1 text-xs font-semibold text-court-muted">
             {getHumanMatchStatus(record.job)}
           </span>

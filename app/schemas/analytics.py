@@ -18,6 +18,8 @@ class TimelineReport(BaseModel):
 
     analysis_id: str
     selected_player_track_id: int = Field(ge=0)
+    selected_player_candidate_id: str | None = None
+    source_raw_track_ids: list[int] = Field(default_factory=list)
     observation_count: int = Field(ge=0)
     positions: list[TimelinePosition]
     created_at: datetime
@@ -63,6 +65,12 @@ class MovementSummaryReport(BaseModel):
 
     analysis_id: str
     selected_player_track_id: int = Field(ge=0)
+    selected_player_candidate_id: str | None = None
+    source_fragment_count: int = Field(default=1, ge=1)
+    source_raw_track_ids: list[int] = Field(default_factory=list)
+    observed_duration_seconds: float = Field(default=0, ge=0)
+    unobserved_gap_seconds: float = Field(default=0, ge=0)
+    continuity_warnings: list[str] = Field(default_factory=list)
     match_duration_seconds: float = Field(ge=0)
     tracked_duration_seconds: float = Field(ge=0)
     total_processed_observations: int = Field(ge=0)
@@ -84,6 +92,12 @@ class AnalyticsReport(BaseModel):
     source_observations: str
     calibration_id: str
     selected_player_track_id: int = Field(ge=0)
+    selected_player_candidate_id: str | None = None
+    source_fragment_count: int = Field(default=1, ge=1)
+    source_raw_track_ids: list[int] = Field(default_factory=list)
+    observed_duration_seconds: float = Field(default=0, ge=0)
+    unobserved_gap_seconds: float = Field(default=0, ge=0)
+    continuity_warnings: list[str] = Field(default_factory=list)
     distance: DistanceMetrics
     timeline_observation_count: int = Field(ge=0)
     average_court_position: PointTuple | None

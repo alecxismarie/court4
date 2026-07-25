@@ -5,6 +5,7 @@ from pydantic import BaseModel, ValidationError
 
 from app.schemas.analytics import AnalyticsReport, TimelineReport
 from app.schemas.match_iq import MatchIQReport
+from app.schemas.recording_quality import RecordingQualityAssessment
 from app.services.match_iq.engine import generate_match_iq
 
 MATCH_IQ_FILENAME = "match_iq.json"
@@ -19,8 +20,13 @@ def generate_and_write_match_iq(
     analytics: AnalyticsReport,
     timeline: TimelineReport | None,
     analytics_dir: Path,
+    recording_quality: RecordingQualityAssessment | None = None,
 ) -> MatchIQReport:
-    report = generate_match_iq(analytics=analytics, timeline=timeline)
+    report = generate_match_iq(
+        analytics=analytics,
+        timeline=timeline,
+        recording_quality=recording_quality,
+    )
     write_match_iq_report(report, analytics_dir / MATCH_IQ_FILENAME)
     return report
 

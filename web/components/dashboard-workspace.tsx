@@ -58,7 +58,7 @@ export function DashboardWorkspace() {
                   ? "Verified movement insight"
                   : latestMatchIQ?.quality_gate === "CAUTIOUS"
                     ? "Analysis under review"
-                    : "Limited by recording quality"
+                    : "Limited by video quality"
                 : "No verified insight yet"}
             </h2>
           </div>

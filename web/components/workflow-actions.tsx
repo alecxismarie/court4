@@ -520,7 +520,7 @@ function PlayerTrackingPanel({
           <WorkflowError
             error={trackingError}
             title="We could not identify the players"
-            message="Try the analysis again. If the problem continues, use a clearer recording."
+            message="Try the analysis again. If the problem continues, use a clearer video."
             onRetry={() => void submitTracking()}
           />
         </form>
@@ -981,7 +981,7 @@ function WorkflowError({
       ? "Player detection is not available because the detector model is missing."
     : isImpossibleMerge
       ? normalized.message
-    : message ?? "Try again. If the problem continues, use a clearer recording.";
+    : message ?? "Try again. If the problem continues, use a clearer video.";
 
   return (
     <div className={cn("mt-4 rounded-md border border-red-200 bg-red-50 p-4", className)}>
@@ -1017,7 +1017,7 @@ function candidateWarningLabel(reason: string): string {
     low_in_court_ratio: "Much of this track falls outside the recognized court.",
     high_fragment_count: "This candidate combines several tracked sections.",
     candidate_preview_generation_failure: "Preview images could not be generated.",
-    small_subject: "The player appears small in the recording.",
+    small_subject: "The player appears small in the video.",
     court_side_inconsistent: "Court-side estimates are inconsistent.",
     vertical_video_limitation: "Vertical video may reduce tracking reliability.",
   };

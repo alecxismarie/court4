@@ -15,6 +15,8 @@ from app.schemas.recording_quality import (
 )
 from app.schemas.video import VideoMetadataReport
 
+RECORDING_QUALITY_POLICY_VERSION = "recording-quality-v1"
+
 
 @dataclass(frozen=True)
 class RecordingQualityThresholds:

@@ -322,6 +322,8 @@ def test_full_controlled_api_workflow(
             "frame_interval": 1,
         },
     )
+    active_play = client.post(f"/api/v1/analyses/{analysis_id}/debug/active-play")
+    retrieved_active_play = client.get(f"/api/v1/analyses/{analysis_id}/debug/active-play")
     players = client.get(f"/api/v1/analyses/{analysis_id}/players")
     candidates = client.get(f"/api/v1/analyses/{analysis_id}/player-candidates")
     candidate_id = candidates.json()["candidates"][0]["candidate_id"]
@@ -342,6 +344,17 @@ def test_full_controlled_api_workflow(
 
     assert calibration.status_code == 200
     assert tracking.status_code == 200
+    assert active_play.status_code == 200
+    assert active_play.json()["shadow_mode"] is True
+    assert active_play.json()["validated"] is False
+    assert active_play.json()["policy_version"] == "active-play-v1"
+    assert {window["state"] for window in active_play.json()["windows"]} <= {
+        "LIKELY_ACTIVE",
+        "LIKELY_IDLE",
+        "UNKNOWN",
+    }
+    assert retrieved_active_play.status_code == 200
+    assert retrieved_active_play.json() == active_play.json()
     assert tracking.json()["tracking"]["eligible_player_track_ids"] == [1]
     assert players.status_code == 200
     assert players.json()["track_summaries"][0]["eligible_for_selection"] is True
@@ -357,6 +370,7 @@ def test_full_controlled_api_workflow(
     assert selection.status_code == 200
     assert selection.json()["selected_candidate_id"] == candidate_id
     assert analytics.status_code == 200
+    assert "active_play" not in analytics.json()
     assert analytics.json()["analytics"]["timeline_observation_count"] == 15
     assert analytics.json()["analytics"]["selected_player_candidate_id"] == candidate_id
     assert analytics.json()["analytics"]["source_raw_track_ids"] == [1]
@@ -511,8 +525,11 @@ def test_legacy_job_without_court_detection_fields_still_loads(
     )
 
     response = client.get(f"/api/v1/analyses/{analysis_id}")
+    active_play = client.get(f"/api/v1/analyses/{analysis_id}/debug/active-play")
 
     assert response.status_code == 200
+    assert active_play.status_code == 409
+    assert active_play.json()["error"]["code"] == "active_play_not_ready"
     assert response.json()["court_detection_status"] is None
     assert response.json()["court_detection_confidence"] is None
     assert response.json()["court_detection_selected_frame"] is None

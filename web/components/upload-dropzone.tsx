@@ -100,7 +100,9 @@ export function UploadDropzone({
   return (
     <form onSubmit={submit} className="space-y-5" aria-label="Upload match video">
       <section className="rounded-md border border-court-line bg-court-panel p-5">
-        <h2 className="text-lg font-semibold text-court-ink">How to record for Court4</h2>
+        <h2 className="text-lg font-semibold text-court-ink">
+          How to make a clear Court4 video
+        </h2>
         <ul className="mt-3 grid list-disc gap-2 pl-5 text-sm text-court-muted md:grid-cols-2">
           <li>Place the camera behind or diagonally behind the baseline.</li>
           <li>Keep the full court visible.</li>
@@ -149,7 +151,7 @@ export function UploadDropzone({
         </div>
         <h2 className="mt-5 text-xl font-semibold text-court-ink">Upload a match video</h2>
         <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-court-muted">
-          Court4 currently processes one recorded pickleball match at a time. After upload,
+          Court4 currently processes one pickleball match video at a time. After upload,
           you will confirm the court view and choose which tracked player is you.
         </p>
         <p className="mt-4 text-sm font-medium text-court-blue">

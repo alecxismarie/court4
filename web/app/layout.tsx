@@ -6,7 +6,7 @@ import { Providers } from "@/app/providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Court4",
+  title: "Court 4",
   description: "Know your game",
   icons: {
     icon: [

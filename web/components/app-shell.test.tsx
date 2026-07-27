@@ -45,6 +45,9 @@ describe("app shell navigation", () => {
       "href",
       "/settings",
     );
+    expect(
+      within(navigation).queryByRole("link", { name: /calibration readiness/i }),
+    ).not.toBeInTheDocument();
   });
 
   it("marks the active route clearly", () => {
@@ -56,6 +59,46 @@ describe("app shell navigation", () => {
       "aria-current",
       "page",
     );
+  });
+
+  it("keeps desktop navigation items on separate rows", () => {
+    renderWithQueryClient(<AppShell>Workspace</AppShell>);
+
+    const desktopNavigation = screen.getAllByRole("navigation", {
+      name: "Primary navigation",
+    })[1];
+    for (const link of within(desktopNavigation).getAllByRole("link")) {
+      expect(link).toHaveClass("w-full");
+    }
+  });
+
+  it("orders Player before Dashboard and Upload Match", () => {
+    renderWithQueryClient(<AppShell>Workspace</AppShell>);
+
+    const desktopNavigation = screen.getAllByRole("navigation", {
+      name: "Primary navigation",
+    })[1];
+    expect(
+      within(desktopNavigation)
+        .getAllByRole("link")
+        .map((link) => link.textContent?.trim()),
+    ).toEqual([
+      "Player",
+      "Dashboard",
+      "Upload Match",
+      "Performance",
+      "Matches",
+      "Settings",
+    ]);
+  });
+
+  it("centers the desktop logo above navigation", () => {
+    renderWithQueryClient(<AppShell>Workspace</AppShell>);
+
+    const desktopLogo = screen.getAllByRole("link", {
+      name: "Court4 dashboard",
+    })[1];
+    expect(desktopLogo).toHaveClass("flex", "justify-center");
   });
 
   it("uses the saved display name in the shell", async () => {

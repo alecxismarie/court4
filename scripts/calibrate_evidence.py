@@ -2,6 +2,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from app.services.calibration_readiness.integrity import write_integrity_record
 from app.services.evidence_calibration import (
     CalibrationManifestError,
     evaluate_manifest,
@@ -107,6 +108,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Focused disagreement report path.",
     )
     evaluate.add_argument(
+        "--integrity-output",
+        type=Path,
+        default=Path("calibration-readiness-integrity.json"),
+        help="Repeat-hash and policy-integrity metadata output path.",
+    )
+    evaluate.add_argument(
         "--allow-expensive-recomputation",
         action="store_true",
         help=(
@@ -192,6 +199,21 @@ def main(argv: list[str] | None = None) -> int:
             disagreements_path=args.disagreements_output,
             manifest_path=args.manifest,
         )
+        protected_paths = {
+            args.manifest.expanduser().resolve(),
+            args.json_output.expanduser().resolve(),
+            args.markdown_output.expanduser().resolve(),
+            args.disagreements_output.expanduser().resolve(),
+        }
+        if args.integrity_output.expanduser().resolve() in protected_paths:
+            raise ValueError("Integrity output must not overwrite a manifest or report.")
+        integrity = write_integrity_record(
+            results=results,
+            results_path=args.json_output,
+            report_path=args.markdown_output,
+            disagreements_path=args.disagreements_output,
+            output_path=args.integrity_output,
+        )
     except (CalibrationManifestError, OSError, ValueError) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 1
@@ -203,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"JSON report: {args.json_output}")
     print(f"Markdown report: {args.markdown_output}")
     print(f"Disagreement report: {args.disagreements_output}")
+    print(f"Deterministic report status: {integrity.deterministic_report_status.value}")
+    print(f"Integrity report: {args.integrity_output}")
     return 0
 
 

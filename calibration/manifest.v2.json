@@ -59,6 +59,7 @@
         "candidates_analysis_id": "phase13a-landscape-yolo-repro-20260722",
         "analytics_analysis_id": "dc4b4effac81444da71bd848a51ed590",
         "match_iq_analysis_id": "dc4b4effac81444da71bd848a51ed590",
+        "active_play_analysis_id": "phase13a-landscape-yolo-repro-20260722",
         "inference_run_id": "phase13a-landscape-yolo-repro-20260722",
         "reuse_notes": "Reuse existing local uncommitted video and preserved artifacts. Do not copy the video or rerun inference."
       },
@@ -94,6 +95,11 @@
           "intervals": [],
           "notes": "Aggregate Phase 1.5 labels are preserved; no interval-level ground truth exists.",
           "reviewer_confidence": "LOW"
+        },
+        "active_play": {
+          "intervals": [],
+          "notes": "Shadow output was generated from legacy artifacts without inference. No human Active Play labels have been created.",
+          "reviewer_confidence": null
         },
         "insight": {
           "recording_quality_verdict_correct": true,
@@ -149,6 +155,7 @@
         "candidates_analysis_id": "phase13a-vertical-yolo-repro-20260722",
         "analytics_analysis_id": null,
         "match_iq_analysis_id": null,
+        "active_play_analysis_id": "phase13a-vertical-yolo-repro-20260722",
         "inference_run_id": "phase13a-vertical-yolo-repro-20260722",
         "reuse_notes": "Reuse existing local uncommitted video and preserved artifacts. Analytics and Match IQ are intentionally absent."
       },
@@ -184,6 +191,11 @@
           "intervals": [],
           "notes": "Aggregate continuity review is preserved; no interval-level annotation exists.",
           "reviewer_confidence": "MODERATE"
+        },
+        "active_play": {
+          "intervals": [],
+          "notes": "Shadow output was generated from legacy artifacts without inference. No human Active Play labels have been created.",
+          "reviewer_confidence": null
         },
         "insight": {
           "recording_quality_verdict_correct": true,

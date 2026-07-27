@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.schemas.active_play import ActivePlayState
+
 CALIBRATION_MANIFEST_SCHEMA_VERSION = 2
 MINIMUM_RECOMMENDED_SAMPLE_SIZE = 5
 
@@ -159,6 +161,7 @@ class DisagreementCategory(StrEnum):
     measurement = "MEASUREMENT"
     insight_gating = "INSIGHT_GATING"
     wording = "WORDING"
+    active_play = "ACTIVE_PLAY"
     incomplete_annotation = "INCOMPLETE_ANNOTATION"
 
 
@@ -175,6 +178,7 @@ class ArtifactReuseReferences(StrictCalibrationModel):
     candidates_analysis_id: str | None = None
     analytics_analysis_id: str | None = None
     match_iq_analysis_id: str | None = None
+    active_play_analysis_id: str | None = None
     inference_run_id: str | None = None
     reuse_notes: str | None = None
 
@@ -190,6 +194,7 @@ class ArtifactReuseReferences(StrictCalibrationModel):
         "candidates_analysis_id",
         "analytics_analysis_id",
         "match_iq_analysis_id",
+        "active_play_analysis_id",
     )
     @classmethod
     def validate_analysis_id(cls, value: str | None) -> str | None:
@@ -215,6 +220,7 @@ class ArtifactReuseReferences(StrictCalibrationModel):
             self.candidates_analysis_id,
             self.analytics_analysis_id,
             self.match_iq_analysis_id,
+            self.active_play_analysis_id,
         )
         if not any(analysis_ids):
             raise ValueError("At least one reusable analysis ID is required.")
@@ -337,6 +343,57 @@ class TrackingReview(StrictCalibrationModel):
         return self
 
 
+class ExpectedActivePlayState(StrEnum):
+    likely_active = "LIKELY_ACTIVE"
+    likely_idle = "LIKELY_IDLE"
+    uncertain = "UNCERTAIN"
+    not_reviewed = "NOT_REVIEWED"
+
+
+class ActivePlayReviewInterval(StrictCalibrationModel):
+    start_time_seconds: float = Field(ge=0)
+    end_time_seconds: float = Field(gt=0)
+    expected_state: ExpectedActivePlayState = ExpectedActivePlayState.not_reviewed
+    boundary_tolerance_seconds: float = Field(default=0.5, ge=0)
+    court4_state: ActivePlayState | None = None
+    court4_start_time_seconds: float | None = Field(default=None, ge=0)
+    court4_end_time_seconds: float | None = Field(default=None, gt=0)
+    reviewer_confidence: ReviewerConfidence | None = None
+    false_active: bool | None = None
+    false_idle: bool | None = None
+    unknown_but_reviewable: bool | None = None
+    uncertain_human_label: bool = False
+    notes: str | None = None
+
+    @model_validator(mode="after")
+    def validate_interval(self) -> "ActivePlayReviewInterval":
+        if self.end_time_seconds <= self.start_time_seconds:
+            raise ValueError("Active Play review interval end time must be after start time.")
+        if (self.court4_start_time_seconds is None) != (self.court4_end_time_seconds is None):
+            raise ValueError("Court4 interval boundaries must be supplied together.")
+        if (
+            self.court4_start_time_seconds is not None
+            and self.court4_end_time_seconds is not None
+            and self.court4_end_time_seconds <= self.court4_start_time_seconds
+        ):
+            raise ValueError("Court4 interval end time must be after start time.")
+        return self
+
+
+class ActivePlayReview(StrictCalibrationModel):
+    intervals: list[ActivePlayReviewInterval] = Field(default_factory=list)
+    notes: str | None = None
+    reviewer_confidence: ReviewerConfidence | None = None
+
+    @model_validator(mode="after")
+    def reject_overlapping_intervals(self) -> "ActivePlayReview":
+        ordered = sorted(self.intervals, key=lambda item: item.start_time_seconds)
+        for previous, current in zip(ordered, ordered[1:], strict=False):
+            if current.start_time_seconds < previous.end_time_seconds:
+                raise ValueError("Active Play review intervals must not overlap.")
+        return self
+
+
 class GeneratedInsightReview(StrictCalibrationModel):
     insight_id: str
     measurement_correct: ReviewValue = ReviewValue.not_reviewed
@@ -375,6 +432,7 @@ class HumanReview(StrictCalibrationModel):
     recording: RecordingReview | None = None
     player_candidates: PlayerCandidateReview | None = None
     tracking: TrackingReview | None = None
+    active_play: ActivePlayReview | None = None
     insight: InsightReview | None = None
 
 
@@ -437,6 +495,7 @@ class CalibrationManifest(StrictCalibrationModel):
         ge=1,
     )
     threshold_simulations: list[ThresholdSimulation] = Field(default_factory=list)
+    active_play_threshold_simulations: list[ThresholdSimulation] = Field(default_factory=list)
     samples: list[CalibrationSample]
 
     @model_validator(mode="after")
@@ -488,6 +547,12 @@ class SampleCalibrationResult(StrictCalibrationModel):
     candidate_count: int | None = None
     selectable_candidate_count: int | None = None
     selected_candidate_id: str | None = None
+    active_play_generated: bool = False
+    active_play_policy_version: str | None = None
+    active_play_interval_count: int = Field(default=0, ge=0)
+    active_play_candidate_schema_version: int | None = Field(default=None, ge=1)
+    active_play_state_seconds: dict[str, float] = Field(default_factory=dict)
+    active_play_unknown_coverage: float | None = Field(default=None, ge=0, le=1)
     artifacts: list[ArtifactEvaluation] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
@@ -543,6 +608,39 @@ class TrackingContinuityMetrics(StrictCalibrationModel):
     gap_label_agreement: CountMetric
 
 
+class DurationMetric(StrictCalibrationModel):
+    seconds: float = Field(ge=0)
+    interval_count: int = Field(ge=0)
+
+
+class DurationRateMetric(StrictCalibrationModel):
+    numerator_seconds: float = Field(ge=0)
+    denominator_seconds: float = Field(ge=0)
+    percentage: float | None = Field(default=None, ge=0, le=100)
+    interval_count: int = Field(ge=0)
+    provisional: bool = True
+    note: str | None = None
+
+
+class BoundaryErrorMetric(StrictCalibrationModel):
+    boundary_count: int = Field(ge=0)
+    mean_absolute_seconds: float | None = Field(default=None, ge=0)
+    maximum_absolute_seconds: float | None = Field(default=None, ge=0)
+    within_tolerance_count: int = Field(ge=0)
+
+
+class ActivePlayCalibrationMetrics(StrictCalibrationModel):
+    reviewed_duration: DurationMetric
+    likely_active_agreement: DurationRateMetric
+    likely_idle_agreement: DurationRateMetric
+    false_active: DurationMetric
+    false_idle: DurationMetric
+    unknown: DurationMetric
+    boundary_error: BoundaryErrorMetric
+    abstention_rate: DurationRateMetric
+    coverage_rate: DurationRateMetric
+
+
 class InsightIntegrityMetrics(StrictCalibrationModel):
     fields: dict[str, CountMetric]
 
@@ -592,6 +690,7 @@ class CalibrationMetrics(StrictCalibrationModel):
     evidence_gates: EvidenceGateMetrics
     candidate_reliability: CandidateReliabilityMetrics
     tracking_continuity: TrackingContinuityMetrics
+    active_play: ActivePlayCalibrationMetrics
     insight_integrity: InsightIntegrityMetrics
 
 
@@ -600,6 +699,16 @@ class CalibrationResults(StrictCalibrationModel):
     dataset_id: str
     dataset_version: str
     manifest_sha256: str
+    recording_policy_version: str | None = None
+    recording_policy_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
+    active_play_policy_version: str | None = None
+    active_play_policy_sha256: str | None = Field(
+        default=None,
+        pattern=r"^[a-f0-9]{64}$",
+    )
     generated_at: datetime
     expensive_recomputation_enabled: bool
     expensive_inference_runs: int = Field(ge=0)
@@ -613,6 +722,7 @@ class CalibrationResults(StrictCalibrationModel):
     dataset_balance: DatasetBalanceSummary
     disagreements: list[CalibrationDisagreement]
     threshold_analysis: list[ThresholdSimulationResult]
+    active_play_threshold_analysis: list[ThresholdSimulationResult]
     samples_requiring_manual_review: list[str]
     dataset_limitations: list[str]
 

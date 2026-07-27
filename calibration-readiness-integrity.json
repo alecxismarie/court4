@@ -1,0 +1,11 @@
+{
+  "active_play_policy_sha256": "9699f926ef40833efd3c399fc1d483a41faa5800cad81f87d8e535bfb078ed54",
+  "calibration_report_sha256": "3a4c92ee0fcebc3c8992eec5d29116c7386bcd7486d0bb2836cae12c597ff27c",
+  "calibration_results_sha256": "219f32e8b61b729ba96257f8abcf8d5807fd025cfcf64379fb41b8d0ea408cd6",
+  "deterministic_report_status": "MATCH",
+  "disagreements_report_sha256": "e9b8eed3a8eb3bc7c07637d5bf4744152b42155f0a3a33eabf01e315dc72dec1",
+  "manifest_sha256": "040725c49ad79590e96be3155b70d29dd6f5256e3424135c8176580e1ec5768c",
+  "recording_policy_sha256": "0391f55023917ca304321b1f19b4a63852ce1be05c4c5cd42e053063c74b9383",
+  "schema_version": 1,
+  "verified_at": "2026-07-27T05:27:23.542516Z"
+}

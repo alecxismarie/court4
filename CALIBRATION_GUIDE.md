@@ -270,3 +270,18 @@ labels before measurement error can be validated.
 See `DATASET_COLLECTION_GUIDE.md` for consent, privacy, split, and file-handling rules.
 See `ANNOTATION_GUIDE.md` for identity, interval, and per-insight review.
 See `PHASE_1_5A_REPORT.md` for exact implementation and validation evidence.
+
+## Internal readiness dashboard
+
+After validating and evaluating the schema-v2 manifest twice, open
+`/internal/calibration`. Its only source is the read-only
+`GET /api/v1/internal/calibration-readiness` response.
+
+The page separates dataset coverage, artifact compatibility, review completion,
+provisional outcomes, Active Play shadow evidence, integrity, and readiness blockers.
+Missing, invalid, or hash-mismatched inputs are `MISSING`, `INVALID`, or `STALE` and
+force `NOT_READY`. A denominator of zero is `NOT_REVIEWED`, not a successful rate.
+
+The page has no annotation, inference, threshold, approval, or activation controls.
+Governance targets in `CALIBRATION_READINESS_POLICY.md` are engineering gates, not
+scientific claims.

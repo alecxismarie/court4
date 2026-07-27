@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from app.schemas.evidence_calibration import CalibrationResults, CountMetric
+from app.schemas.evidence_calibration import CalibrationResults, CountMetric, DurationRateMetric
 
 
 def write_calibration_reports(
@@ -38,6 +38,7 @@ def _render_markdown(results: CalibrationResults) -> str:
     quality = results.metrics.recording_quality
     gates = results.metrics.evidence_gates
     candidates = results.metrics.candidate_reliability
+    active_play = results.metrics.active_play
     lines = [
         "# Court4 Calibration Report",
         "",
@@ -204,6 +205,39 @@ def _render_markdown(results: CalibrationResults) -> str:
                 f"{_metric_text(results.metrics.tracking_continuity.gap_label_agreement)}"
             ),
             "",
+            "## Shadow Active Play interval review",
+            "",
+            (
+                f"- Reviewed duration: {active_play.reviewed_duration.seconds:.3f}s "
+                f"across {active_play.reviewed_duration.interval_count} intervals"
+            ),
+            (
+                "- Likely-active agreement: "
+                f"{_duration_rate_text(active_play.likely_active_agreement)}"
+            ),
+            (f"- Likely-idle agreement: {_duration_rate_text(active_play.likely_idle_agreement)}"),
+            (
+                f"- False-active: {active_play.false_active.seconds:.3f}s "
+                f"across {active_play.false_active.interval_count} intervals"
+            ),
+            (
+                f"- False-idle: {active_play.false_idle.seconds:.3f}s "
+                f"across {active_play.false_idle.interval_count} intervals"
+            ),
+            (
+                f"- Unknown: {active_play.unknown.seconds:.3f}s "
+                f"across {active_play.unknown.interval_count} intervals"
+            ),
+            f"- Abstention rate: {_duration_rate_text(active_play.abstention_rate)}",
+            f"- Coverage rate: {_duration_rate_text(active_play.coverage_rate)}",
+            (
+                "- Boundary error: "
+                f"{active_play.boundary_error.boundary_count} boundaries; "
+                f"mean={_optional_seconds(active_play.boundary_error.mean_absolute_seconds)}; "
+                f"max={_optional_seconds(active_play.boundary_error.maximum_absolute_seconds)}"
+            ),
+            "- These are raw interval/duration measures, not broad accuracy.",
+            "",
             "## Insight-integrity findings",
             "",
         ]
@@ -303,6 +337,28 @@ def _render_markdown(results: CalibrationResults) -> str:
     else:
         lines.append("- No alternative thresholds were requested.")
 
+    lines.extend(["", "## Active Play threshold-analysis findings", ""])
+    if results.active_play_threshold_analysis:
+        for simulation in results.active_play_threshold_analysis:
+            lines.extend(
+                [
+                    f"### `{simulation.threshold}`",
+                    "",
+                    f"- Current value: {simulation.current_value:g}",
+                    f"- Proposed value: {simulation.proposed_value:g}",
+                    ("- Affected samples: " + (", ".join(simulation.affected_samples) or "none")),
+                    "- Improvements: " + (", ".join(simulation.improvements) or "none"),
+                    "- Regressions: " + (", ".join(simulation.regressions) or "none"),
+                    "- Excluded validation/holdout samples: "
+                    + (", ".join(simulation.excluded_samples) or "none"),
+                    f"- Unchanged samples: {simulation.unchanged_samples}",
+                    f"- Remaining uncertainty: {simulation.remaining_uncertainty}",
+                    "",
+                ]
+            )
+    else:
+        lines.append("- No Active Play threshold simulations were requested.")
+
     lines.extend(["## Samples requiring manual review", ""])
     if results.samples_requiring_manual_review:
         lines.extend(f"- `{sample_id}`" for sample_id in results.samples_requiring_manual_review)
@@ -388,6 +444,19 @@ def _metric_text(metric: CountMetric) -> str:
     percentage = f"{metric.percentage:.1f}%" if metric.percentage is not None else "not available"
     suffix = " — provisional" if metric.provisional else ""
     return f"{metric.numerator}/{metric.denominator} ({percentage}){suffix}"
+
+
+def _duration_rate_text(metric: DurationRateMetric) -> str:
+    percentage = f"{metric.percentage:.1f}%" if metric.percentage is not None else "not available"
+    suffix = " — provisional" if metric.provisional else ""
+    return (
+        f"{metric.numerator_seconds:.3f}/{metric.denominator_seconds:.3f}s "
+        f"({percentage}; {metric.interval_count} intervals){suffix}"
+    )
+
+
+def _optional_seconds(value: float | None) -> str:
+    return f"{value:.3f}s" if value is not None else "not available"
 
 
 def _boolean_label(value: bool | None) -> str:

@@ -119,6 +119,41 @@ Phase 1.3B adds real-video track continuity and candidate review:
 - Recording-suitability guidance, including a recoverable vertical-video path
 - Ranked visual player cards; raw track IDs are confined to technical details
 
+Phase 1.6A.1 adds an internal calibration-readiness surface:
+
+- Read-only `GET /api/v1/internal/calibration-readiness` summary over persisted
+  manifests, reports, integrity hashes, and governance settings
+- Development-only `/internal/calibration` dashboard, deliberately absent from
+  player navigation
+- Versioned engineering governance verdicts with explicit blockers, warnings,
+  satisfied criteria, and recommended evidence-collection actions
+- Typed missing, invalid, and stale source states
+- Active Play shadow-review coverage that reports unreviewed denominators as
+  `NOT_REVIEWED`, never as a zero-error result
+- No inference, annotation, policy mutation, threshold approval, or player-facing
+  analytics changes
+
+See `CALIBRATION_READINESS_DASHBOARD_DESIGN.md`,
+`CALIBRATION_READINESS_POLICY.md`, and `PHASE_1_6A_1_REPORT.md`.
+
+The Evidence UX polish pass refines the player-facing analytics page without changing
+analytics or evidence policy:
+
+- Video Quality → Observation Coverage → Movement Measurements → Evidence
+  Confidence → Movement Insight → Observed Court Position → Movement Maps →
+  Limitations and Video Guidance
+- Plain-language video failures and recovery guidance with internal reason codes
+  kept out of the player view
+- Coverage derived only from persisted video and reliable-observation durations,
+  with explicit unavailable and legacy states
+- Separate, connected Video, Tracking, Measurement, Interpretation, and
+  Recommendation confidence stages
+- Measurement-only map labels, clear trajectory marker legends, and grouped
+  limitations
+
+See `EVIDENCE_UX_POLISH_PLAN.md`, `EVIDENCE_UX_COPY_GUIDE.md`, and
+`EVIDENCE_UX_POLISH_REPORT.md`.
+
 Phase 1.4 adds insight integrity and recording-quality gates:
 
 - Typed `EXCELLENT`, `GOOD`, `LIMITED`, and `UNSUITABLE` recording quality
@@ -134,7 +169,28 @@ Phase 1.4 adds insight integrity and recording-quality gates:
   unsuitable evidence
 - Disabled timeline-half rules that could reconnect movement across unobserved gaps
 
+Phase 1.6A adds a shadow-only Active Play framework:
+
+- Deterministic `LIKELY_ACTIVE`, `LIKELY_IDLE`, and `UNKNOWN` window estimates
+- Gap-safe, time-based motion features with typed coverage, reasons, limitations,
+  confidence, lineage, and `active-play-v1`
+- Conservative interval merging and versioned filesystem artifacts
+- Internal debug-only API access; no frontend or player-facing analytics changes
+- Partial-interval calibration labels and raw-duration metrics
+- No rally, point, serve, shot, scoring, ball, or tactical detection
+
 Still out of scope: auth, databases, cloud storage, background workers, ball tracking, pose estimation, scoring, shot classification, coaching, face recognition, biometric identification, player comparison, opponent analysis, and real-time processing.
+
+Shadow Active Play is not part of the normal player workflow. After tracking exists,
+developers may generate or retrieve it with:
+
+```text
+POST /api/v1/analyses/{analysis_id}/debug/active-play
+GET  /api/v1/analyses/{analysis_id}/debug/active-play
+```
+
+The output is an unvalidated activity estimate and must not be described as rally
+detection. See `ACTIVE_PLAY_DESIGN.md` and `ACTIVE_PLAY_CALIBRATION_GUIDE.md`.
 
 ## Project Structure
 
@@ -153,6 +209,7 @@ app/
   services/candidates/         Candidate generation, association, and review persistence
   services/video/              Video inspection, tracking, and selection services
   services/analytics/          Selected-player movement analytics and images
+  services/active_play/        Internal shadow motion windows and interval policy
   services/match_iq/           Deterministic movement-insight rules
   sports/pickleball/           Pickleball calibration, geometry, landmarks
 scripts/

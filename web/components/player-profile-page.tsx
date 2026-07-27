@@ -55,12 +55,12 @@ export function PlayerProfilePage() {
     <div className="space-y-6">
       <section className="rounded-md border border-court-line bg-white p-6 shadow-panel">
         <p className="text-sm font-semibold uppercase tracking-wide text-court-green">
-          Player profile
+          Your details
         </p>
-        <h1 className="mt-2 text-3xl font-semibold text-court-ink">Your player profile</h1>
+        <h1 className="mt-2 text-3xl font-semibold text-court-ink">Player profile</h1>
         <p className="mt-3 max-w-3xl text-sm leading-6 text-court-muted">
-          Save the player details Court4 should use inside this browser. This is not an
-          account and does not sync across devices.
+          Choose the details Court4 should use for you. They are saved only in this
+          browser—not to an account—and won&apos;t sync to other devices.
         </p>
       </section>
 

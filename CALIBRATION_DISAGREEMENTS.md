@@ -1,7 +1,7 @@
 # Court4 Calibration Disagreements
 
 Dataset: `court4-real-video-expansion` version `2.0.0`
-Manifest SHA256: `a10bc6660136365b660a9bffd96d8fa7bc37377dceb3e14d871a02d9fe9f2f2c`
+Manifest SHA256: `040725c49ad79590e96be3155b70d29dd6f5256e3424135c8176580e1ec5768c`
 
 This report identifies disagreements and incomplete annotations. It does not resolve labels or change policy.
 
@@ -11,14 +11,14 @@ Total findings: 2
 
 - Court4 output: PARTIAL
 - Human expectation: Complete independent review
-- Reason: Unreviewed fields: review_status, camera_distance, lighting_condition, recording_stability, human_review.player_candidates.stable_real_players, human_review.player_candidates.candidate_mappings, human_review.player_candidates.selected_player_identity_correct, human_review.tracking.intervals, human_review.insight.generated_insights
+- Reason: Unreviewed fields: review_status, camera_distance, lighting_condition, recording_stability, human_review.player_candidates.stable_real_players, human_review.player_candidates.candidate_mappings, human_review.player_candidates.selected_player_identity_correct, human_review.tracking.intervals, human_review.active_play.intervals, human_review.insight.generated_insights
 - Affected threshold or rule: not identified
-- Artifact evidence: inspection_metadata:READY, analysis_job:READY, tracking:READY, player_candidates:LEGACY_COMPATIBLE, analytics:READY, timeline:READY, match_iq:LEGACY_COMPATIBLE, court_calibration:READY
+- Artifact evidence: inspection_metadata:READY, analysis_job:READY, tracking:READY, player_candidates:LEGACY_COMPATIBLE, analytics:READY, timeline:READY, match_iq:LEGACY_COMPATIBLE, active_play:READY, court_calibration:READY
 
 ## 2. `vertical-indoor-drill-01` — INCOMPLETE_ANNOTATION
 
 - Court4 output: PARTIAL
 - Human expectation: Complete independent review
-- Reason: Unreviewed fields: review_status, match_format, camera_distance, lighting_condition, recording_stability, human_review.player_candidates.stable_real_players, human_review.player_candidates.candidate_mappings, human_review.player_candidates.selected_player_identity_correct, human_review.tracking.intervals, human_review.insight.generated_insights
+- Reason: Unreviewed fields: review_status, match_format, camera_distance, lighting_condition, recording_stability, human_review.player_candidates.stable_real_players, human_review.player_candidates.candidate_mappings, human_review.player_candidates.selected_player_identity_correct, human_review.tracking.intervals, human_review.active_play.intervals, human_review.insight.generated_insights
 - Affected threshold or rule: not identified
-- Artifact evidence: inspection_metadata:READY, analysis_job:READY, tracking:READY, player_candidates:LEGACY_COMPATIBLE, analytics:MISSING, timeline:MISSING, match_iq:MISSING, court_calibration:READY
+- Artifact evidence: inspection_metadata:READY, analysis_job:READY, tracking:READY, player_candidates:LEGACY_COMPATIBLE, analytics:MISSING, timeline:MISSING, match_iq:MISSING, active_play:READY, court_calibration:READY

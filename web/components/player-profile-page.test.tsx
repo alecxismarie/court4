@@ -7,6 +7,21 @@ import { PLAYER_PROFILE_STORAGE_KEY } from "@/lib/player-profile";
 import { renderWithQueryClient } from "@/test/render";
 
 describe("player profile page", () => {
+  it("explains the browser-local profile without repetitive headings", () => {
+    renderWithQueryClient(<PlayerProfilePage />);
+
+    expect(screen.getByText("Your details")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Player profile" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/saved only in this browser—not to an account/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Your player profile" }),
+    ).not.toBeInTheDocument();
+  });
+
   beforeEach(() => {
     window.localStorage.clear();
   });

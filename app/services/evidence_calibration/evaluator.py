@@ -8,12 +8,20 @@ from typing import Any, cast
 
 from pydantic import BaseModel, ValidationError
 
+from app.schemas.active_play import (
+    ACTIVE_PLAY_POLICY_VERSION,
+    ActivePlayReport,
+    ActivePlayState,
+    MotionFeatureWindow,
+)
 from app.schemas.analytics import AnalyticsReport, TimelineReport
 from app.schemas.calibration import CourtCalibrationReport
 from app.schemas.evidence_calibration import (
+    ActivePlayCalibrationMetrics,
     ArtifactEvaluation,
     ArtifactEvaluationStatus,
     ArtifactReadiness,
+    BoundaryErrorMetric,
     CalibrationDisagreement,
     CalibrationManifest,
     CalibrationMetrics,
@@ -26,7 +34,10 @@ from app.schemas.evidence_calibration import (
     CountMetric,
     DatasetSplit,
     DisagreementCategory,
+    DurationMetric,
+    DurationRateMetric,
     EvidenceGateMetrics,
+    ExpectedActivePlayState,
     ExpectedInsightEligibility,
     InsightIntegrityMetrics,
     PlayerCandidateReview,
@@ -48,6 +59,9 @@ from app.schemas.player_candidates import (
 from app.schemas.player_tracking import PlayerTrackingReport
 from app.schemas.recording_quality import RecordingQualityAssessment
 from app.schemas.video import VideoMetadataReport
+from app.services.active_play.engine import classify_motion_windows
+from app.services.active_play.policy import ACTIVE_PLAY_POLICY
+from app.services.calibration_readiness.integrity import canonical_policy_sha256
 from app.services.candidates.service import CANDIDATE_SCHEMA_VERSION, THRESHOLDS
 from app.services.evidence_calibration.dataset import (
     incomplete_review_fields,
@@ -57,6 +71,7 @@ from app.services.evidence_calibration.manifest import LoadedCalibrationManifest
 from app.services.match_iq.engine import MATCH_IQ_ENGINE_VERSION, generate_match_iq
 from app.services.recording_quality import (
     QUALITY_THRESHOLDS,
+    RECORDING_QUALITY_POLICY_VERSION,
     RecordingQualityThresholds,
     assess_analysis_readiness,
     assess_upload_preflight,
@@ -100,6 +115,7 @@ class _ArtifactContext:
     analytics: AnalyticsReport | None
     timeline: TimelineReport | None
     persisted_match_iq: MatchIQReport | None
+    active_play: ActivePlayReport | None
     calibration_available: bool
     artifacts: tuple[ArtifactEvaluation, ...]
     warnings: tuple[str, ...]
@@ -155,6 +171,7 @@ def evaluate_manifest(
                 analytics=None,
                 timeline=None,
                 persisted_match_iq=None,
+                active_play=None,
                 calibration_available=False,
                 artifacts=(),
                 warnings=(),
@@ -179,6 +196,10 @@ def evaluate_manifest(
         evaluated,
         loaded.manifest,
     )
+    active_play_threshold_analysis = _active_play_threshold_analysis(
+        evaluated,
+        loaded.manifest,
+    )
     manual_review = sorted(
         item.sample.sample_id for item in evaluated if _requires_manual_review(item)
     )
@@ -187,6 +208,10 @@ def evaluate_manifest(
         dataset_id=loaded.manifest.dataset_id,
         dataset_version=loaded.manifest.dataset_version,
         manifest_sha256=loaded.sha256,
+        recording_policy_version=RECORDING_QUALITY_POLICY_VERSION,
+        recording_policy_sha256=canonical_policy_sha256(QUALITY_THRESHOLDS),
+        active_play_policy_version=ACTIVE_PLAY_POLICY.version,
+        active_play_policy_sha256=canonical_policy_sha256(ACTIVE_PLAY_POLICY),
         generated_at=loaded.manifest.reference_time,
         expensive_recomputation_enabled=allow_expensive_recomputation,
         expensive_inference_runs=0,
@@ -200,6 +225,7 @@ def evaluate_manifest(
         dataset_balance=balance,
         disagreements=disagreements,
         threshold_analysis=threshold_analysis,
+        active_play_threshold_analysis=active_play_threshold_analysis,
         samples_requiring_manual_review=manual_review,
         dataset_limitations=_dataset_limitations(evaluated, loaded.manifest),
     )
@@ -280,6 +306,40 @@ def _evaluate_sample(
         ),
         selected_candidate_id=(
             context.candidates.selected_candidate_id if context.candidates is not None else None
+        ),
+        active_play_generated=context.active_play is not None,
+        active_play_policy_version=(
+            context.active_play.policy_version if context.active_play is not None else None
+        ),
+        active_play_interval_count=(
+            len(context.active_play.intervals) if context.active_play is not None else 0
+        ),
+        active_play_candidate_schema_version=(
+            context.active_play.source_artifacts.candidate_schema_version
+            if context.active_play is not None
+            else None
+        ),
+        active_play_state_seconds=(
+            {
+                ActivePlayState.likely_active.value: (
+                    context.active_play.summary.likely_active_seconds
+                ),
+                ActivePlayState.likely_idle.value: (
+                    context.active_play.summary.likely_idle_seconds
+                ),
+                ActivePlayState.unknown.value: context.active_play.summary.unknown_seconds,
+            }
+            if context.active_play is not None
+            else {}
+        ),
+        active_play_unknown_coverage=(
+            (
+                context.active_play.summary.unknown_seconds
+                / context.active_play.summary.source_duration_seconds
+            )
+            if context.active_play is not None
+            and context.active_play.summary.source_duration_seconds > 0
+            else None
         ),
         artifacts=list(context.artifacts),
         warnings=list(dict.fromkeys(warnings)),
@@ -385,6 +445,19 @@ def _load_artifacts(sample: CalibrationSample, repository_root: Path) -> _Artifa
         errors=errors,
         required=False,
     )
+    active_play, _ = _load_versioned_artifact(
+        artifact_root=artifact_root,
+        analysis_id=reuse.active_play_analysis_id,
+        relative_path="active_play/active_play.json",
+        label="active_play",
+        model=ActivePlayReport,
+        expected_version=ACTIVE_PLAY_POLICY_VERSION,
+        version_key="policy_version",
+        artifacts=artifacts,
+        warnings=warnings,
+        errors=errors,
+        required=False,
+    )
 
     court_reference, court_readiness = _find_calibration(
         artifact_root,
@@ -454,6 +527,7 @@ def _load_artifacts(sample: CalibrationSample, repository_root: Path) -> _Artifa
         analytics=analytics,
         timeline=timeline,
         persisted_match_iq=persisted_match_iq,
+        active_play=active_play,
         calibration_available=calibration_available,
         artifacts=tuple(artifacts),
         warnings=tuple(dict.fromkeys(warnings)),
@@ -1081,12 +1155,189 @@ def _aggregate_metrics(
             len(labels_for_field),
             minimum_sample_size,
         )
+    active_play_metrics = _active_play_metrics(evaluated, minimum_sample_size)
     return CalibrationMetrics(
         recording_quality=quality_metrics,
         evidence_gates=evidence_metrics,
         candidate_reliability=candidate_metrics,
         tracking_continuity=tracking_metrics,
+        active_play=active_play_metrics,
         insight_integrity=InsightIntegrityMetrics(fields=insight_fields),
+    )
+
+
+def _active_play_metrics(
+    evaluated: Sequence[_EvaluatedSample],
+    minimum_sample_size: int,
+) -> ActivePlayCalibrationMetrics:
+    intervals = [
+        interval
+        for item in evaluated
+        if item.sample.human_review is not None and item.sample.human_review.active_play is not None
+        for interval in item.sample.human_review.active_play.intervals
+    ]
+    reviewed = [
+        interval
+        for interval in intervals
+        if interval.expected_state
+        in {
+            ExpectedActivePlayState.likely_active,
+            ExpectedActivePlayState.likely_idle,
+        }
+        and not interval.uncertain_human_label
+    ]
+    active = [
+        interval
+        for interval in reviewed
+        if interval.expected_state == ExpectedActivePlayState.likely_active
+    ]
+    idle = [
+        interval
+        for interval in reviewed
+        if interval.expected_state == ExpectedActivePlayState.likely_idle
+    ]
+
+    def duration(interval: Any) -> float:
+        return float(interval.end_time_seconds - interval.start_time_seconds)
+
+    reviewed_seconds = sum(duration(interval) for interval in reviewed)
+    active_seconds = sum(duration(interval) for interval in active)
+    idle_seconds = sum(duration(interval) for interval in idle)
+    active_agreement_seconds = sum(
+        duration(interval)
+        for interval in active
+        if interval.court4_state == ActivePlayState.likely_active
+    )
+    idle_agreement_seconds = sum(
+        duration(interval)
+        for interval in idle
+        if interval.court4_state == ActivePlayState.likely_idle
+    )
+    false_active = [
+        interval
+        for interval in reviewed
+        if interval.false_active is True
+        or (
+            interval.expected_state == ExpectedActivePlayState.likely_idle
+            and interval.court4_state == ActivePlayState.likely_active
+        )
+    ]
+    false_idle = [
+        interval
+        for interval in reviewed
+        if interval.false_idle is True
+        or (
+            interval.expected_state == ExpectedActivePlayState.likely_active
+            and interval.court4_state == ActivePlayState.likely_idle
+        )
+    ]
+    unknown = [
+        interval
+        for interval in reviewed
+        if interval.court4_state == ActivePlayState.unknown
+        or (interval.court4_state is None and interval.unknown_but_reviewable is True)
+    ]
+    covered = [interval for interval in reviewed if interval.court4_state is not None]
+    boundary_errors: list[tuple[float, float]] = []
+    for interval in reviewed:
+        if (
+            interval.court4_start_time_seconds is not None
+            and interval.court4_end_time_seconds is not None
+        ):
+            boundary_errors.extend(
+                [
+                    (
+                        abs(interval.court4_start_time_seconds - interval.start_time_seconds),
+                        interval.boundary_tolerance_seconds,
+                    ),
+                    (
+                        abs(interval.court4_end_time_seconds - interval.end_time_seconds),
+                        interval.boundary_tolerance_seconds,
+                    ),
+                ]
+            )
+    provisional = len(reviewed) < minimum_sample_size
+    note = (
+        "Raw reviewed duration only; this dataset is too small for broad accuracy claims."
+        if provisional
+        else None
+    )
+    return ActivePlayCalibrationMetrics(
+        reviewed_duration=DurationMetric(
+            seconds=reviewed_seconds,
+            interval_count=len(reviewed),
+        ),
+        likely_active_agreement=_duration_rate(
+            active_agreement_seconds,
+            active_seconds,
+            len(active),
+            provisional,
+            note,
+        ),
+        likely_idle_agreement=_duration_rate(
+            idle_agreement_seconds,
+            idle_seconds,
+            len(idle),
+            provisional,
+            note,
+        ),
+        false_active=DurationMetric(
+            seconds=sum(duration(interval) for interval in false_active),
+            interval_count=len(false_active),
+        ),
+        false_idle=DurationMetric(
+            seconds=sum(duration(interval) for interval in false_idle),
+            interval_count=len(false_idle),
+        ),
+        unknown=DurationMetric(
+            seconds=sum(duration(interval) for interval in unknown),
+            interval_count=len(unknown),
+        ),
+        boundary_error=BoundaryErrorMetric(
+            boundary_count=len(boundary_errors),
+            mean_absolute_seconds=(
+                sum(error for error, _ in boundary_errors) / len(boundary_errors)
+                if boundary_errors
+                else None
+            ),
+            maximum_absolute_seconds=(
+                max(error for error, _ in boundary_errors) if boundary_errors else None
+            ),
+            within_tolerance_count=sum(error <= tolerance for error, tolerance in boundary_errors),
+        ),
+        abstention_rate=_duration_rate(
+            sum(duration(interval) for interval in unknown),
+            reviewed_seconds,
+            len(unknown),
+            provisional,
+            note,
+        ),
+        coverage_rate=_duration_rate(
+            sum(duration(interval) for interval in covered),
+            reviewed_seconds,
+            len(covered),
+            provisional,
+            note,
+        ),
+    )
+
+
+def _duration_rate(
+    numerator_seconds: float,
+    denominator_seconds: float,
+    interval_count: int,
+    provisional: bool,
+    note: str | None,
+) -> DurationRateMetric:
+    return DurationRateMetric(
+        numerator_seconds=numerator_seconds,
+        denominator_seconds=denominator_seconds,
+        percentage=(
+            numerator_seconds / denominator_seconds * 100 if denominator_seconds > 0 else None
+        ),
+        interval_count=interval_count,
+        provisional=provisional,
+        note=note,
     )
 
 
@@ -1251,6 +1502,174 @@ def _threshold_analysis(
             )
         )
     return results
+
+
+def _active_play_threshold_analysis(
+    evaluated: list[_EvaluatedSample],
+    manifest: CalibrationManifest,
+) -> list[ThresholdSimulationResult]:
+    supported = {
+        field.name
+        for field in fields(type(ACTIVE_PLAY_POLICY))
+        if field.name != "policy_version"
+        and isinstance(getattr(ACTIVE_PLAY_POLICY, field.name), (int, float))
+    }
+    eligible = [item for item in evaluated if item.sample.dataset_split == DatasetSplit.development]
+    excluded = sorted(
+        item.sample.sample_id
+        for item in evaluated
+        if item.sample.dataset_split != DatasetSplit.development
+    )
+    results: list[ThresholdSimulationResult] = []
+    for simulation in manifest.active_play_threshold_simulations:
+        if simulation.threshold not in supported:
+            results.append(
+                ThresholdSimulationResult(
+                    threshold=simulation.threshold,
+                    current_value=0,
+                    proposed_value=simulation.proposed_value,
+                    affected_samples=[],
+                    improvements=[],
+                    regressions=[],
+                    unchanged_samples=len(eligible),
+                    excluded_samples=excluded,
+                    exploratory=True,
+                    remaining_uncertainty=(
+                        "Unsupported Active Play threshold; production policy was unchanged."
+                    ),
+                )
+            )
+            continue
+
+        current_value = float(getattr(ACTIVE_PLAY_POLICY, simulation.threshold))
+        proposed = replace(
+            ACTIVE_PLAY_POLICY,
+            **cast(Any, {simulation.threshold: simulation.proposed_value}),
+        )
+        affected: list[str] = []
+        improvements: list[str] = []
+        regressions: list[str] = []
+        unchanged = 0
+        for item in eligible:
+            review = (
+                item.sample.human_review.active_play
+                if item.sample.human_review is not None
+                else None
+            )
+            report = item.context.active_play
+            analysis_id = item.sample.artifacts.active_play_analysis_id
+            if review is None or not review.intervals or report is None or analysis_id is None:
+                unchanged += 1
+                continue
+            feature_path = (
+                item.context.artifact_root / analysis_id / "active_play" / "features.jsonl"
+            )
+            try:
+                features = [
+                    MotionFeatureWindow.model_validate_json(line)
+                    for line in feature_path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+            except (OSError, ValidationError, ValueError):
+                unchanged += 1
+                continue
+            simulated_windows = classify_motion_windows(
+                features,
+                source_duration_seconds=report.summary.source_duration_seconds,
+                recording_quality=(
+                    item.context.candidates.analysis_readiness
+                    if item.context.candidates is not None
+                    else None
+                ),
+                source_artifacts_current=(
+                    report.source_artifacts.candidate_schema_version == CANDIDATE_SCHEMA_VERSION
+                ),
+                policy=proposed,
+            )
+            current_states = [
+                _state_for_review_interval(
+                    report.windows,
+                    interval.start_time_seconds,
+                    interval.end_time_seconds,
+                )
+                for interval in review.intervals
+            ]
+            simulated_states = [
+                _state_for_review_interval(
+                    simulated_windows,
+                    interval.start_time_seconds,
+                    interval.end_time_seconds,
+                )
+                for interval in review.intervals
+            ]
+            if current_states == simulated_states:
+                unchanged += 1
+                continue
+            affected.append(item.sample.sample_id)
+            current_matches = _active_play_review_match_count(review.intervals, current_states)
+            simulated_matches = _active_play_review_match_count(review.intervals, simulated_states)
+            if simulated_matches > current_matches:
+                improvements.append(item.sample.sample_id)
+            elif simulated_matches < current_matches:
+                regressions.append(item.sample.sample_id)
+        results.append(
+            ThresholdSimulationResult(
+                threshold=simulation.threshold,
+                current_value=current_value,
+                proposed_value=simulation.proposed_value,
+                affected_samples=affected,
+                improvements=improvements,
+                regressions=regressions,
+                unchanged_samples=unchanged,
+                excluded_samples=excluded,
+                exploratory=True,
+                remaining_uncertainty=(
+                    "Exploratory development-split shadow simulation only. Validation and "
+                    "holdout samples are excluded; reviewer labels and active-play-v1 are "
+                    "never mutated."
+                ),
+            )
+        )
+    return results
+
+
+def _state_for_review_interval(
+    windows: Sequence[Any],
+    start_seconds: float,
+    end_seconds: float,
+) -> ActivePlayState:
+    overlap_by_state = {state: 0.0 for state in ActivePlayState}
+    for window in windows:
+        overlap = max(
+            0.0,
+            min(end_seconds, window.end_seconds) - max(start_seconds, window.start_seconds),
+        )
+        overlap_by_state[window.state] += overlap
+    if overlap_by_state[ActivePlayState.unknown] > 0:
+        return ActivePlayState.unknown
+    maximum = max(overlap_by_state.values(), default=0)
+    leaders = [state for state, overlap in overlap_by_state.items() if overlap == maximum]
+    if maximum <= 0 or len(leaders) != 1:
+        return ActivePlayState.unknown
+    return leaders[0]
+
+
+def _active_play_review_match_count(
+    intervals: Sequence[Any],
+    states: Sequence[ActivePlayState],
+) -> int:
+    return sum(
+        (
+            interval.expected_state == ExpectedActivePlayState.likely_active
+            and state == ActivePlayState.likely_active
+        )
+        or (
+            interval.expected_state == ExpectedActivePlayState.likely_idle
+            and state == ActivePlayState.likely_idle
+        )
+        for interval, state in zip(intervals, states, strict=True)
+        if not interval.uncertain_human_label
+    )
 
 
 def _common_failure_reasons(evaluated: list[_EvaluatedSample]) -> dict[str, int]:

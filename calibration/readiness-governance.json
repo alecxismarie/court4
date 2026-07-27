@@ -1,0 +1,13 @@
+{
+  "active_play_policy_review_frozen": false,
+  "false_active_budget_approved": false,
+  "false_idle_budget_approved": false,
+  "notes": [
+    "Phase 1.6A remains shadow-only and unvalidated.",
+    "No Active Play interval error budgets have been approved.",
+    "No policy has been approved for progression to Phase 1.6B."
+  ],
+  "readiness_policy_version": "calibration-readiness-v1",
+  "recording_policy_review_frozen": false,
+  "schema_version": 1
+}

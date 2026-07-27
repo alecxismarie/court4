@@ -10,6 +10,7 @@ from app.schemas.evidence_calibration import (
     CalibrationQualityLabel,
     CalibrationResults,
 )
+from app.services.active_play.policy import ACTIVE_PLAY_POLICY
 from app.services.evidence_calibration import (
     CalibrationManifestError,
     evaluate_manifest,
@@ -250,6 +251,93 @@ def test_threshold_simulation_reports_improvement_without_mutating_policy(
     assert QUALITY_THRESHOLDS.blocking_short_edge_pixels == 480
 
 
+def test_active_play_interval_metrics_report_raw_seconds_and_counts(
+    tmp_path: Path,
+) -> None:
+    human_review = {
+        "active_play": {
+            "intervals": [
+                {
+                    "start_time_seconds": 0,
+                    "end_time_seconds": 10,
+                    "expected_state": "LIKELY_ACTIVE",
+                    "court4_state": "LIKELY_ACTIVE",
+                    "court4_start_time_seconds": 0.2,
+                    "court4_end_time_seconds": 9.7,
+                    "boundary_tolerance_seconds": 0.5,
+                    "reviewer_confidence": "HIGH",
+                },
+                {
+                    "start_time_seconds": 10,
+                    "end_time_seconds": 20,
+                    "expected_state": "LIKELY_IDLE",
+                    "court4_state": "LIKELY_ACTIVE",
+                    "false_active": True,
+                },
+                {
+                    "start_time_seconds": 20,
+                    "end_time_seconds": 25,
+                    "expected_state": "LIKELY_ACTIVE",
+                    "court4_state": "LIKELY_IDLE",
+                    "false_idle": True,
+                },
+                {
+                    "start_time_seconds": 25,
+                    "end_time_seconds": 30,
+                    "expected_state": "LIKELY_IDLE",
+                    "court4_state": "UNKNOWN",
+                    "unknown_but_reviewable": True,
+                },
+            ]
+        }
+    }
+    results = _evaluate(
+        tmp_path,
+        _manifest([_sample("interval-review", human_review=human_review)]),
+    )
+
+    metrics = results.metrics.active_play
+    assert metrics.reviewed_duration.seconds == 30
+    assert metrics.reviewed_duration.interval_count == 4
+    assert metrics.likely_active_agreement.numerator_seconds == 10
+    assert metrics.likely_active_agreement.denominator_seconds == 15
+    assert metrics.false_active.seconds == 10
+    assert metrics.false_active.interval_count == 1
+    assert metrics.false_idle.seconds == 5
+    assert metrics.unknown.seconds == 5
+    assert metrics.abstention_rate.percentage == pytest.approx(100 / 6)
+    assert metrics.coverage_rate.percentage == 100
+    assert metrics.boundary_error.boundary_count == 2
+    assert metrics.boundary_error.mean_absolute_seconds == pytest.approx(0.25)
+    assert metrics.boundary_error.within_tolerance_count == 2
+
+
+def test_active_play_threshold_simulation_excludes_holdout_and_preserves_policy(
+    tmp_path: Path,
+) -> None:
+    development = _sample("development")
+    holdout = _sample("holdout")
+    holdout["dataset_split"] = "HOLDOUT"
+    payload = _manifest(
+        [development, holdout],
+        active_play_threshold_simulations=[
+            {
+                "threshold": "minimum_window_coverage_ratio",
+                "proposed_value": 0.7,
+                "rationale": "Exploratory shadow-only test.",
+            }
+        ],
+    )
+
+    results = _evaluate(tmp_path, payload)
+    simulation = results.active_play_threshold_analysis[0]
+
+    assert simulation.current_value == 0.65
+    assert simulation.excluded_samples == ["holdout"]
+    assert simulation.unchanged_samples == 1
+    assert ACTIVE_PLAY_POLICY.minimum_window_coverage_ratio == 0.65
+
+
 def test_report_generation_is_deterministic_and_has_no_absolute_paths(
     tmp_path: Path,
 ) -> None:
@@ -353,6 +441,7 @@ def _manifest(
     samples: list[dict[str, object]],
     *,
     threshold_simulations: list[dict[str, object]] | None = None,
+    active_play_threshold_simulations: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -361,6 +450,7 @@ def _manifest(
         "reference_time": REFERENCE_TIME,
         "minimum_recommended_sample_size": 5,
         "threshold_simulations": threshold_simulations or [],
+        "active_play_threshold_simulations": active_play_threshold_simulations or [],
         "samples": samples,
     }
 

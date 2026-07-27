@@ -24,6 +24,9 @@ ENV MPLCONFIGDIR=/tmp/matplotlib
 COPY app ./app
 COPY scripts ./scripts
 COPY tests ./tests
+COPY calibration ./calibration
+COPY calibration-results.json CALIBRATION_REPORT.md CALIBRATION_DISAGREEMENTS.md ./
+COPY calibration-readiness-integrity.json ./
 COPY data ./data
 
 EXPOSE 8000

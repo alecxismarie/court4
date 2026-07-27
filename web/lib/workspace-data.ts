@@ -76,7 +76,7 @@ export function getMatchIqAvailability(record: WorkspaceAnalysisRecord): string 
     matchIQ?.quality_gate === "MEASUREMENT_ONLY" ||
     matchIQ?.quality_gate === "INSUFFICIENT_EVIDENCE"
   ) {
-    return "Limited by recording quality";
+    return "Limited by video quality";
   }
   if (record.job?.status === "failed") {
     return "No verified insight yet";

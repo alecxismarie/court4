@@ -7,7 +7,8 @@ type Scenario =
   | "manual"
   | "model-missing"
   | "fragmented"
-  | "review";
+  | "review"
+  | "legacy";
 type WorkflowStage =
   | "inspected"
   | "manual_required"
@@ -49,19 +50,24 @@ test("controlled happy path persists Match IQ and renders share preview", async 
   await expect(page.getByText("You selected Player 1")).toBeVisible();
   await page.getByRole("button", { name: /generate my match iq/i }).click();
 
-  await expect(page.getByRole("heading", { name: "Movement insight" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Movement Insight" })).toBeVisible();
+  await expect(page.getByText("Verified movement insight")).toBeVisible();
+  await expect(
+    page.getByText("Court4 reliably observed 77% of this video."),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Observed Court Position" })).toBeVisible();
   await expect(
     page.getByText("Court4 measured 60.0% of tracked time in the transition zone.", {
       exact: true,
     }),
   ).toBeVisible();
   await page.reload();
-  await expect(page.getByRole("heading", { name: "Movement insight" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Movement Insight" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Share Performance Card" })).toBeVisible();
   await expect(page.locator("canvas[aria-label^='Court4 share card preview']")).toBeVisible();
 });
 
-test("limited recording persists measurement-only output after refresh", async ({ page }) => {
+test("limited video persists measurement-only output after refresh", async ({ page }) => {
   const state: MockState = {
     analysisId: "e2e-limited",
     scenario: "limited",
@@ -71,15 +77,17 @@ test("limited recording persists measurement-only output after refresh", async (
 
   await page.goto("/matches/e2e-limited/analytics");
   await expect(page.getByText("Limited", { exact: true })).toBeVisible();
-  await expect(page.getByText("Limited by recording quality")).toBeVisible();
+  await expect(page.getByText("Measurement only").first()).toBeVisible();
   await expect(
-    page.getByText("Interpretation is suppressed because the evidence is limited."),
+    page.getByText(
+      "Court4 is keeping this as a measurement because the evidence is limited.",
+    ),
   ).toBeVisible();
   await page.reload();
-  await expect(page.getByText("Limited by recording quality")).toBeVisible();
+  await expect(page.getByText("Measurement only").first()).toBeVisible();
 });
 
-test("unsuitable recording suppresses normal Match IQ and offers retry", async ({ page }) => {
+test("unsuitable video suppresses normal Match IQ and offers retry", async ({ page }) => {
   const state: MockState = {
     analysisId: "e2e-unsuitable",
     scenario: "unsuitable",
@@ -89,9 +97,36 @@ test("unsuitable recording suppresses normal Match IQ and offers retry", async (
 
   await page.goto("/matches/e2e-unsuitable/analytics");
   await expect(page.getByText("Unsuitable")).toBeVisible();
-  await expect(page.getByText("Normal Match IQ is suppressed")).toBeVisible();
-  await expect(page.getByRole("link", { name: /try another recording/i })).toBeVisible();
+  await expect(
+    page.getByText("This video isn’t suitable for reliable match analysis."),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Why no Match IQ is shown" })).toBeVisible();
+  await expect(
+    page.getByText("Player tracking was too fragmented for a trustworthy insight."),
+  ).toBeVisible();
+  await expect(page.getByRole("link", { name: /try another video/i })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Share Performance Card" })).toHaveCount(0);
+});
+
+test("legacy coverage and confidence remain honest on mobile", async ({ page }) => {
+  const state: MockState = {
+    analysisId: "e2e-legacy",
+    scenario: "legacy",
+    stage: "completed",
+  };
+  await installApiMocks(page, state);
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  await page.goto("/matches/e2e-legacy/analytics");
+
+  await expect(page.getByText("Legacy analysis — coverage unavailable")).toBeVisible();
+  const chain = page.getByRole("list", { name: "Evidence confidence dependency chain" });
+  await expect(chain.getByText("Unavailable")).toHaveCount(5);
+  await expect(page.getByText("0%", { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/LIKELY_ACTIVE|LIKELY_IDLE|active-play-v1/i)).toHaveCount(0);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+  ).toBe(true);
 });
 
 test("manual calibration fallback saves four ordered points", async ({ page }) => {
@@ -609,6 +644,7 @@ function candidate(
 function analyticsResponse(state: MockState) {
   const unsuitable = state.scenario === "unsuitable";
   const measurementOnly = state.scenario === "limited" || state.scenario === "fragmented";
+  const legacy = state.scenario === "legacy";
   return {
     analysis_id: state.analysisId,
     analytics: {
@@ -617,6 +653,13 @@ function analyticsResponse(state: MockState) {
       source_observations: "tracking/observations.jsonl",
       calibration_id: "auto-court-detection",
       selected_player_track_id: 1,
+      selected_player_candidate_id: legacy ? null : "pc-one",
+      source_fragment_count: state.scenario === "fragmented" ? 2 : 1,
+      source_raw_track_ids: state.scenario === "fragmented" ? [1, 8] : [1],
+      ...(legacy ? {} : { observed_duration_seconds: unsuitable ? 8 : measurementOnly ? 24 : 46 }),
+      unobserved_gap_seconds: unsuitable ? 22 : measurementOnly ? 6 : 0,
+      continuity_warnings:
+        unsuitable || measurementOnly ? ["unobserved_gaps_not_interpolated"] : [],
       distance: {
         total_distance_feet: 42.5,
         total_distance_meters: 13,
@@ -640,7 +683,7 @@ function analyticsResponse(state: MockState) {
       },
       created_at: "2026-07-22T00:03:00Z",
     },
-    match_iq: {
+    match_iq: legacy ? null : {
       analysis_id: state.analysisId,
       status: unsuitable ? "insufficient_data" : "generated",
       engine_version: "match-iq-rules-v2",
@@ -688,8 +731,8 @@ function analyticsResponse(state: MockState) {
         ? "INSUFFICIENT_EVIDENCE"
         : measurementOnly
           ? "MEASUREMENT_ONLY"
-          : "CAUTIOUS",
-      confidence: null,
+          : "NORMAL",
+      confidence: confidence(state),
       recording_quality: recordingQuality(state, "ANALYSIS_READINESS"),
       created_at: "2026-07-22T00:03:00Z",
     },
@@ -702,7 +745,13 @@ function recordingQuality(
 ) {
   const unsuitable = state.scenario === "unsuitable";
   const limited = state.scenario === "limited" || state.scenario === "fragmented";
-  const status = unsuitable ? "UNSUITABLE" : limited ? "LIMITED" : "GOOD";
+  const status = unsuitable
+    ? "UNSUITABLE"
+    : limited
+      ? "LIMITED"
+      : state.scenario === "happy"
+        ? "EXCELLENT"
+        : "GOOD";
   return {
     stage,
     status,
@@ -745,9 +794,63 @@ function recordingQuality(
         ? ["tracking_gaps_present"]
         : [],
     guidance: unsuitable || limited ? ["Keep the full court visible and the camera stable."] : [],
-    upload_signals: null,
-    analysis_signals: null,
+    upload_signals:
+      stage === "UPLOAD_PREFLIGHT"
+        ? {
+            format: ".avi",
+            orientation: "landscape",
+            width: 1920,
+            height: 1080,
+            fps: 30,
+            duration_seconds: 60,
+          }
+        : null,
+    analysis_signals:
+      stage === "ANALYSIS_READINESS"
+        ? {
+            court_detection_status: "detected",
+            court_detection_confidence: 0.91,
+            calibration_completed: true,
+            detected_people: 2,
+            selectable_candidate_count: 1,
+            candidate_quality: limited ? "USABLE" : "STRONG",
+            player_visibility_ratio: unsuitable ? 0.4 : 0.9,
+            tracked_duration_seconds: unsuitable ? 8 : limited ? 24 : 46,
+            unobserved_gap_seconds: unsuitable ? 22 : limited ? 6 : 0,
+            tracking_gap_ratio: unsuitable ? 0.73 : limited ? 0.2 : 0,
+            fragment_count: state.scenario === "fragmented" ? 2 : 1,
+          }
+        : null,
     assessed_at: "2026-07-22T00:02:00Z",
+  };
+}
+
+function confidence(state: MockState) {
+  const limited =
+    state.scenario === "limited" ||
+    state.scenario === "fragmented" ||
+    state.scenario === "unsuitable";
+  return {
+    recording: {
+      level: state.scenario === "happy" ? "HIGH" : limited ? "LOW" : "MODERATE",
+      rationale: "Persisted recording confidence.",
+    },
+    tracking: {
+      level: limited ? "LOW" : "MODERATE",
+      rationale: "Persisted tracking confidence.",
+    },
+    measurement: {
+      level: limited ? "LOW" : "MODERATE",
+      rationale: "Persisted measurement confidence.",
+    },
+    interpretation: {
+      level: limited ? "NOT_AVAILABLE" : "MODERATE",
+      rationale: "Persisted interpretation confidence.",
+    },
+    recommendation: {
+      level: limited ? "NOT_AVAILABLE" : "MODERATE",
+      rationale: "Persisted recommendation confidence.",
+    },
   };
 }
 

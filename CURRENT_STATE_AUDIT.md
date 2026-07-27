@@ -10,6 +10,30 @@ Upload match -> inspect video -> recognize court -> find players -> select yours
 
 Overall readiness: CONTROLLED DEMO READY.
 
+Phase 1.6A.1 adds an internal, read-only calibration-readiness projection and
+development route. The current two-sample dataset is honestly classified
+`COLLECTING_EVIDENCE`: it has one development and one validation sample, no holdout,
+no fully reviewed samples, no reviewed Active Play intervals, and no current-schema
+Active Play sample. One artifact set is legacy-compatible and one is partial.
+
+The source, policy, reviewer-label, holdout-simulation, and deterministic repeat-hash
+checks are current. The dashboard does not run inference, alter labels or thresholds,
+enable Active Play, or appear in primary player navigation. Active Play remains
+shadow-only and unvalidated.
+
+The player-facing analytics page now follows an evidence-to-insight narrative. It
+explains video suitability in plain language, shows observation coverage only
+when persisted durations support it, keeps five confidence dimensions separate,
+describes suppressed Match IQ as an evidence limitation, renames Zone Occupancy to
+Observed Court Position, labels maps as measurements, and groups limitations.
+
+This UX pass changed no backend schemas, analytics calculations, Match IQ gates,
+confidence calculations, thresholds, persisted artifacts, reviewer labels, or Active
+Play visibility.
+
+Player-facing copy consistently uses “video.” Internal `recording_*` schema, policy,
+and persistence identifiers remain unchanged for backward compatibility.
+
 The controlled fixture workflow is stable and well covered by tests. Phase 1.3B
 adds stable visual player candidates, persisted manual review, candidate analytics,
 and a selectable LIMITED vertical-video result. Real-video detection remains limited
@@ -490,3 +514,32 @@ The balance report identifies missing outdoor, singles, ideal-quality, diagonal,
 distance, 1080p, stability, several obstruction, `EXCELLENT`, `GOOD`, and holdout
 coverage. Actual collection, consent, independent review, and adjudication remain human
 work.
+
+## 18. Phase 1.6A Shadow Active Play Update
+
+Court4 now has an isolated `active-play-v1` evidence stage. It derives time-based,
+gap-safe motion windows from persisted tracking/candidate artifacts and emits only
+`LIKELY_ACTIVE`, `LIKELY_IDLE`, or `UNKNOWN`. Every estimate includes confidence,
+coverage, signals, deterministic reasons, limitations, source lineage, and policy
+version. Adjacent windows merge only across continuous boundaries with the same state.
+
+The stage persists `active_play/features.jsonl`, `windows.jsonl`, and
+`active_play.json`. It is available only from the internal debug route and does not
+alter job state, distance, zones, heatmaps, Match IQ, cards, dashboards, or frontend
+contracts. Legacy analyses continue to load without an Active Play artifact.
+
+The existing landscape and vertical tracking artifacts were evaluated without
+inference. Both use legacy candidate schema v1 and lack current recording-readiness
+evidence, so all 61.2 landscape seconds and all 14.4 vertical seconds abstain as
+`UNKNOWN`. No human Active Play label was invented.
+
+Calibration schema v2 now accepts partial interval reviews and reports raw seconds and
+interval counts for agreement, false-active, false-idle, unknown, boundary error,
+abstention, and coverage. Active Play threshold simulations exclude validation and
+holdout samples and cannot mutate the production policy or reviewer labels.
+
+Active Play remains shadow-only and unvalidated. Rally, point, serve, shot, ball,
+scoring, and tactical detection remain not implemented. Player-facing activation
+requires a balanced independently reviewed dataset, reviewed false-positive/negative
+budgets, boundary and abstention targets, a frozen policy review, and complete
+regression approval.

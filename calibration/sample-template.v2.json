@@ -1,5 +1,6 @@
 {
   "artifacts": {
+    "active_play_analysis_id": null,
     "analytics_analysis_id": null,
     "artifact_root": "data/output",
     "candidates_analysis_id": null,
@@ -22,6 +23,10 @@
   "external_video_reference": null,
   "fps": null,
   "human_review": {
+    "active_play": {
+      "intervals": [],
+      "reviewer_confidence": null
+    },
     "insight": {
       "generated_insights": [],
       "reviewer_confidence": null

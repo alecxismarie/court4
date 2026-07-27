@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, BarChart3, Home, Settings, Trophy, Upload, UserRound } from "lucide-react";
+import { Activity, Home, Settings, Trophy, Upload, UserRound } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -10,11 +10,11 @@ import { cn } from "@/lib/utils";
 import { usePlayerProfile } from "@/lib/use-player-profile";
 
 const navItems = [
+  { href: "/player", label: "Player", icon: UserRound, disabled: false },
   { href: "/", label: "Dashboard", icon: Home, disabled: false },
+  { href: "/matches/upload", label: "Upload Match", icon: Upload, disabled: false },
   { href: "/performance", label: "Performance", icon: Activity, disabled: false },
   { href: "/matches", label: "Matches", icon: Trophy, disabled: false },
-  { href: "/matches/upload", label: "Upload Match", icon: Upload, disabled: false },
-  { href: "/player", label: "Player", icon: UserRound, disabled: false },
   { href: "/settings", label: "Settings", icon: Settings, disabled: false },
 ] as const;
 
@@ -60,7 +60,11 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="mx-auto flex min-h-screen max-w-[1440px]">
         <aside className="hidden w-72 shrink-0 border-r border-court-line bg-white md:block">
           <div className="sticky top-0 flex h-screen flex-col px-5 py-6">
-            <Link href="/" className="mb-8 block" aria-label="Court4 dashboard">
+            <Link
+              href="/"
+              className="mb-8 flex justify-center"
+              aria-label="Court4 dashboard"
+            >
               <Image
                 src="/brand/court4-logo.png"
                 alt="Court4 - Know Your Game"
@@ -83,20 +87,6 @@ export function AppShell({ children }: { children: ReactNode }) {
                 />
               ))}
             </nav>
-
-            <div className="mt-auto rounded-md border border-court-line bg-court-panel p-4">
-              <div className="flex items-center gap-3">
-                <span className="grid h-9 w-9 place-items-center rounded-md bg-white text-court-blue">
-                  <BarChart3 aria-hidden="true" className="h-5 w-5" />
-                </span>
-                <div>
-                  <p className="max-w-36 truncate text-sm font-medium text-court-ink">
-                    {playerLabel}
-                  </p>
-                  <p className="text-xs text-court-muted">Browser-local workspace</p>
-                </div>
-              </div>
-            </div>
           </div>
         </aside>
 
@@ -122,7 +112,7 @@ function NavLink({
   compact?: boolean;
 }) {
   const classes = cn(
-    "inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+    "flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors",
     compact && "min-h-10 justify-center px-2 text-center text-xs sm:text-sm",
     active
       ? "bg-court-lime text-court-navy"

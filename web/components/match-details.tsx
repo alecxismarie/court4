@@ -66,7 +66,7 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
               Match details
             </p>
             <h1 className="mt-2 text-2xl font-semibold text-court-ink md:text-3xl">
-              Recording review
+              Video review
             </h1>
             <p className="mt-2 text-sm text-court-muted">
               Current step: {currentStep.currentLabel}
@@ -86,7 +86,7 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
 
       <RecordingQualityCard
         assessment={job.analysis_readiness ?? job.upload_preflight}
-        title={job.analysis_readiness ? "Analysis readiness" : "Upload preflight"}
+        title={job.analysis_readiness ? "Analysis readiness" : "Video check"}
         showRetry={
           job.analysis_readiness?.status === "UNSUITABLE" ||
           job.upload_preflight?.status === "UNSUITABLE"

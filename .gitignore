@@ -16,5 +16,6 @@ models/*
 !data/input/.gitkeep
 !data/output/.gitkeep
 web/.next/
+web/.next-dev*.log
 web/coverage/
 web/node_modules/

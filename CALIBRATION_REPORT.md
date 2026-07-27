@@ -1,7 +1,7 @@
 # Court4 Calibration Report
 
 Dataset: `court4-real-video-expansion` version `2.0.0`
-Manifest SHA256: `a10bc6660136365b660a9bffd96d8fa7bc37377dceb3e14d871a02d9fe9f2f2c`
+Manifest SHA256: `040725c49ad79590e96be3155b70d29dd6f5256e3424135c8176580e1ec5768c`
 Reference time: `2026-07-25T00:00:00+00:00`
 
 ## Dataset summary
@@ -16,8 +16,8 @@ Reference time: `2026-07-25T00:00:00+00:00`
 
 | Sample | Evaluation | Readiness | Human quality | Court4 quality | Expected gate | Court4 gate | Exact | Artifacts |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| landscape-indoor-doubles-01 | PARTIAL | LEGACY_COMPATIBLE | UNSUITABLE | UNSUITABLE | INSUFFICIENT_EVIDENCE | INSUFFICIENT_EVIDENCE | yes | inspection_metadata:AVAILABLE, analysis_job:AVAILABLE, tracking:AVAILABLE, player_candidates:STALE, analytics:AVAILABLE, timeline:AVAILABLE, match_iq:STALE, court_calibration:AVAILABLE |
-| vertical-indoor-drill-01 | PARTIAL | PARTIAL | LIMITED | LIMITED | MEASUREMENT_ONLY | MEASUREMENT_ONLY | yes | inspection_metadata:AVAILABLE, analysis_job:AVAILABLE, tracking:AVAILABLE, player_candidates:STALE, analytics:NOT_REFERENCED, timeline:NOT_REFERENCED, match_iq:NOT_REFERENCED, court_calibration:AVAILABLE |
+| landscape-indoor-doubles-01 | PARTIAL | LEGACY_COMPATIBLE | UNSUITABLE | UNSUITABLE | INSUFFICIENT_EVIDENCE | INSUFFICIENT_EVIDENCE | yes | inspection_metadata:AVAILABLE, analysis_job:AVAILABLE, tracking:AVAILABLE, player_candidates:STALE, analytics:AVAILABLE, timeline:AVAILABLE, match_iq:STALE, active_play:AVAILABLE, court_calibration:AVAILABLE |
+| vertical-indoor-drill-01 | PARTIAL | PARTIAL | LIMITED | LIMITED | MEASUREMENT_ONLY | MEASUREMENT_ONLY | yes | inspection_metadata:AVAILABLE, analysis_job:AVAILABLE, tracking:AVAILABLE, player_candidates:STALE, analytics:NOT_REFERENCED, timeline:NOT_REFERENCED, match_iq:NOT_REFERENCED, active_play:AVAILABLE, court_calibration:AVAILABLE |
 
 ## Recording-quality classification
 
@@ -72,6 +72,19 @@ Confusion matrix (rows expected, columns Court4):
 - Fragmented intervals: 0
 - Valid observed-time agreement: 0/0 (not available) — provisional
 - Gap-label agreement: 0/0 (not available) — provisional
+
+## Shadow Active Play interval review
+
+- Reviewed duration: 0.000s across 0 intervals
+- Likely-active agreement: 0.000/0.000s (not available; 0 intervals) — provisional
+- Likely-idle agreement: 0.000/0.000s (not available; 0 intervals) — provisional
+- False-active: 0.000s across 0 intervals
+- False-idle: 0.000s across 0 intervals
+- Unknown: 0.000s across 0 intervals
+- Abstention rate: 0.000/0.000s (not available; 0 intervals) — provisional
+- Coverage rate: 0.000/0.000s (not available; 0 intervals) — provisional
+- Boundary error: 0 boundaries; mean=not available; max=not available
+- These are raw interval/duration measures, not broad accuracy.
 
 ## Insight-integrity findings
 
@@ -144,6 +157,7 @@ Provisional balance warnings:
 | landscape-indoor-doubles-01 | analytics | UNVERSIONED | UNVERSIONED | READY |
 | landscape-indoor-doubles-01 | timeline | UNVERSIONED | UNVERSIONED | READY |
 | landscape-indoor-doubles-01 | match_iq | match-iq-rules-v1 | match-iq-rules-v2 | LEGACY_COMPATIBLE |
+| landscape-indoor-doubles-01 | active_play | active-play-v1 | active-play-v1 | READY |
 | landscape-indoor-doubles-01 | court_calibration | UNVERSIONED | UNVERSIONED | READY |
 | vertical-indoor-drill-01 | inspection_metadata | UNVERSIONED | UNVERSIONED | READY |
 | vertical-indoor-drill-01 | analysis_job | UNVERSIONED | UNVERSIONED | READY |
@@ -152,6 +166,7 @@ Provisional balance warnings:
 | vertical-indoor-drill-01 | analytics | unavailable | unavailable | MISSING |
 | vertical-indoor-drill-01 | timeline | unavailable | unavailable | MISSING |
 | vertical-indoor-drill-01 | match_iq | unavailable | unavailable | MISSING |
+| vertical-indoor-drill-01 | active_play | active-play-v1 | active-play-v1 | READY |
 | vertical-indoor-drill-01 | court_calibration | UNVERSIONED | UNVERSIONED | READY |
 
 ## Common failure reasons
@@ -195,6 +210,10 @@ Provisional balance warnings:
 - Exploratory: yes
 - Remaining uncertainty: Exploratory development-split simulation only. Validation and holdout samples are excluded. The dataset is too small for a production recommendation, and production policy is not mutated.
 
+
+## Active Play threshold-analysis findings
+
+- No Active Play threshold simulations were requested.
 ## Samples requiring manual review
 
 - `landscape-indoor-doubles-01`

@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.config.settings import Settings
+from app.schemas.active_play import ActivePlayReport
 from app.schemas.jobs import (
     AnalysisJobResponse,
     AnalyticsGenerationResponse,
@@ -329,3 +330,36 @@ def get_analytics(
     workflow: WorkflowDependency,
 ) -> AnalyticsResponse:
     return workflow.get_analytics(analysis_id)
+
+
+@router.post(
+    "/{analysis_id}/debug/active-play",
+    response_model=ActivePlayReport,
+    summary="Generate shadow Active Play evidence",
+    description=(
+        "Internal debug-only shadow output. This does not alter analytics, Match IQ, "
+        "cards, dashboards, or the normal player workflow."
+    ),
+    responses=ERROR_RESPONSES,
+    tags=["internal-debug"],
+)
+def generate_active_play(
+    analysis_id: str,
+    workflow: WorkflowDependency,
+) -> ActivePlayReport:
+    return workflow.generate_active_play(analysis_id)
+
+
+@router.get(
+    "/{analysis_id}/debug/active-play",
+    response_model=ActivePlayReport,
+    summary="Get shadow Active Play evidence",
+    description="Return an existing internal shadow Active Play artifact.",
+    responses=ERROR_RESPONSES,
+    tags=["internal-debug"],
+)
+def get_active_play(
+    analysis_id: str,
+    workflow: WorkflowDependency,
+) -> ActivePlayReport:
+    return workflow.get_active_play(analysis_id)

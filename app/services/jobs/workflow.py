@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
 from app.config.settings import Settings
+from app.schemas.active_play import ActivePlayReport
 from app.schemas.analytics import AnalyticsReport
 from app.schemas.calibration import CourtCalibrationReport
 from app.schemas.jobs import (
@@ -40,6 +41,14 @@ from app.schemas.jobs import (
 from app.schemas.match_iq import MatchIQReport
 from app.schemas.player_candidates import PlayerCandidateCollection
 from app.schemas.player_tracking import PlayerTrackingReport
+from app.services.active_play import (
+    ActivePlayError,
+    ActivePlayNotReadyError,
+    load_active_play_report,
+)
+from app.services.active_play import (
+    generate_active_play as generate_shadow_active_play,
+)
 from app.services.analytics import (
     AnalyticsError,
     AnalyticsOutputExistsError,
@@ -746,6 +755,46 @@ class AnalysisWorkflowService:
             artifacts=artifacts,
             job=AnalysisJobResponse.model_validate(updated.model_dump(mode="json")),
         )
+
+    def generate_active_play(self, analysis_id: str) -> ActivePlayReport:
+        """Generate internal shadow evidence without changing job or analytics state."""
+
+        job = self.repository.load_job(analysis_id)
+        self._require(
+            job.tracking_completed,
+            "tracking_required",
+            "Player tracking is required.",
+        )
+        try:
+            return generate_shadow_active_play(
+                analysis_id=analysis_id,
+                analysis_dir=self.repository.analysis_dir(analysis_id),
+            )
+        except ActivePlayNotReadyError as exc:
+            raise JobConflictError("active_play_not_ready", str(exc)) from exc
+        except ActivePlayError as exc:
+            raise JobRequestError(
+                "active_play_generation_failed",
+                "Shadow Active Play evidence could not be generated.",
+            ) from exc
+
+    def get_active_play(self, analysis_id: str) -> ActivePlayReport:
+        """Load an existing internal shadow artifact without legacy migration."""
+
+        self.repository.load_job(analysis_id)
+        report_path = self.repository.analysis_dir(analysis_id) / "active_play" / "active_play.json"
+        if not report_path.is_file():
+            raise JobConflictError(
+                "active_play_not_ready",
+                "Shadow Active Play evidence has not been generated.",
+            )
+        try:
+            return load_active_play_report(report_path)
+        except ActivePlayError as exc:
+            raise JobRequestError(
+                "invalid_active_play",
+                "Saved shadow Active Play evidence could not be read.",
+            ) from exc
 
     def get_analytics(self, analysis_id: str) -> AnalyticsResponse:
         job = self.repository.load_job(analysis_id)

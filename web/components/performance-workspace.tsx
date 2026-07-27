@@ -76,7 +76,7 @@ export function PerformanceWorkspace() {
                       ? "Verified movement insight"
                       : record.analytics?.match_iq?.quality_gate === "CAUTIOUS"
                         ? "Analysis under review"
-                        : "Limited by recording quality"}
+                        : "Limited by video quality"}
                   </h3>
                   <span className="text-sm text-court-muted">
                     {record.analytics

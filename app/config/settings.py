@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     annotated_video_fps: PositiveFloat = Field(default=10)
     analytics_output_dir: Path = Path("data/output")
     analytics_image_width_pixels: PositiveInt = Field(default=1000)
+    calibration_readiness_manifest_path: Path = Path("calibration/manifest.v2.json")
+    calibration_readiness_results_path: Path = Path("calibration-results.json")
+    calibration_readiness_report_path: Path = Path("CALIBRATION_REPORT.md")
+    calibration_readiness_disagreements_path: Path = Path("CALIBRATION_DISAGREEMENTS.md")
+    calibration_readiness_integrity_path: Path = Path("calibration-readiness-integrity.json")
+    calibration_readiness_governance_path: Path = Path("calibration/readiness-governance.json")
     api_base_path: str = "/api/v1"
     analysis_output_dir: Path = Path("data/output")
     upload_chunk_size_bytes: PositiveInt = Field(default=1_048_576)

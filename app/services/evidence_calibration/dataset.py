@@ -194,6 +194,8 @@ def incomplete_review_fields(sample: CalibrationSample) -> list[str]:
             missing.append("human_review.player_candidates.unresolved_mappings")
     if review.tracking is None or not review.tracking.intervals:
         missing.append("human_review.tracking.intervals")
+    if review.active_play is None or not review.active_play.intervals:
+        missing.append("human_review.active_play.intervals")
     if review.insight is None or not review.insight.generated_insights:
         missing.append("human_review.insight.generated_insights")
     return list(dict.fromkeys(missing))
@@ -266,6 +268,7 @@ def sample_template(sample_id: str) -> dict[str, object]:
             "candidates_analysis_id": None,
             "analytics_analysis_id": None,
             "match_iq_analysis_id": None,
+            "active_play_analysis_id": None,
             "inference_run_id": None,
             "reuse_notes": (
                 "Replace the placeholder analysis ID. Keep video files external or ignored."
@@ -282,6 +285,7 @@ def sample_template(sample_id: str) -> dict[str, object]:
                 "reviewer_confidence": None,
             },
             "tracking": {"intervals": [], "reviewer_confidence": None},
+            "active_play": {"intervals": [], "reviewer_confidence": None},
             "insight": {"generated_insights": [], "reviewer_confidence": None},
         },
     }

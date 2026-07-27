@@ -356,7 +356,7 @@ describe("match details workflow", () => {
 
     expect(await screen.findByText("We could not identify the players")).toBeInTheDocument();
     expect(
-      screen.getByText("Try the analysis again. If the problem continues, use a clearer recording."),
+      screen.getByText("Try the analysis again. If the problem continues, use a clearer video."),
     ).toBeInTheDocument();
     expect(screen.queryByText("No detections were returned.")).not.toBeInTheDocument();
 

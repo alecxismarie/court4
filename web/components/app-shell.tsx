@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, Home, Settings, Trophy, Upload, UserRound } from "lucide-react";
+import { ChartNoAxesCombined, History, Home, Settings, Upload, UserRound } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -10,11 +10,21 @@ import { cn } from "@/lib/utils";
 import { usePlayerProfile } from "@/lib/use-player-profile";
 
 const navItems = [
-  { href: "/player", label: "Player", icon: UserRound, disabled: false },
   { href: "/", label: "Dashboard", icon: Home, disabled: false },
-  { href: "/matches/upload", label: "Upload Match", icon: Upload, disabled: false },
-  { href: "/performance", label: "Performance", icon: Activity, disabled: false },
-  { href: "/matches", label: "Matches", icon: Trophy, disabled: false },
+  { href: "/player", label: "Player", icon: UserRound, disabled: false },
+  { href: "/upload-match", label: "Upload Match", icon: Upload, disabled: false },
+  {
+    href: "/analysis-history",
+    label: "Analysis History",
+    icon: History,
+    disabled: false,
+  },
+  {
+    href: "/my-progress",
+    label: "My Progress",
+    icon: ChartNoAxesCombined,
+    disabled: false,
+  },
   { href: "/settings", label: "Settings", icon: Settings, disabled: false },
 ] as const;
 
@@ -42,7 +52,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             {playerLabel}
           </span>
         </div>
-        <nav aria-label="Primary navigation" className="grid grid-cols-3 gap-1 px-3 pb-3">
+        <nav aria-label="Primary navigation" className="grid grid-cols-2 gap-1 px-3 pb-3 sm:grid-cols-3">
           {navItems.map((item) => (
             <NavLink
               key={item.href}
@@ -66,11 +76,11 @@ export function AppShell({ children }: { children: ReactNode }) {
               aria-label="Court4 dashboard"
             >
               <Image
-                src="/brand/court4-logo.png"
+                src="/brand/court4-logo.png?v=20260728"
                 alt="Court4 - Know Your Game"
                 width={512}
                 height={512}
-                className="h-auto w-44 object-contain"
+                className="h-auto w-52 object-contain"
                 priority
               />
             </Link>
@@ -139,9 +149,6 @@ function NavLink({
 function isActive(pathname: string, href: string): boolean {
   if (href === "/") {
     return pathname === "/";
-  }
-  if (href === "/matches") {
-    return pathname === "/matches" || (pathname.startsWith("/matches/") && !pathname.startsWith("/matches/upload"));
   }
   return pathname === href || pathname.startsWith(`${href}/`);
 }

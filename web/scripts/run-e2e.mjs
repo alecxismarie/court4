@@ -14,6 +14,7 @@ const server = spawn(
   {
     env: {
       ...process.env,
+      COURT4_NEXT_DIST_DIR: process.env.COURT4_NEXT_DIST_DIR ?? ".next-e2e",
       NEXT_PUBLIC_COURT4_API_URL:
         process.env.NEXT_PUBLIC_COURT4_API_URL ?? "http://127.0.0.1:8000",
       NEXT_PUBLIC_COURT4_MAX_UPLOAD_BYTES:

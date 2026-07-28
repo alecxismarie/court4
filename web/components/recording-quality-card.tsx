@@ -105,7 +105,7 @@ export function RecordingQualityCard({
           {showRetry ? (
             <ButtonLink
               className="mt-4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-court-blue"
-              href="/matches/upload"
+              href="/upload-match"
               aria-label="Try another video"
             >
               Try another video

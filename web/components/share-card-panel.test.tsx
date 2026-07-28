@@ -94,6 +94,7 @@ describe("share card panel", () => {
       dominantHand: "right",
       experienceLevel: "advanced",
       homeClub: "",
+      profileImageDataUrl: "",
     });
 
     renderWithQueryClient(

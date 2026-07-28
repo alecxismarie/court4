@@ -33,7 +33,7 @@ export function RecentMatches({
       <EmptyState
         title="No recent matches"
         description="Your analyzed matches will be remembered locally in this browser."
-        action={<ButtonLink href="/matches/upload">Upload Match</ButtonLink>}
+        action={<ButtonLink href="/upload-match">Upload Match</ButtonLink>}
       />
     );
   }

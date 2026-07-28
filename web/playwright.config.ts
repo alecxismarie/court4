@@ -30,6 +30,7 @@ export default defineConfig({
           url: "http://127.0.0.1:3002",
           reuseExistingServer: !process.env.CI,
           env: {
+            COURT4_NEXT_DIST_DIR: ".next-e2e",
             NEXT_PUBLIC_COURT4_API_URL: "http://127.0.0.1:8000",
             NEXT_PUBLIC_COURT4_MAX_UPLOAD_BYTES: "1073741824",
             NEXT_PUBLIC_COURT4_SUPPORTED_VIDEO_EXTENSIONS: ".mp4,.mov,.avi,.mkv",

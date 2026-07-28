@@ -1,5 +1,7 @@
 import type {
   AnalysisArtifact,
+  AnalysisHistoryItem,
+  AnalysisHistoryResponse,
   AnalysisJob,
   AnalyticsGenerationResponse,
   AnalyticsReport,
@@ -9,12 +11,197 @@ import type {
   PlayerCandidate,
   PlayerCandidateCollection,
   PlayerSelectionResponse,
+  PlayHistoryResponse,
   PlayersResponse,
   RecordingQualityAssessment,
   SampledFrame,
   TrackSummary,
   TrackingResponse,
 } from "@/lib/api/types";
+
+export function makeAnalysisHistoryItem(
+  overrides: Partial<AnalysisHistoryItem> = {},
+): AnalysisHistoryItem {
+  return {
+    analysis_id: "analysis-123",
+    title: "Saturday match",
+    created_at: "2026-07-21T00:00:00Z",
+    updated_at: "2026-07-21T00:03:00Z",
+    status: "READY",
+    processing_status: "completed",
+    recording_quality: "GOOD",
+    observation_coverage_ratio: 0.92,
+    reliable_observation_seconds: 30,
+    measurement_available: true,
+    match_iq_available: true,
+    contribution: {
+      status: "INCLUDED",
+      reason_codes: ["EVIDENCE_STANDARD_MET"],
+      explanation:
+        "Included because recording quality, observation coverage, and movement measurement evidence met the current standard.",
+      policy_version: "play-history-v1",
+      evaluated_at: "2026-07-21T00:03:00Z",
+      source_analysis_version: "match-iq-rules-v2",
+      limitations: [],
+      source_versions: {
+        analytics_schema: "movement-analytics-v1",
+        analysis_source: "match-iq-rules-v2",
+      },
+    },
+    limitation: null,
+    report_url: "/matches/analysis-123/analytics",
+    thumbnail_url: null,
+    ...overrides,
+  };
+}
+
+export function makeAnalysisHistoryResponse(
+  items: AnalysisHistoryItem[] = [],
+): AnalysisHistoryResponse {
+  return {
+    items,
+    total: items.length,
+    limit: 100,
+    offset: 0,
+  };
+}
+
+export function makePlayHistoryResponse(
+  overrides: Partial<PlayHistoryResponse> = {},
+): PlayHistoryResponse {
+  const included = makeAnalysisHistoryItem();
+  return {
+    policy_version: "play-history-v1",
+    policy_versions: {
+      contribution: "play-history-v1",
+      comparability: "play-history-comparability-v1",
+      trend: "play-history-trend-v1",
+      interpretation: "play-history-interpretation-v1",
+      grouping: "play-history-grouping-v1",
+      aggregation: "play-history-aggregation-v1",
+    },
+    total_analyses: 1,
+    eligible_count: 1,
+    comparable_count: 1,
+    excluded_count: 0,
+    provisional_count: 0,
+    not_evaluated_count: 0,
+    reliable_observation_seconds: 30,
+    qualified_movement_seconds: 20,
+    most_common_zone: {
+      zone: "kitchen",
+      label: "Kitchen",
+      seconds: 12,
+      denominator_seconds: 20,
+      percentage: 60,
+      contributing_analyses: 1,
+    },
+    latest_verified_match_iq: [
+      {
+        analysis_id: included.analysis_id,
+        title: included.title,
+        created_at: included.created_at,
+        summary: "Court4 measured a qualified movement sample.",
+        report_url: included.report_url,
+      },
+    ],
+    recent_eligible_analyses: [included],
+    contributions: [included],
+    comparison_candidates: [
+      {
+        analysis_id: included.analysis_id,
+        title: included.title,
+        created_at: included.created_at,
+        report_url: included.report_url,
+        contribution_status: "INCLUDED",
+        comparability: {
+          status: "PROVISIONAL",
+          reasons: ["The report has qualified movement measurements."],
+          limitations: [
+            "Match format is not recorded, so singles-versus-doubles compatibility is unknown.",
+          ],
+          source_versions: [
+            {
+              analytics_schema: "movement-analytics-v1",
+              zone_definition: "court-zones-v1",
+              court_geometry: "normalized-court-coordinate-v1",
+              units: "metric-seconds-percent-v1",
+              contribution_policy: "play-history-v1",
+              match_iq_engine: "match-iq-rules-v2",
+            },
+          ],
+          policy_version: "play-history-comparability-v1",
+        },
+        qualified_observation_seconds: 30,
+        qualified_movement_seconds: 20,
+      },
+    ],
+    readiness: {
+      status: "INSUFFICIENT_HISTORY",
+      explanation:
+        "Progress trends will appear after Court4 has enough comparable, evidence-qualified analyses.",
+      eligible_analyses_required: 3,
+      eligible_analyses_available: 1,
+    },
+    progress: {
+      status: "BUILDING_BASELINE",
+      baseline_status: "BUILDING_BASELINE",
+      answer: "Building your baseline",
+      explanation:
+        "Court4 has 1 comparable report. More are needed before showing changes over time.",
+      qualified_analysis_count: 1,
+      comparable_analysis_count: 1,
+      qualified_observation_seconds: 30,
+      comparison_period_start: included.created_at,
+      comparison_period_end: included.created_at,
+      provisional: true,
+      limitations: [
+        "Court4 shows differences between similar recordings. A difference alone does not show whether your performance got better or worse.",
+      ],
+      earlier_analysis_count: 0,
+      recent_analysis_count: 0,
+      earlier_group: null,
+      recent_group: null,
+      trend_eligibility: {
+        status: "INELIGIBLE",
+        reasons: ["More comparable reports are required to establish a baseline."],
+        limitations: ["1 of 3 comparable reports are available."],
+        source_versions: [
+          {
+            analytics_schema: "movement-analytics-v1",
+            zone_definition: "court-zones-v1",
+            court_geometry: "normalized-court-coordinate-v1",
+            units: "metric-seconds-percent-v1",
+            contribution_policy: "play-history-v1",
+            match_iq_engine: "match-iq-rules-v2",
+          },
+        ],
+        policy_version: "play-history-trend-v1",
+      },
+      interpretation_eligibility: {
+        status: "NOT_EVALUATED",
+        reasons: ["There is no eligible trend to interpret."],
+        limitations: ["1 of 3 comparable reports are available."],
+        source_versions: [
+          {
+            analytics_schema: "movement-analytics-v1",
+            zone_definition: "court-zones-v1",
+            court_geometry: "normalized-court-coordinate-v1",
+            units: "metric-seconds-percent-v1",
+            contribution_policy: "play-history-v1",
+            match_iq_engine: "match-iq-rules-v2",
+          },
+        ],
+        policy_version: "play-history-interpretation-v1",
+      },
+      contributing_analysis_ids: [included.analysis_id],
+      aggregation_methods: [],
+      trend_metrics: [],
+      play_style: null,
+    },
+    ...overrides,
+  };
+}
 
 export function makeRecordingQuality(
   overrides: Partial<RecordingQualityAssessment> = {},

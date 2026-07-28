@@ -254,7 +254,7 @@ def test_threshold_simulation_reports_improvement_without_mutating_policy(
 def test_active_play_interval_metrics_report_raw_seconds_and_counts(
     tmp_path: Path,
 ) -> None:
-    human_review = {
+    human_review: dict[str, object] = {
         "active_play": {
             "intervals": [
                 {

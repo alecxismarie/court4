@@ -1,5 +1,5 @@
-import { PerformanceWorkspace } from "@/components/performance-workspace";
+import { redirect } from "next/navigation";
 
 export default function PerformancePage() {
-  return <PerformanceWorkspace />;
+  redirect("/my-progress");
 }

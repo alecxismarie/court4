@@ -10,7 +10,7 @@ import { renderWithQueryClient } from "@/test/render";
 const pushMock = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
-  usePathname: () => "/matches/upload",
+  usePathname: () => "/upload-match",
   useRouter: () => ({ push: pushMock }),
 }));
 

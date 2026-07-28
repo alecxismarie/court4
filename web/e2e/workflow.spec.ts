@@ -108,6 +108,70 @@ test("unsuitable video suppresses normal Match IQ and offers retry", async ({ pa
   await expect(page.getByRole("heading", { name: "Share Performance Card" })).toHaveCount(0);
 });
 
+test("analysis and play histories persist, explain contribution, and preserve legacy redirects", async ({
+  page,
+}) => {
+  const state: MockState = {
+    analysisId: "e2e-history",
+    scenario: "happy",
+    stage: "completed",
+  };
+  await installApiMocks(page, state);
+
+  await page.goto("/analysis-history");
+  await expect(page.getByRole("heading", { name: "Your analysis history" })).toBeVisible();
+  await expect(page.getByText("source", { exact: true })).toBeVisible();
+  await expect(page.getByText("Included in Play History")).toBeVisible();
+  await expect(page.getByRole("link", { name: /reopen report/i })).toHaveAttribute(
+    "href",
+    "/matches/e2e-history/analytics",
+  );
+  await page.reload();
+  await expect(page.getByText("Included in Play History")).toBeVisible();
+
+  await page.goto("/my-progress");
+  await expect(page.getByRole("heading", { name: "Your play over time" })).toBeVisible();
+  await expect(page.getByText("How has my play changed?")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Building your baseline" })).toBeVisible();
+  await expect(page.getByText("Court4 measured a qualified movement sample.")).toBeVisible();
+  await expect(page.getByText("Contribution transparency")).toHaveCount(0);
+
+  await page.goto("/performance");
+  await expect(page).toHaveURL(/\/my-progress$/);
+  await page.goto("/matches");
+  await expect(page).toHaveURL(/\/analysis-history$/);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.getByRole("link", { name: "Analysis History" }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "My Progress" }).first()).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+  ).toBe(true);
+});
+
+test("unsuitable analysis remains in history and contributes no Play History totals", async ({
+  page,
+}) => {
+  const state: MockState = {
+    analysisId: "e2e-history-unsuitable",
+    scenario: "unsuitable",
+    stage: "completed",
+  };
+  await installApiMocks(page, state);
+
+  await page.goto("/analysis-history");
+  await expect(page.getByText("Unsuitable recording")).toBeVisible();
+  await expect(page.getByText("Excluded from Play History")).toBeVisible();
+
+  await page.goto("/my-progress");
+  await expect(
+    page.getByRole("heading", { name: "Your progress history hasn't started yet" }),
+  ).toBeVisible();
+  await expect(page.getByText(/completed analyses with enough clear, reliable video/)).toBeVisible();
+  await expect(page.getByText("Excluded from Play History")).toHaveCount(0);
+  await expect(page.getByText("Contribution transparency")).toHaveCount(0);
+});
+
 test("legacy coverage and confidence remain honest on mobile", async ({ page }) => {
   const state: MockState = {
     analysisId: "e2e-legacy",
@@ -234,6 +298,12 @@ async function clickImagePoint(
 async function installApiMocks(page: Page, state: MockState) {
   await page.route("**/api/share-artifact/**", imageResponse);
   await page.route("**/api/v1/analyses/*/artifacts/**", imageResponse);
+  await page.route("**/api/v1/analyses?*", async (route) => {
+    await route.fulfill({ status: 200, json: analysisHistoryResponse(state) });
+  });
+  await page.route("**/api/v1/play-history?*", async (route) => {
+    await route.fulfill({ status: 200, json: playHistoryResponse(state) });
+  });
   await page.route("**/api/v1/analyses", async (route) => {
     if (route.request().method() !== "POST") {
       await route.fallback();
@@ -369,6 +439,210 @@ function job(state: MockState) {
       ? recordingQuality(state, "ANALYSIS_READINESS")
       : null,
     available_artifacts: state.stage === "inspected" || state.stage === "manual_required" ? [] : calibrationArtifacts(state),
+  };
+}
+
+function analysisHistoryItem(state: MockState) {
+  const quality = recordingQuality(state, "ANALYSIS_READINESS");
+  const unsuitable = state.scenario === "unsuitable";
+  const legacy = state.scenario === "legacy";
+  const completed = state.stage === "completed";
+  const contributionStatus = legacy
+    ? "NOT_EVALUATED"
+    : unsuitable
+      ? "EXCLUDED"
+      : completed
+        ? "INCLUDED"
+        : "PROVISIONAL";
+  return {
+    analysis_id: state.analysisId,
+    title: "source",
+    created_at: "2026-07-22T00:00:00Z",
+    updated_at: "2026-07-22T00:03:00Z",
+    status: legacy
+      ? "LEGACY"
+      : unsuitable
+        ? "UNSUITABLE"
+        : completed
+          ? quality.status === "LIMITED"
+            ? "LIMITED"
+            : "READY"
+          : "PROCESSING",
+    processing_status: completed ? "completed" : "processing",
+    recording_quality: legacy ? null : quality.status,
+    observation_coverage_ratio: legacy
+      ? null
+      : quality.analysis_signals!.player_visibility_ratio,
+    reliable_observation_seconds: legacy
+      ? null
+      : quality.analysis_signals!.tracked_duration_seconds,
+    measurement_available: completed && !legacy,
+    match_iq_available: completed && !unsuitable && !legacy,
+    contribution: {
+      status: contributionStatus,
+      reason_codes: legacy
+        ? ["LEGACY_EVIDENCE_UNAVAILABLE"]
+        : unsuitable
+          ? ["UNSUITABLE_RECORDING"]
+          : completed
+            ? ["EVIDENCE_STANDARD_MET"]
+            : ["ANALYSIS_IN_PROGRESS"],
+      explanation: legacy
+        ? "This analysis is saved, but its legacy evidence cannot be evaluated."
+        : unsuitable
+          ? "This analysis remains in your history but does not contribute to Play History because the recording did not contain enough reliable observation."
+          : completed
+            ? "Included because recording quality, observation coverage, and movement measurement evidence met the current standard."
+            : "This analysis will be evaluated after processing is complete.",
+      policy_version: "play-history-v1",
+      evaluated_at: "2026-07-22T00:03:00Z",
+      source_analysis_version: "match-iq-rules-v2",
+    },
+    limitation: unsuitable
+      ? "The recording did not contain enough reliable evidence for movement summaries."
+      : null,
+    report_url: completed
+      ? `/matches/${state.analysisId}/analytics`
+      : `/matches/${state.analysisId}`,
+    thumbnail_url: null,
+  };
+}
+
+function analysisHistoryResponse(state: MockState) {
+  return {
+    items: [analysisHistoryItem(state)],
+    total: 1,
+    limit: 100,
+    offset: 0,
+  };
+}
+
+function playHistoryResponse(state: MockState) {
+  const item = analysisHistoryItem(state);
+  const included = item.contribution.status === "INCLUDED";
+  const excluded = item.contribution.status === "EXCLUDED";
+  return {
+    policy_version: "play-history-v1",
+    policy_versions: {
+      contribution: "play-history-v1",
+      comparability: "play-history-comparability-v1",
+      trend: "play-history-trend-v1",
+      interpretation: "play-history-interpretation-v1",
+      grouping: "play-history-grouping-v1",
+      aggregation: "play-history-aggregation-v1",
+    },
+    total_analyses: 1,
+    eligible_count: included ? 1 : 0,
+    comparable_count: included ? 1 : 0,
+    excluded_count: excluded ? 1 : 0,
+    provisional_count: item.contribution.status === "PROVISIONAL" ? 1 : 0,
+    not_evaluated_count: item.contribution.status === "NOT_EVALUATED" ? 1 : 0,
+    reliable_observation_seconds: included ? 46 : null,
+    qualified_movement_seconds: included ? 46 : null,
+    most_common_zone: included
+      ? {
+          zone: "transition",
+          label: "Transition",
+          seconds: 27.6,
+          denominator_seconds: 46,
+          percentage: 60,
+          contributing_analyses: 1,
+        }
+      : null,
+    latest_verified_match_iq: included
+      ? [
+          {
+            analysis_id: state.analysisId,
+            title: item.title,
+            created_at: item.created_at,
+            summary: "Court4 measured a qualified movement sample.",
+            report_url: item.report_url,
+          },
+        ]
+      : [],
+    recent_eligible_analyses: included ? [item] : [],
+    contributions: [item],
+    comparison_candidates: included
+      ? [
+          {
+            analysis_id: item.analysis_id,
+            title: item.title,
+            created_at: item.created_at,
+            report_url: item.report_url,
+            contribution_status: "INCLUDED",
+            comparability: comparisonDecision(),
+            qualified_observation_seconds: 46,
+            qualified_movement_seconds: 46,
+          },
+        ]
+      : [],
+    readiness: {
+      status: "INSUFFICIENT_HISTORY",
+      explanation:
+        "Progress trends will appear after Court4 has enough comparable, evidence-qualified analyses.",
+      eligible_analyses_required: 3,
+      eligible_analyses_available: included ? 1 : 0,
+    },
+    progress: {
+      status: included ? "BUILDING_BASELINE" : "NO_QUALIFIED_REPORTS",
+      baseline_status: included ? "BUILDING_BASELINE" : "NO_QUALIFIED_REPORTS",
+      answer: included
+        ? "Building your baseline"
+        : "Your progress history hasn't started yet",
+      explanation: included
+        ? "Court4 has 1 comparable report. More are needed before showing changes over time."
+        : "Court4 needs completed analyses with enough clear, reliable video before it can compare how your play changes over time.",
+      qualified_analysis_count: included ? 1 : 0,
+      comparable_analysis_count: included ? 1 : 0,
+      qualified_observation_seconds: included ? 46 : 0,
+      comparison_period_start: included ? item.created_at : null,
+      comparison_period_end: included ? item.created_at : null,
+      provisional: true,
+      limitations: [
+        "Court4 shows differences between similar recordings. A difference alone does not show whether your performance got better or worse.",
+      ],
+      earlier_analysis_count: 0,
+      recent_analysis_count: 0,
+      earlier_group: null,
+      recent_group: null,
+      trend_eligibility: {
+        ...comparisonDecision(),
+        status: "INELIGIBLE",
+        reasons: ["More comparable reports are required to establish a baseline."],
+        policy_version: "play-history-trend-v1",
+      },
+      interpretation_eligibility: {
+        ...comparisonDecision(),
+        status: "NOT_EVALUATED",
+        reasons: ["There is no eligible trend to interpret."],
+        policy_version: "play-history-interpretation-v1",
+      },
+      contributing_analysis_ids: included ? [item.analysis_id] : [],
+      aggregation_methods: [],
+      trend_metrics: [],
+      play_style: null,
+    },
+  };
+}
+
+function comparisonDecision() {
+  return {
+    status: "PROVISIONAL",
+    reasons: ["The report has qualified movement measurements."],
+    limitations: [
+      "Match format is not recorded, so singles-versus-doubles compatibility is unknown.",
+    ],
+    source_versions: [
+      {
+        analytics_schema: "movement-analytics-v1",
+        zone_definition: "court-zones-v1",
+        court_geometry: "normalized-court-coordinate-v1",
+        units: "metric-seconds-percent-v1",
+        contribution_policy: "play-history-v1",
+        match_iq_engine: "match-iq-rules-v2",
+      },
+    ],
+    policy_version: "play-history-comparability-v1",
   };
 }
 

@@ -27,6 +27,10 @@ class AnalysisJobRepository:
         return refreshed
 
     def load_job(self, analysis_id: str) -> AnalysisJob:
+        return self.refresh_artifacts(self.load_job_metadata(analysis_id))
+
+    def load_job_metadata(self, analysis_id: str) -> AnalysisJob:
+        """Read persisted job metadata without rescanning the artifact tree."""
         job_path = self.job_path(analysis_id)
         if not job_path.exists() or not job_path.is_file():
             raise JobNotFoundError()
@@ -37,7 +41,21 @@ class AnalysisJobRepository:
             raise JobRequestError(
                 "invalid_job", "Analysis job metadata could not be read."
             ) from None
-        return self.refresh_artifacts(job)
+        return job
+
+    def list_job_ids(self) -> list[str]:
+        """List persisted analysis IDs without relying on browser-local history."""
+        if not self.output_dir.exists():
+            return []
+        analysis_ids: list[str] = []
+        for path in self.output_dir.iterdir():
+            if (
+                path.is_dir()
+                and ANALYSIS_ID_PATTERN.fullmatch(path.name)
+                and (path / "job.json").is_file()
+            ):
+                analysis_ids.append(path.name)
+        return sorted(analysis_ids)
 
     def update_job(self, job: AnalysisJob, **updates: object) -> AnalysisJob:
         now = datetime.now(tz=UTC)

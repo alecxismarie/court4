@@ -1,11 +1,12 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import FileResponse
 
 from app.config import get_settings
 from app.config.settings import Settings
 from app.schemas.active_play import ActivePlayReport
+from app.schemas.history import AnalysisHistoryResponse
 from app.schemas.jobs import (
     AnalysisJobResponse,
     AnalyticsGenerationResponse,
@@ -28,6 +29,7 @@ from app.schemas.player_candidates import (
     CandidateUnmergeRequest,
     PlayerCandidateCollection,
 )
+from app.services.history import HistoryProjectionService
 from app.services.jobs import AnalysisWorkflowService
 
 router = APIRouter(prefix="/analyses", tags=["analyses"])
@@ -49,6 +51,27 @@ def get_workflow_service(settings: SettingsDependency) -> AnalysisWorkflowServic
 
 
 WorkflowDependency = Annotated[AnalysisWorkflowService, Depends(get_workflow_service)]
+
+
+@router.get(
+    "",
+    response_model=AnalysisHistoryResponse,
+    summary="List analysis history",
+    description=(
+        "Return a bounded, newest-first projection of every persisted analysis, including "
+        "processing, unsuitable, failed, incomplete, and legacy analyses."
+    ),
+    responses=ERROR_RESPONSES,
+)
+def list_analyses(
+    workflow: WorkflowDependency,
+    limit: Annotated[int, Query(ge=1, le=200)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AnalysisHistoryResponse:
+    return HistoryProjectionService(repository=workflow.repository).analysis_history(
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post(

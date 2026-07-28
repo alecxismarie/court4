@@ -1,6 +1,6 @@
 # Court4 Current State Audit
 
-Date: 2026-07-23
+Date: 2026-07-28
 
 ## 1. Executive Verdict
 
@@ -9,6 +9,15 @@ Court4 is an MVP-quality local analysis workflow. The current repo supports the 
 Upload match -> inspect video -> recognize court -> find players -> select yourself -> generate analytics -> view Match IQ -> export a share card.
 
 Overall readiness: CONTROLLED DEMO READY.
+
+Phase 1.7A adds separate player-facing Analysis History and Play History. Analysis
+History lists every persisted job from the local filesystem; Play History uses only
+analyses included by deterministic `play-history-v1`. The projection exposes honest
+excluded, provisional, and legacy/not-evaluated states. The Progress Integrity Pass
+adds separate versioned comparability, trend, interpretation, grouping, and
+aggregation decisions. It can display provisional, neutral observed-change
+comparisons after four comparable reports; it does not claim genuine performance
+improvement. The local workspace still has no account or user-isolation boundary.
 
 Phase 1.6A.1 adds an internal, read-only calibration-readiness projection and
 development route. The current two-sample dataset is honestly classified
@@ -39,8 +48,9 @@ adds stable visual player candidates, persisted manual review, candidate analyti
 and a selectable LIMITED vertical-video result. Real-video detection remains limited
 by generic person detection, duplicate candidates, fragmentation, and camera quality.
 
-Do not start a history/progress feature phase before measuring and accepting the
-remaining real-video candidate-review load.
+Do not add evaluative performance, tactics, or coaching intelligence before collecting
+match context and validating outcome-linked metrics. Current comparisons remain
+provisional because match format and camera placement are not persisted.
 
 ## 2. Repository And Working Tree
 
@@ -105,9 +115,10 @@ Status values are one of COMPLETE, PARTIAL, EXPERIMENTAL, PLACEHOLDER, BROKEN, o
 | Analytics results page | COMPLETE | Shows factual metrics, Match IQ, insight evidence, focus, limitations, heatmap, trajectory, and share-card panel. |
 | Shareable performance cards | COMPLETE | Supports Story, portrait, square formats, PNG download, native share where browser-supported, optional heatmap/trajectory, and optional current results URL. |
 | Public results links | PARTIAL | Share-card data can include the current URL, but there is no public hosting, auth boundary, or stable share token. |
-| Dashboard workspace | PARTIAL | Local dashboard summarizes remembered browser-local analyses and latest Match IQ. No account or cross-device history. |
-| Matches list | PARTIAL | Browser-local recent analysis IDs are listed with state-aware actions. Backend has no list-all endpoint. |
-| Performance workspace | PARTIAL | Shows factual cumulative local totals and recent Match IQ summaries. Future progress is intentionally not implemented. |
+| Dashboard workspace | COMPLETE FOR PRIVATE ALPHA | Evidence-aware snapshot uses backend history projections and avoids unqualified cumulative totals. |
+| Analysis History | COMPLETE FOR PRIVATE ALPHA | `/analyses` and `GET /api/v1/analyses` list every persisted job with status, quality, coverage, availability, contribution, limitation, and report link. |
+| Play History | COMPLETE FOR PRIVATE ALPHA | `/play-history` and `GET /api/v1/play-history` separate contribution, comparability, trend, and interpretation decisions; use deterministic grouping, normalized pace, duration-weighted zones, neutral graphs, evidence context, and a supporting-report drill-down. Comparisons remain provisional and descriptive. |
+| Legacy route redirects | COMPLETE | `/matches` redirects to `/analyses`; `/performance` redirects to `/play-history`; analysis deep links are unchanged. |
 | Player profile | PARTIAL | Browser-local display name, dominant hand, experience, and location fields. No auth, sync, identity verification, or history. |
 | Settings page | PLACEHOLDER | Reserved for application preferences; currently only explains the profile boundary. |
 | Branded logo/favicon | COMPLETE | User-provided Court4 logo is used in app shell and favicon assets. |
@@ -130,6 +141,8 @@ Backend:
 - Detection adapters in `app/services/tracking/`.
 - Movement analytics in `app/services/analytics/`.
 - Deterministic Match IQ rules in `app/services/match_iq/`.
+- Versioned history contribution, comparability, grouping, aggregation, trend, and
+  interpretation policies in `app/services/history/`.
 
 Frontend:
 
@@ -151,7 +164,9 @@ Route inventory:
 | `/matches/{analysisId}` | COMPLETE | Workflow detail route: court recognition, tracking, selection, analytics action. |
 | `/matches/{analysisId}/analytics` | COMPLETE | Analytics, Match IQ, images, and share cards. |
 | `/matches/{analysisId}/calibrate` | COMPLETE | Interactive manual calibration fallback with point validation and artifact review. |
-| `/performance` | PARTIAL | Factual local snapshot; progress comparisons are not implemented. |
+| `/performance` | COMPLETE REDIRECT | Redirects to `/play-history`. |
+| `/analyses` | COMPLETE FOR PRIVATE ALPHA | Every persisted analysis with technical evidence and contribution context. |
+| `/play-history` | COMPLETE FOR PRIVATE ALPHA | Neutral observed-change baseline/comparison view with evidence denominators and report drill-down. |
 | `/player` | PARTIAL | Browser-local player profile. |
 | `/settings` | PLACEHOLDER | Reserved for app-level preferences. |
 | `/api/share-artifact/{analysisId}/{artifactPath}` | COMPLETE | Allows only `analytics/*.png` to be proxied for share-card canvas loading. |
@@ -413,7 +428,7 @@ Undocumented additions visible since the Phase 1.3 description:
 | Filesystem persistence has no locking | MEDIUM | PARTIAL | Concurrent requests can race on JSON/artifact writes. |
 | CLI analytics Match IQ parity | MEDIUM | COMPLETE | CLI uses shared Match IQ persistence and writes/reuses `match_iq.json`. |
 | Manual calibration UI missing | MEDIUM | COMPLETE | Interactive fallback route is implemented and tested. |
-| Browser-local workspace can lose history | MEDIUM | PARTIAL | localStorage only; no backend list-all or account state. |
+| Local history lacks account isolation | HIGH | PARTIAL | History now survives refresh through filesystem-backed list projections, but there is no auth, player ownership, database, or cross-device sync. |
 | No browser E2E suite | MEDIUM | COMPLETE | Playwright suite covers controlled happy path, manual calibration fallback, and missing-model recovery. |
 | Frontend build requires explicit public env vars | LOW | PARTIAL | Expected for Next, but missing `.env.local` causes build failure. |
 

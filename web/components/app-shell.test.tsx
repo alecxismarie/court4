@@ -17,7 +17,7 @@ describe("app shell navigation", () => {
     pathnameMock.mockReturnValue("/");
   });
 
-  it("renders all six primary navigation items with expected routes", () => {
+  it("renders the six player-facing navigation items with expected routes", () => {
     renderWithQueryClient(<AppShell>Workspace</AppShell>);
 
     const navigation = screen.getAllByRole("navigation", { name: "Primary navigation" })[0];
@@ -25,21 +25,21 @@ describe("app shell navigation", () => {
       "href",
       "/",
     );
-    expect(within(navigation).getByRole("link", { name: /performance/i })).toHaveAttribute(
-      "href",
-      "/performance",
-    );
-    expect(within(navigation).getByRole("link", { name: /^matches$/i })).toHaveAttribute(
-      "href",
-      "/matches",
-    );
-    expect(within(navigation).getByRole("link", { name: /upload match/i })).toHaveAttribute(
-      "href",
-      "/matches/upload",
-    );
     expect(within(navigation).getByRole("link", { name: /^player$/i })).toHaveAttribute(
       "href",
       "/player",
+    );
+    expect(within(navigation).getByRole("link", { name: /my progress/i })).toHaveAttribute(
+      "href",
+      "/my-progress",
+    );
+    expect(within(navigation).getByRole("link", { name: /analysis history/i })).toHaveAttribute(
+      "href",
+      "/analysis-history",
+    );
+    expect(within(navigation).getByRole("link", { name: /upload match/i })).toHaveAttribute(
+      "href",
+      "/upload-match",
     );
     expect(within(navigation).getByRole("link", { name: /settings/i })).toHaveAttribute(
       "href",
@@ -48,14 +48,15 @@ describe("app shell navigation", () => {
     expect(
       within(navigation).queryByRole("link", { name: /calibration readiness/i }),
     ).not.toBeInTheDocument();
+    expect(within(navigation).queryByRole("link", { name: /active play/i })).not.toBeInTheDocument();
   });
 
   it("marks the active route clearly", () => {
-    pathnameMock.mockReturnValue("/performance");
+    pathnameMock.mockReturnValue("/my-progress");
 
-    renderWithQueryClient(<AppShell>Performance</AppShell>);
+    renderWithQueryClient(<AppShell>My Progress</AppShell>);
 
-    expect(screen.getAllByRole("link", { name: /performance/i })[0]).toHaveAttribute(
+    expect(screen.getAllByRole("link", { name: /my progress/i })[0]).toHaveAttribute(
       "aria-current",
       "page",
     );
@@ -72,7 +73,7 @@ describe("app shell navigation", () => {
     }
   });
 
-  it("orders Player before Dashboard and Upload Match", () => {
+  it("uses the required player navigation order", () => {
     renderWithQueryClient(<AppShell>Workspace</AppShell>);
 
     const desktopNavigation = screen.getAllByRole("navigation", {
@@ -83,11 +84,11 @@ describe("app shell navigation", () => {
         .getAllByRole("link")
         .map((link) => link.textContent?.trim()),
     ).toEqual([
-      "Player",
       "Dashboard",
+      "Player",
       "Upload Match",
-      "Performance",
-      "Matches",
+      "Analysis History",
+      "My Progress",
       "Settings",
     ]);
   });
@@ -107,6 +108,7 @@ describe("app shell navigation", () => {
       dominantHand: "right",
       experienceLevel: "advanced",
       homeClub: "",
+      profileImageDataUrl: "",
     });
 
     renderWithQueryClient(<AppShell>Dashboard</AppShell>);

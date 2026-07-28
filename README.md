@@ -94,12 +94,28 @@ Phase 1.2 adds shareable performance cards:
 
 Phase 1.3 adds a player-centered workspace:
 
-- Primary navigation for Dashboard, Performance, Matches, Upload Match, Player, and Settings
+- Primary navigation for Dashboard, Player, Upload Match, Analysis History, Play History, and Settings
 - Returning-player dashboard with latest Match IQ, factual activity totals, and recent matches
-- Performance snapshot built from completed local analyses without progress comparisons
+- Evidence-aware progress snapshot with explicit qualified-report and duration context
 - Browser-local Player profile used for dashboard greeting and share-card defaults
 - State-aware matches list with human-readable statuses and available actions only
 - Mobile navigation that keeps all primary routes reachable
+
+Phase 1.7A separates persisted recording history from evidence-qualified player
+history:
+
+- `/analyses` shows every persisted analysis, including processing, limited,
+  unsuitable, failed, incomplete, and legacy results
+- `/play-history` uses only analyses included by versioned `play-history-v1`
+- Read-only `GET /api/v1/analyses` and `GET /api/v1/play-history` projections
+- Included-only observation and movement totals with explicit duration denominators
+- Honest provisional, excluded, not-evaluated, and insufficient-history states
+- Player-facing observed-change evaluation and earlier-versus-recent graphs built only
+  from comparable, qualified reports
+- Separate versioned contribution, comparability, trend, interpretation, grouping, and
+  aggregation decisions
+- Safe redirects from `/matches` to `/analyses` and `/performance` to `/play-history`
+- No rankings, unsupported coaching claims, Active Play data, or changed source analytics
 
 Phase 1.3A hardens real-video workflow reliability:
 
@@ -539,29 +555,33 @@ player-facing point order is `far left`, `far right`, `near right`, `near left`;
 the frontend maps those points to the backend contract order `near_left`,
 `near_right`, `far_right`, `far_left`.
 
-The Dashboard is a returning-player workspace. It shows `Welcome back` or
-`Welcome back, {displayName}` when a browser-local Player profile exists, the latest
-persisted Match IQ, factual activity totals, and a compact recent-match list. If no
-completed Match IQ exists, it shows: `Your latest Match IQ will appear here after you
-analyze a match.`
+The Dashboard is a returning-player snapshot. It shows total and completed reports,
+the number of reports available for progress comparisons, the latest completed
+analysis, the latest verified movement insight, and the current progress answer. It
+links to both history surfaces without exposing report-level eligibility decisions.
 
-The Performance page shows only factual aggregates from completed analyses:
+Analysis History (`/analyses`) reads persisted jobs from the backend rather than the
+browser-local recent-ID cache. Every persisted analysis remains visible and reopenable
+regardless of contribution status.
 
-- matches analyzed
-- cumulative distance from `analytics.distance.total_distance_feet`
-- cumulative tracked time from `analytics.zone_occupancy.tracked_time_seconds`
-- most common measured court zone from summed zone seconds
-- recent Match IQ summaries when persisted
-
-Invalid, missing, NaN, infinite, incomplete, failed, or legacy values are ignored or
-shown as unavailable. Court4 does not fabricate progress trends, ratings, rankings, or
-improvement percentages. The page states: `Progress trends will appear here after
-Court4 has enough match history to compare your sessions reliably.`
+Play History (`/play-history`) uses the centralized backend policy described in
+`PLAY_HISTORY_CONTRIBUTION_POLICY.md`. Only included analyses affect reliable
+observation time, qualified movement time, the qualified zone summary, or verified
+Match IQ summaries. Three comparable reports establish an initial baseline only. Four
+or more may form deterministic non-overlapping earlier and recent groups. Movement
+pace is normalized by qualified tracked duration, and court-zone percentages are
+duration weighted. Graphs expose dates, report counts, qualified duration,
+aggregation method, and provisional state. Missing aggregates are unavailable, not
+zero. Observed changes are descriptive and do not automatically mean better or worse
+performance. Report quality, processing, and contribution decisions remain on
+Analysis History.
 
 The Player page stores a minimal profile in browser `localStorage` only. Supported
-fields are display name, dominant hand, experience level, and optional home club or
-location. Values are trimmed, length-limited, sanitized for angle brackets, and can be
-cleared. This is not an account system and does not sync across devices. The Settings
+fields are display name, profile photo, dominant hand, experience level, and optional
+home club or location. Profile photos accept JPEG, PNG, or WebP up to 1 MB and appear
+in the Dashboard header with an initials fallback. Text values are trimmed,
+length-limited, sanitized for angle brackets, and can be cleared. This is not an
+account system and does not sync across devices. The Settings
 page is reserved for application and technical preferences, not sports identity fields.
 
 The shared workspace aggregation utility in `web/lib/workspace-data.ts` defines a
@@ -869,7 +889,9 @@ The output preserves source aspect ratio. It records only processed frames and u
 - API job persistence is local JSON on disk; there is no database, queue, auth, or multi-user isolation yet.
 - Frontend recent matches are stored only in the current browser's localStorage.
 - Player profile data is browser-local only; there is no authentication or cross-device synchronization.
-- Phase 1.3 introduces a player-centered workspace but does not yet provide long-term progress comparisons, AI coaching, public profiles, authentication, or cross-device profile synchronization.
+- Play History provides provisional long-term observed-change comparisons, not
+  outcome-validated performance evaluation. AI coaching, public profiles,
+  authentication, and cross-device profile synchronization remain unavailable.
 - Manual calibration accuracy depends on the user selecting the true outer court corners.
 - Legacy analyses remain viewable. Missing quality evidence is labeled unavailable and
   does not strengthen an insight.

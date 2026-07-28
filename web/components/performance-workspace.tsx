@@ -32,7 +32,7 @@ export function PerformanceWorkspace() {
               Factual totals from your completed Court4 match analyses.
             </p>
           </div>
-          <ButtonLink href="/matches/upload">
+          <ButtonLink href="/upload-match">
             <Upload aria-hidden="true" className="h-4 w-4" />
             Upload Match
           </ButtonLink>
@@ -95,7 +95,7 @@ export function PerformanceWorkspace() {
             className="mt-4"
             title="No completed Match IQ reports yet"
             description="Performance facts will appear after Court4 generates Match IQ for a match."
-            action={<ButtonLink href="/matches/upload">Upload Match</ButtonLink>}
+            action={<ButtonLink href="/upload-match">Upload Match</ButtonLink>}
           />
         )}
       </section>

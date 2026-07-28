@@ -447,6 +447,192 @@ export const analyticsResponseSchema = z.object({
   match_iq: matchIQReportSchema.nullable(),
 });
 
+export const contributionStatusSchema = z.enum([
+  "INCLUDED",
+  "EXCLUDED",
+  "PROVISIONAL",
+  "NOT_EVALUATED",
+]);
+
+export const contributionDecisionSchema = z.object({
+  status: contributionStatusSchema,
+  reason_codes: z.array(z.string()),
+  explanation: z.string(),
+  policy_version: z.string(),
+  evaluated_at: z.string(),
+  source_analysis_version: z.string(),
+  limitations: z.array(z.string()).default([]),
+  source_versions: z.record(z.string(), z.string().nullable()).default({}),
+});
+
+export const analysisHistoryItemSchema = z.object({
+  analysis_id: z.string(),
+  title: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  status: z.enum(["PROCESSING", "READY", "LIMITED", "UNSUITABLE", "FAILED", "LEGACY"]),
+  processing_status: z.string(),
+  recording_quality: recordingQualityLevelSchema.nullable(),
+  observation_coverage_ratio: z.number().min(0).max(1).nullable(),
+  reliable_observation_seconds: z.number().nonnegative().nullable(),
+  measurement_available: z.boolean(),
+  match_iq_available: z.boolean(),
+  contribution: contributionDecisionSchema,
+  limitation: z.string().nullable(),
+  report_url: z.string(),
+  thumbnail_url: z.string().nullable(),
+});
+
+export const analysisHistoryResponseSchema = z.object({
+  items: z.array(analysisHistoryItemSchema),
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+});
+
+export const progressSourceVersionsSchema = z.object({
+  analytics_schema: z.string(),
+  zone_definition: z.string(),
+  court_geometry: z.string(),
+  units: z.string(),
+  contribution_policy: z.string(),
+  match_iq_engine: z.string().nullable(),
+});
+
+export const progressEligibilityDecisionSchema = z.object({
+  status: z.enum(["ELIGIBLE", "PROVISIONAL", "INELIGIBLE", "NOT_EVALUATED"]),
+  reasons: z.array(z.string()),
+  limitations: z.array(z.string()),
+  source_versions: z.array(progressSourceVersionsSchema),
+  policy_version: z.string(),
+});
+
+export const playHistoryContributingAnalysisSchema = z.object({
+  analysis_id: z.string(),
+  title: z.string(),
+  created_at: z.string(),
+  report_url: z.string(),
+  contribution_status: contributionStatusSchema,
+  comparability: progressEligibilityDecisionSchema,
+  qualified_observation_seconds: z.number().nonnegative().nullable(),
+  qualified_movement_seconds: z.number().nonnegative().nullable(),
+});
+
+export const playHistoryComparisonGroupSchema = z.object({
+  name: z.string(),
+  period_start: z.string(),
+  period_end: z.string(),
+  analysis_count: z.number().int().positive(),
+  qualified_observation_seconds: z.number().nonnegative(),
+  qualified_movement_seconds: z.number().nonnegative(),
+  analyses: z.array(playHistoryContributingAnalysisSchema),
+});
+
+export const playHistoryResponseSchema = z.object({
+  policy_version: z.string(),
+  policy_versions: z.object({
+    contribution: z.string(),
+    comparability: z.string(),
+    trend: z.string(),
+    interpretation: z.string(),
+    grouping: z.string(),
+    aggregation: z.string(),
+  }),
+  total_analyses: z.number().int().nonnegative(),
+  eligible_count: z.number().int().nonnegative(),
+  comparable_count: z.number().int().nonnegative(),
+  excluded_count: z.number().int().nonnegative(),
+  provisional_count: z.number().int().nonnegative(),
+  not_evaluated_count: z.number().int().nonnegative(),
+  reliable_observation_seconds: z.number().nonnegative().nullable(),
+  qualified_movement_seconds: z.number().nonnegative().nullable(),
+  most_common_zone: z
+    .object({
+      zone: z.string(),
+      label: z.string(),
+      seconds: z.number().nonnegative(),
+      denominator_seconds: z.number().positive(),
+      percentage: z.number().min(0).max(100),
+      contributing_analyses: z.number().int().positive(),
+    })
+    .nullable(),
+  latest_verified_match_iq: z.array(
+    z.object({
+      analysis_id: z.string(),
+      title: z.string(),
+      created_at: z.string(),
+      summary: z.string(),
+      report_url: z.string(),
+    }),
+  ),
+  recent_eligible_analyses: z.array(analysisHistoryItemSchema),
+  contributions: z.array(analysisHistoryItemSchema),
+  comparison_candidates: z.array(playHistoryContributingAnalysisSchema),
+  readiness: z.object({
+    status: z.string(),
+    explanation: z.string(),
+    eligible_analyses_required: z.number().int().positive(),
+    eligible_analyses_available: z.number().int().nonnegative(),
+  }),
+  progress: z.object({
+    status: z.string(),
+    baseline_status: z.string(),
+    answer: z.string(),
+    explanation: z.string(),
+    qualified_analysis_count: z.number().int().nonnegative(),
+    comparable_analysis_count: z.number().int().nonnegative(),
+    qualified_observation_seconds: z.number().nonnegative(),
+    comparison_period_start: z.string().nullable(),
+    comparison_period_end: z.string().nullable(),
+    provisional: z.boolean(),
+    limitations: z.array(z.string()),
+    earlier_analysis_count: z.number().int().nonnegative(),
+    recent_analysis_count: z.number().int().nonnegative(),
+    earlier_group: playHistoryComparisonGroupSchema.nullable(),
+    recent_group: playHistoryComparisonGroupSchema.nullable(),
+    trend_eligibility: progressEligibilityDecisionSchema,
+    interpretation_eligibility: progressEligibilityDecisionSchema,
+    contributing_analysis_ids: z.array(z.string()),
+    aggregation_methods: z.array(z.string()),
+    trend_metrics: z.array(
+      z.object({
+        key: z.string(),
+        label: z.string(),
+        unit: z.string(),
+        earlier_value: z.number().nonnegative().nullable(),
+        recent_value: z.number().nonnegative().nullable(),
+        change_value: z.number().nullable(),
+        direction: z.enum(["HIGHER", "LOWER", "STABLE"]).nullable(),
+        context: z.string(),
+        aggregation_method: z.string(),
+        normalization: z.string(),
+        earlier_contributing_count: z.number().int().nonnegative(),
+        recent_contributing_count: z.number().int().nonnegative(),
+        earlier_qualified_observation_seconds: z.number().nonnegative(),
+        recent_qualified_observation_seconds: z.number().nonnegative(),
+        contributing_analysis_ids: z.array(z.string()),
+        provisional: z.boolean(),
+        limitations: z.array(z.string()),
+      }),
+    ),
+    play_style: z
+      .object({
+        status: z.string(),
+        metric_key: z.string().nullable(),
+        metric_label: z.string().nullable(),
+        earlier_value: z.number().min(0).max(100).nullable(),
+        recent_value: z.number().min(0).max(100).nullable(),
+        unit: z.string(),
+        summary: z.string(),
+        qualified_analysis_count: z.number().int().nonnegative(),
+        qualified_observation_seconds: z.number().nonnegative(),
+        provisional: z.boolean(),
+        limitations: z.array(z.string()),
+      })
+      .nullable(),
+  }),
+});
+
 export const apiErrorResponseSchema = z.object({
   error: z.object({
     code: z.string(),
@@ -455,6 +641,8 @@ export const apiErrorResponseSchema = z.object({
 });
 
 export type AnalysisArtifact = z.infer<typeof analysisArtifactSchema>;
+export type AnalysisHistoryItem = z.infer<typeof analysisHistoryItemSchema>;
+export type AnalysisHistoryResponse = z.infer<typeof analysisHistoryResponseSchema>;
 export type AnalysisJob = z.infer<typeof analysisJobSchema>;
 export type AnalyticsGenerationResponse = z.infer<typeof analyticsGenerationResponseSchema>;
 export type AnalyticsResponse = z.infer<typeof analyticsResponseSchema>;
@@ -467,6 +655,7 @@ export type PlayersResponse = z.infer<typeof playersResponseSchema>;
 export type PlayerSelectionResponse = z.infer<typeof playerSelectionResponseSchema>;
 export type PlayerCandidate = z.infer<typeof playerCandidateSchema>;
 export type PlayerCandidateCollection = z.infer<typeof playerCandidateCollectionSchema>;
+export type PlayHistoryResponse = z.infer<typeof playHistoryResponseSchema>;
 export type RecordingQualityAssessment = z.infer<typeof recordingQualityAssessmentSchema>;
 export type SampledFrame = z.infer<typeof sampledFrameSchema>;
 export type SampledFramesResponse = z.infer<typeof sampledFramesResponseSchema>;

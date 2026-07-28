@@ -1,158 +1,150 @@
 "use client";
 
-import { ArrowRight, Share2, Upload } from "lucide-react";
+import { ArrowRight } from "lucide-react";
+import Link from "next/link";
 
-import { usePlayerProfile } from "@/lib/use-player-profile";
-import { useWorkspaceAnalyses } from "@/lib/use-workspace-analyses";
-import {
-  formatDistanceFeet,
-  formatTrackedTime,
-  getDominantZone,
-} from "@/lib/workspace-data";
-import { formatDateTime } from "@/lib/utils";
-import { EmptyState } from "@/components/empty-state";
-import { RecentMatches } from "@/components/recent-matches";
+import { AnalysisStatusBadge } from "@/components/history-badges";
+import { ProfileAvatar } from "@/components/profile-avatar";
 import { ButtonLink } from "@/components/ui/button";
+import { useAnalysisHistory, usePlayHistory } from "@/lib/use-history";
+import { usePlayerProfile } from "@/lib/use-player-profile";
+import { formatDateTime } from "@/lib/utils";
+import { formatTrackedTime } from "@/lib/workspace-data";
 
 export function DashboardWorkspace() {
   const { profile } = usePlayerProfile();
-  const { summary, isLoading, analysisIds } = useWorkspaceAnalyses();
+  const analyses = useAnalysisHistory();
+  const playHistory = usePlayHistory();
   const displayName = profile.displayName;
-  const latest = summary.latestMatchIq;
-  const latestAnalytics = latest?.analytics?.analytics ?? null;
-  const latestMatchIQ = latest?.analytics?.match_iq ?? null;
-  const latestInsight = latestMatchIQ?.insights[0] ?? null;
-  const dominantZone = latest ? getDominantZone(latest) : null;
+  const latestCompleted = analyses.data?.items.find((item) =>
+    ["READY", "LIMITED", "UNSUITABLE"].includes(item.status),
+  );
+  const latestInsight = playHistory.data?.latest_verified_match_iq[0];
+  const completedCount =
+    analyses.data?.items.filter((item) =>
+      ["READY", "LIMITED", "UNSUITABLE"].includes(item.status),
+    ).length ?? 0;
 
   return (
     <div className="space-y-6">
       <section className="rounded-md border border-court-line bg-white p-6 shadow-panel">
-        <div className="grid gap-5 lg:grid-cols-[1fr_auto] lg:items-center">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-wide text-court-green">
-              Player workspace
-            </p>
-            <h1 className="mt-2 text-3xl font-semibold text-court-ink md:text-4xl">
+        <div className="flex items-center gap-4 sm:gap-5">
+          <Link
+            href="/player"
+            aria-label="Open player profile"
+            title="Player profile"
+            className="shrink-0 rounded-full outline-none ring-court-green transition hover:scale-105 focus-visible:ring-2 focus-visible:ring-offset-2"
+          >
+            <ProfileAvatar
+              profile={profile}
+              className="h-20 w-20 text-xl shadow-panel sm:h-24 sm:w-24 sm:text-2xl"
+            />
+          </Link>
+          <div className="min-w-0">
+            <h1 className="text-3xl font-semibold text-court-ink md:text-4xl">
               {displayName ? `Welcome back, ${displayName}` : "Welcome back"}
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-court-muted">
-              Review your latest Match IQ or upload another match.
+              Review your latest report and see how your game is developing over time.
             </p>
           </div>
-          <ButtonLink href="/matches/upload">
-            <Upload aria-hidden="true" className="h-4 w-4" />
-            Upload Match
-          </ButtonLink>
         </div>
+      </section>
+
+      <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          label="Total reports"
+          value={analyses.isLoading ? "Loading" : String(analyses.data?.total ?? 0)}
+        />
+        <MetricCard
+          label="Completed reports"
+          value={analyses.isLoading ? "Loading" : String(completedCount)}
+        />
+        <MetricCard
+          label="Qualified analyses"
+          value={playHistory.isLoading ? "Loading" : String(playHistory.data?.eligible_count ?? 0)}
+        />
+        <MetricCard
+          label="Progress check"
+          value={progressLabel(playHistory.data?.progress.status)}
+        />
+      </section>
+
+      <section className="grid gap-4 lg:grid-cols-2">
+        <article className="rounded-md border border-court-line bg-white p-5 shadow-panel">
+          <p className="text-sm font-semibold uppercase tracking-wide text-court-green">
+            Latest completed analysis
+          </p>
+          {latestCompleted ? (
+            <>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <h2 className="text-xl font-semibold text-court-ink">{latestCompleted.title}</h2>
+                <AnalysisStatusBadge status={latestCompleted.status} />
+              </div>
+              <p className="mt-2 text-sm text-court-muted">
+                {formatDateTime(latestCompleted.created_at)}
+              </p>
+              <p className="mt-3 text-sm leading-6 text-court-muted">
+                {latestCompleted.limitation ?? "Your report is ready to review."}
+              </p>
+              <ButtonLink href={latestCompleted.report_url} variant="secondary" className="mt-4">
+                Open latest analysis
+                <ArrowRight aria-hidden="true" className="h-4 w-4" />
+              </ButtonLink>
+            </>
+          ) : (
+            <p className="mt-4 text-sm leading-6 text-court-muted">
+              No completed analysis is available yet.
+            </p>
+          )}
+        </article>
+
+        <article className="rounded-md border border-court-line bg-white p-5 shadow-panel">
+          <p className="text-sm font-semibold uppercase tracking-wide text-court-green">
+            Latest verified movement insight
+          </p>
+          {latestInsight ? (
+            <>
+              <h2 className="mt-3 text-xl font-semibold text-court-ink">{latestInsight.title}</h2>
+              <p className="mt-3 text-sm leading-6 text-court-muted">{latestInsight.summary}</p>
+              <ButtonLink href={latestInsight.report_url} variant="secondary" className="mt-4">
+                View verified analysis
+                <ArrowRight aria-hidden="true" className="h-4 w-4" />
+              </ButtonLink>
+            </>
+          ) : (
+            <p className="mt-4 text-sm leading-6 text-court-muted">
+              No verified movement insight is available from an evidence-qualified analysis yet.
+            </p>
+          )}
+        </article>
       </section>
 
       <section className="rounded-md border border-court-line bg-white p-5 shadow-panel">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-wide text-court-green">
-              Latest Match IQ
-            </p>
-            <h2 className="mt-2 text-xl font-semibold text-court-ink">
-              {latest
-                ? latestMatchIQ?.quality_gate === "NORMAL"
-                  ? "Verified movement insight"
-                  : latestMatchIQ?.quality_gate === "CAUTIOUS"
-                    ? "Analysis under review"
-                    : "Limited by video quality"
-                : "No verified insight yet"}
-            </h2>
-          </div>
-          {latest ? (
-            <div className="flex flex-wrap gap-2">
-              <ButtonLink href={`/matches/${latest.analysisId}/analytics`} variant="secondary">
-                View full results
-                <ArrowRight aria-hidden="true" className="h-4 w-4" />
-              </ButtonLink>
-              <ButtonLink href={`/matches/${latest.analysisId}/analytics#share-card`}>
-                <Share2 aria-hidden="true" className="h-4 w-4" />
-                Share results
-              </ButtonLink>
-            </div>
-          ) : null}
-        </div>
-
-        {isLoading && analysisIds.length > 0 ? (
-          <p className="mt-4 text-sm text-court-muted">Loading your latest match data.</p>
-        ) : latest && latestAnalytics && latestMatchIQ ? (
-          <div className="mt-5 grid gap-5 lg:grid-cols-[1.3fr_1fr]">
-            <div>
-              <p className="text-sm text-court-muted">
-                {formatDateTime(latestAnalytics.created_at)}
-              </p>
-              <p className="mt-3 text-base leading-7 text-court-muted">
-                {latestMatchIQ.summary}
-              </p>
-              {latestInsight && latestMatchIQ.quality_gate !== "INSUFFICIENT_EVIDENCE" ? (
-                <div className="mt-4 rounded-md border border-court-line bg-court-panel p-4">
-                  <p className="text-sm font-semibold text-court-ink">{latestInsight.title}</p>
-                  <p className="mt-1 text-sm leading-6 text-court-muted">
-                    {latestInsight.observation || latestInsight.statement}
-                  </p>
-                </div>
-              ) : null}
-            </div>
-            <dl className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
-              <MetricCard
-                label="Total distance"
-                value={formatDistanceFeet(latestAnalytics.distance.total_distance_feet)}
-              />
-              <MetricCard
-                label="Dominant zone"
-                value={
-                  dominantZone
-                    ? `${dominantZone.label} ${dominantZone.percentage.toFixed(1)}%`
-                    : "Unavailable"
-                }
-              />
-              <MetricCard
-                label="Tracked time"
-                value={formatTrackedTime(latestAnalytics.zone_occupancy.tracked_time_seconds)}
-              />
-            </dl>
-          </div>
-        ) : (
-          <EmptyState
-            className="mt-5"
-            title="Your latest Match IQ will appear here after you analyze a match."
-            description="Court4 only shows verified results from completed match analyses."
-            action={<ButtonLink href="/matches/upload">Upload Match</ButtonLink>}
-          />
-        )}
+        <h2 className="text-xl font-semibold text-court-ink">Your progress</h2>
+        <p className="mt-3 text-lg font-semibold text-court-ink">
+          {playHistory.data?.progress.answer ?? "Building your baseline"}
+        </p>
+        <p className="mt-2 text-sm leading-6 text-court-muted">
+          {playHistory.data?.progress.explanation ??
+            "Court4 will compare your earlier and recent qualified reports when enough data is available."}
+        </p>
+        {playHistory.data?.progress ? (
+          <p className="mt-3 text-xs leading-5 text-court-muted">
+            {dashboardEvidenceContext(playHistory.data.progress)}
+            {playHistory.data.progress.provisional ? " Provisional." : ""}
+          </p>
+        ) : null}
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Matches analyzed" value={String(summary.completedMatchCount)} />
-        <MetricCard
-          label="Total tracked distance"
-          value={formatDistanceFeet(summary.totalDistanceFeet)}
-        />
-        <MetricCard
-          label="Total tracked time"
-          value={formatTrackedTime(summary.totalTrackedSeconds)}
-        />
-        <MetricCard
-          label="Completed Match IQ reports"
-          value={String(summary.completedMatchIqCount)}
-        />
-      </section>
-
-      <section className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-xl font-semibold text-court-ink">Recent matches</h2>
-            <p className="text-sm text-court-muted">Your locally remembered match activity.</p>
-          </div>
-          <ButtonLink href="/matches" variant="secondary">
-            View Matches
-            <ArrowRight aria-hidden="true" className="h-4 w-4" />
-          </ButtonLink>
-        </div>
-        <RecentMatches compact limit={3} showHeading={false} />
+      <section className="flex flex-wrap gap-3">
+        <ButtonLink href="/analysis-history" variant="secondary">
+          View Analysis History
+        </ButtonLink>
+        <ButtonLink href="/my-progress" variant="secondary">
+          View progress
+        </ButtonLink>
+        <ButtonLink href="/upload-match">Upload Match</ButtonLink>
       </section>
     </div>
   );
@@ -165,4 +157,37 @@ function MetricCard({ label, value }: { label: string; value: string }) {
       <dd className="mt-2 break-words text-2xl font-semibold text-court-ink">{value}</dd>
     </div>
   );
+}
+
+function progressLabel(status: string | undefined): string {
+  if (!status) return "Loading";
+  if (status === "NO_QUALIFIED_REPORTS") return "Waiting for evidence";
+  if (status === "BUILDING_BASELINE") return "Building baseline";
+  if (status === "BASELINE_ESTABLISHED") return "Baseline ready";
+  if (status === "MIXED_OR_INCOMPATIBLE_REPORTS") return "Not comparable yet";
+  return "Comparison ready";
+}
+
+function dashboardEvidenceContext(
+  progress: NonNullable<ReturnType<typeof usePlayHistory>["data"]>["progress"],
+): string {
+  const period =
+    progress.comparison_period_start && progress.comparison_period_end
+      ? ` from ${formatDashboardDate(progress.comparison_period_start)}–${formatDashboardDate(
+          progress.comparison_period_end,
+        )}`
+      : "";
+  return `Based on ${progress.qualified_analysis_count} qualified ${
+    progress.qualified_analysis_count === 1 ? "analysis" : "analyses"
+  }${period}, covering ${formatTrackedTime(
+    progress.qualified_observation_seconds,
+  )} of reliable observation.`;
+}
+
+function formatDashboardDate(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(value));
 }

@@ -1,9 +1,5 @@
-import { UploadDropzone } from "@/components/upload-dropzone";
+import { redirect } from "next/navigation";
 
-export default function UploadMatchPage() {
-  return (
-    <div className="mx-auto max-w-4xl space-y-6">
-      <UploadDropzone />
-    </div>
-  );
+export default function LegacyUploadMatchPage() {
+  redirect("/upload-match");
 }

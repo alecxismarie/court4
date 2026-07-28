@@ -213,7 +213,7 @@ describe("analytics details evidence narrative", () => {
     expect(screen.getByText(/not reliable enough to generate a trustworthy movement insight/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Try another video" })).toHaveAttribute(
       "href",
-      "/matches/upload",
+      "/upload-match",
     );
     expect(screen.queryByText("upload_preflight_blocked")).not.toBeInTheDocument();
     expect(screen.queryByText("tracking_gaps_excessive")).not.toBeInTheDocument();

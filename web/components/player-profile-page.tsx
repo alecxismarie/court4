@@ -1,8 +1,9 @@
 "use client";
 
-import { Save } from "lucide-react";
-import { type FormEvent, useEffect, useState } from "react";
+import { Camera, Save, Trash2 } from "lucide-react";
+import { type ChangeEvent, type FormEvent, useEffect, useState } from "react";
 
+import { ProfileAvatar } from "@/components/profile-avatar";
 import {
   dominantHandOptions,
   emptyPlayerProfile,
@@ -10,6 +11,9 @@ import {
   formatDominantHand,
   formatExperienceLevel,
   normalizePlayerProfile,
+  PROFILE_IMAGE_ACCEPT,
+  readProfileImageFile,
+  validateProfileImageFile,
   validatePlayerProfile,
   type PlayerProfile,
   type PlayerProfileErrors,
@@ -34,7 +38,34 @@ export function PlayerProfilePage() {
     value: PlayerProfile[TKey],
   ) {
     setForm((current) => ({ ...current, [key]: value }));
+    setErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
     setStatus(null);
+  }
+
+  async function selectProfilePhoto(event: ChangeEvent<HTMLInputElement>) {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) {
+      return;
+    }
+    const fileError = validateProfileImageFile(file);
+    if (fileError) {
+      setErrors((current) => ({ ...current, profileImageDataUrl: fileError }));
+      return;
+    }
+    try {
+      updateField("profileImageDataUrl", await readProfileImageFile(file));
+    } catch {
+      setErrors((current) => ({
+        ...current,
+        profileImageDataUrl: "Profile photo could not be read.",
+      }));
+    }
   }
 
   function submit(event: FormEvent<HTMLFormElement>) {
@@ -48,29 +79,65 @@ export function PlayerProfilePage() {
     }
     const saved = save(normalized);
     setForm(saved);
-    setStatus("Player profile saved in this browser.");
+    setStatus("Profile saved.");
   }
 
   return (
     <div className="space-y-6">
       <section className="rounded-md border border-court-line bg-white p-6 shadow-panel">
-        <p className="text-sm font-semibold uppercase tracking-wide text-court-green">
-          Your details
-        </p>
-        <h1 className="mt-2 text-3xl font-semibold text-court-ink">Player profile</h1>
+        <h1 className="text-3xl font-semibold text-court-ink">Player profile</h1>
         <p className="mt-3 max-w-3xl text-sm leading-6 text-court-muted">
-          Choose the details Court4 should use for you. They are saved only in this
-          browser—not to an account—and won&apos;t sync to other devices.
+          Update the photo and details used across Court4.
         </p>
       </section>
 
-      <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <section className="max-w-3xl">
         <form
           onSubmit={submit}
-          className="rounded-md border border-court-line bg-white p-5 shadow-panel"
+          className="rounded-md border border-court-line bg-white p-6 shadow-panel"
           aria-label="Player profile form"
         >
           <div className="grid gap-4">
+            <div className="flex flex-wrap items-center gap-4 rounded-md border border-court-line bg-court-panel p-4">
+              <ProfileAvatar profile={form} className="h-20 w-20 text-xl" />
+              <div>
+                <p className="text-sm font-semibold text-court-ink">Profile photo</p>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <label
+                    htmlFor="profile-photo"
+                    className="inline-flex cursor-pointer items-center justify-center gap-2 rounded-md border border-court-line bg-white px-3 py-2 text-sm font-semibold text-court-ink hover:bg-court-panel"
+                  >
+                    <Camera aria-hidden="true" className="h-4 w-4" />
+                    {form.profileImageDataUrl ? "Change photo" : "Choose photo"}
+                  </label>
+                  <input
+                    id="profile-photo"
+                    aria-label="Profile photo"
+                    type="file"
+                    accept={PROFILE_IMAGE_ACCEPT}
+                    className="sr-only"
+                    onChange={selectProfilePhoto}
+                  />
+                  {form.profileImageDataUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => updateField("profileImageDataUrl", "")}
+                      className="inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold text-court-muted hover:bg-white hover:text-court-ink"
+                    >
+                      <Trash2 aria-hidden="true" className="h-4 w-4" />
+                      Remove photo
+                    </button>
+                  ) : null}
+                </div>
+                <p className="mt-2 text-xs font-medium text-court-muted">
+                  JPG, PNG or WebP · Up to 10 MB
+                </p>
+                {errors.profileImageDataUrl ? (
+                  <FormError message={errors.profileImageDataUrl} />
+                ) : null}
+              </div>
+            </div>
+
             <label className="grid gap-2 text-sm font-semibold text-court-ink">
               Display name
               <input
@@ -142,7 +209,7 @@ export function PlayerProfilePage() {
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <Button type="submit">
               <Save aria-hidden="true" className="h-4 w-4" />
-              Save Player Profile
+              Save changes
             </Button>
             {status ? (
               <p className="text-sm font-medium text-court-green" role="status">
@@ -151,33 +218,7 @@ export function PlayerProfilePage() {
             ) : null}
           </div>
         </form>
-
-        <aside className="rounded-md border border-court-line bg-white p-5 shadow-panel">
-          <h2 className="text-lg font-semibold text-court-ink">Profile preview</h2>
-          <dl className="mt-4 grid gap-3 text-sm">
-            <PreviewItem label="Display name" value={form.displayName || "Not set"} />
-            <PreviewItem label="Dominant hand" value={formatDominantHand(form.dominantHand)} />
-            <PreviewItem
-              label="Experience"
-              value={formatExperienceLevel(form.experienceLevel)}
-            />
-            <PreviewItem label="Home club or location" value={form.homeClub || "Not set"} />
-          </dl>
-          <p className="mt-5 text-xs leading-5 text-court-muted">
-            Profile data is stored in browser local storage. Court4 does not make
-            this profile public.
-          </p>
-        </aside>
       </section>
-    </div>
-  );
-}
-
-function PreviewItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md border border-court-line bg-court-panel p-3">
-      <dt className="text-xs font-semibold uppercase tracking-wide text-court-muted">{label}</dt>
-      <dd className="mt-1 break-words font-semibold text-court-ink">{value}</dd>
     </div>
   );
 }

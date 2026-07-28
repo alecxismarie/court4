@@ -1,18 +1,22 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardWorkspace } from "@/components/dashboard-workspace";
 import { emptyPlayerProfile } from "@/lib/player-profile";
-import type { AnalyticsResponse } from "@/lib/api/types";
-import { deriveWorkspaceSummary, type WorkspaceAnalysisRecord } from "@/lib/workspace-data";
-import { makeAnalyticsReport, makeJob, makeMatchIQReport } from "@/test/factories";
+import {
+  makeAnalysisHistoryItem,
+  makeAnalysisHistoryResponse,
+  makePlayHistoryResponse,
+} from "@/test/factories";
 import { renderWithQueryClient } from "@/test/render";
 
-const workspaceMock = vi.hoisted(() => vi.fn());
+const analysisHistoryMock = vi.hoisted(() => vi.fn());
+const playHistoryMock = vi.hoisted(() => vi.fn());
 const profileMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@/lib/use-workspace-analyses", () => ({
-  useWorkspaceAnalyses: workspaceMock,
+vi.mock("@/lib/use-history", () => ({
+  useAnalysisHistory: analysisHistoryMock,
+  usePlayHistory: playHistoryMock,
 }));
 
 vi.mock("@/lib/use-player-profile", () => ({
@@ -26,7 +30,14 @@ describe("dashboard workspace", () => {
       isLoaded: true,
       save: vi.fn(),
     });
-    workspaceMock.mockReturnValue(makeWorkspace([]));
+    analysisHistoryMock.mockReturnValue(query(makeAnalysisHistoryResponse()));
+    playHistoryMock.mockReturnValue(query(makePlayHistoryResponse({
+      total_analyses: 0,
+      eligible_count: 0,
+      latest_verified_match_iq: [],
+      recent_eligible_analyses: [],
+      contributions: [],
+    })));
   });
 
   it("shows a neutral welcome without a configured profile", () => {
@@ -34,6 +45,16 @@ describe("dashboard workspace", () => {
 
     expect(screen.getByRole("heading", { name: "Welcome back" })).toBeInTheDocument();
     expect(screen.queryByText(/Welcome back,/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open player profile" })).toHaveAttribute(
+      "href",
+      "/player",
+    );
+    const header = screen.getByRole("heading", { name: "Welcome back" }).closest("section");
+    expect(header).not.toBeNull();
+    expect(
+      within(header as HTMLElement).queryByRole("link", { name: /upload match/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Player workspace")).not.toBeInTheDocument();
   });
 
   it("shows a personalized welcome with a saved display name", () => {
@@ -46,76 +67,64 @@ describe("dashboard workspace", () => {
     renderWithQueryClient(<DashboardWorkspace />);
 
     expect(screen.getByRole("heading", { name: "Welcome back, Ava" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Ava profile photo" })).toHaveTextContent("A");
   });
 
-  it("renders the latest Match IQ without inventing a score", () => {
-    workspaceMock.mockReturnValue(makeWorkspace([makeCompletedRecord("analysis-123")]));
+  it("shows the saved profile photo in the dashboard header", () => {
+    profileMock.mockReturnValue({
+      profile: {
+        ...emptyPlayerProfile,
+        displayName: "Alexis",
+        profileImageDataUrl: "data:image/png;base64,AQID",
+      },
+      isLoaded: true,
+      save: vi.fn(),
+    });
 
     renderWithQueryClient(<DashboardWorkspace />);
 
-    expect(screen.getByText("Match IQ found 3 movement observations. Top signal: Court4 measured 60.0% of tracked time in the transition zone.")).toBeInTheDocument();
-    expect(screen.getByText("Transition-zone time was the largest positioning signal")).toBeInTheDocument();
-    expect(screen.getAllByText("42.5 ft").length).toBeGreaterThan(0);
-    expect(screen.getByText("Matches analyzed")).toBeInTheDocument();
-    expect(screen.getByText("Completed Match IQ reports")).toBeInTheDocument();
-    expect(screen.queryByText(/score/i)).not.toBeInTheDocument();
-  });
-
-  it("handles legacy completed analytics without showing a latest Match IQ", () => {
-    workspaceMock.mockReturnValue(
-      makeWorkspace([makeCompletedRecord("legacy", { matchIQ: null })]),
+    const avatar = screen.getByRole("img", { name: "Alexis profile photo" });
+    expect(avatar.querySelector("img")).toHaveAttribute(
+      "src",
+      "data:image/png;base64,AQID",
     );
-
-    renderWithQueryClient(<DashboardWorkspace />);
-
-    expect(
-      screen.getByText("Your latest Match IQ will appear here after you analyze a match."),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Matches analyzed")).toBeInTheDocument();
-    expect(screen.getAllByText("42.5 ft").length).toBeGreaterThan(0);
   });
 
-  it("renders an honest no-match empty state", () => {
+  it("shows a player-facing snapshot and clear report and progress links", () => {
+    const item = makeAnalysisHistoryItem();
+    analysisHistoryMock.mockReturnValue(query(makeAnalysisHistoryResponse([item])));
+    playHistoryMock.mockReturnValue(query(makePlayHistoryResponse()));
+
     renderWithQueryClient(<DashboardWorkspace />);
 
-    expect(
-      screen.getByText("Your latest Match IQ will appear here after you analyze a match."),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Total reports")).toBeInTheDocument();
+    expect(screen.getByText("Completed reports")).toBeInTheDocument();
+    expect(screen.getByText("Qualified analyses")).toBeInTheDocument();
+    expect(screen.getByText("Progress check")).toBeInTheDocument();
+    expect(screen.getByText("Latest completed analysis")).toBeInTheDocument();
+    expect(screen.getByText("Latest verified movement insight")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View Analysis History" })).toHaveAttribute(
+      "href",
+      "/analysis-history",
+    );
+    expect(screen.getByRole("link", { name: "View progress" })).toHaveAttribute(
+      "href",
+      "/my-progress",
+    );
+    expect(screen.getByText(/Based on 1 qualified analysis/)).toHaveTextContent(
+      /30.0 sec of reliable observation/,
+    );
+    expect(screen.getByText(/Provisional\.$/)).toBeInTheDocument();
+    expect(screen.queryByText(/Included because recording quality/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/cumulative distance/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/score/i)).not.toBeInTheDocument();
   });
 });
 
-function makeWorkspace(records: WorkspaceAnalysisRecord[]) {
+function query<T>(data: T) {
   return {
-    analysisIds: records.map((record) => record.analysisId),
-    records,
-    summary: deriveWorkspaceSummary(records),
+    data,
     isLoading: false,
-    hasBackendError: false,
-  };
-}
-
-function makeCompletedRecord(
-  analysisId: string,
-  options: { matchIQ?: AnalyticsResponse["match_iq"] } = {},
-): WorkspaceAnalysisRecord {
-  const analytics = makeAnalyticsReport({ analysis_id: analysisId });
-  return {
-    analysisId,
-    job: makeJob({
-      analysis_id: analysisId,
-      status: "completed",
-      current_stage: "analyzed",
-      analytics_completed: true,
-      created_at: analytics.created_at,
-      updated_at: analytics.created_at,
-    }),
-    analytics: {
-      analysis_id: analysisId,
-      analytics,
-      match_iq:
-        options.matchIQ === undefined
-          ? makeMatchIQReport({ analysis_id: analysisId })
-          : options.matchIQ,
-    },
+    isError: false,
   };
 }

@@ -28,6 +28,10 @@ const navItems = [
   { href: "/settings", label: "Settings", icon: Settings, disabled: false },
 ] as const;
 
+const activeRouteAliases: Partial<Record<(typeof navItems)[number]["href"], readonly string[]>> = {
+  "/analysis-history": ["/matches"],
+};
+
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { profile } = usePlayerProfile();
@@ -146,9 +150,13 @@ function NavLink({
   );
 }
 
-function isActive(pathname: string, href: string): boolean {
+function isActive(pathname: string, href: (typeof navItems)[number]["href"]): boolean {
   if (href === "/") {
     return pathname === "/";
   }
-  return pathname === href || pathname.startsWith(`${href}/`);
+  const routePrefixes = [href, ...(activeRouteAliases[href] ?? [])];
+  return routePrefixes.some(
+    (routePrefix) =>
+      pathname === routePrefix || pathname.startsWith(`${routePrefix}/`),
+  );
 }

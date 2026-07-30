@@ -62,6 +62,22 @@ describe("app shell navigation", () => {
     );
   });
 
+  it("marks Analysis History active on a nested match analytics route", () => {
+    pathnameMock.mockReturnValue("/matches/analysis-123/analytics");
+
+    renderWithQueryClient(<AppShell>Match IQ</AppShell>);
+
+    for (const analysisHistoryLink of screen.getAllByRole("link", {
+      name: /analysis history/i,
+    })) {
+      expect(analysisHistoryLink).toHaveAttribute("aria-current", "page");
+      expect(analysisHistoryLink).toHaveClass("bg-court-lime");
+    }
+    for (const progressLink of screen.getAllByRole("link", { name: /my progress/i })) {
+      expect(progressLink).not.toHaveAttribute("aria-current");
+    }
+  });
+
   it("keeps desktop navigation items on separate rows", () => {
     renderWithQueryClient(<AppShell>Workspace</AppShell>);
 

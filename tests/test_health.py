@@ -12,6 +12,15 @@ def test_health_endpoint() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_readiness_endpoint_checks_postgresql() -> None:
+    client = TestClient(app)
+
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready", "database": "ok"}
+
+
 def test_configured_frontend_origin_gets_cors_headers() -> None:
     client = TestClient(app)
 

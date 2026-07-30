@@ -1,3 +1,4 @@
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import cast
@@ -5,6 +6,52 @@ from typing import cast
 import cv2
 import numpy as np
 import pytest
+
+os.environ.setdefault("PICKLEBALL_AI_ENVIRONMENT", "test")
+os.environ.setdefault("PICKLEBALL_AI_PERSISTENCE_BACKEND", "postgresql")
+os.environ.setdefault(
+    "PICKLEBALL_AI_DATABASE_URL",
+    os.environ.get(
+        "COURT4_TEST_DATABASE_URL",
+        "postgresql+psycopg://court4_test:court4_test_local_only@127.0.0.1:55434/court4_test",
+    ),
+)
+os.environ.setdefault("PICKLEBALL_AI_BOOTSTRAP_USER_ENABLED", "true")
+os.environ.setdefault(
+    "PICKLEBALL_AI_BOOTSTRAP_USER_ID", "00000000-0000-4000-8000-000000000002"
+)
+os.environ.setdefault(
+    "PICKLEBALL_AI_BOOTSTRAP_USER_IDENTITY", "test-suite@court4.invalid"
+)
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    del session
+    from alembic import command
+    from alembic.config import Config
+
+    command.upgrade(Config("alembic.ini"), "head")
+
+
+@pytest.fixture(autouse=True)
+def clean_production_database() -> None:
+    from sqlalchemy import text
+
+    from app.config import get_settings
+    from app.persistence.bootstrap import configured_bootstrap_identity
+    from app.persistence.runtime import get_persistence
+
+    runtime = get_persistence()
+    with runtime.engine.begin() as connection:
+        connection.execute(
+            text(
+                "TRUNCATE TABLE player_selections, analysis_artifacts, "
+                "analysis_state_events, idempotency_records, analysis_runs, "
+                "analyses, uploaded_videos, users RESTART IDENTITY CASCADE"
+            )
+        )
+    identity = configured_bootstrap_identity(get_settings())
+    runtime.service.ensure_bootstrap_user(identity)
 
 
 @pytest.fixture

@@ -117,6 +117,24 @@ history:
 - Safe redirects from `/matches` to `/analyses` and `/performance` to `/play-history`
 - No rankings, unsupported coaching claims, Active Play data, or changed source analytics
 
+Phase 1.8 defines the personal-account platform foundation before shared deployment:
+
+- PostgreSQL-backed users, ownership, analyses, processing attempts, provenance, and
+  artifact metadata are designed in `docs/platform/`
+- Email/password is the permanent first authentication model; Google and Apple are
+  future-compatible providers
+- Private-alpha access is a temporary approved-registration policy, not invite-token
+  or magic-link-only identity
+- Phase 1.8B–1.8E implement persistence, authentication/authorization, private
+  storage/data lifecycle, and deployment operations in that order
+- Private-alpha evidence collection and readiness review precede Phase 1.9 advanced
+  match intelligence
+
+Exact duplicate upload hardening detects byte-identical videos within the current
+owner's history, returns a typed duplicate response, and lets the user open the
+existing analysis or explicitly analyze the video again. See
+[Exact Duplicate Video Detection](docs/platform/EXACT_DUPLICATE_VIDEO_DETECTION.md).
+
 Phase 1.3A hardens real-video workflow reliability:
 
 - Interactive frontend manual calibration for automatic court-detection fallback

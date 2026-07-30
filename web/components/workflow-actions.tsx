@@ -12,8 +12,8 @@ import {
   UserCheck,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import type { BaseSyntheticEvent } from "react";
-import { useRef, useState } from "react";
+import type { BaseSyntheticEvent, ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -61,6 +61,10 @@ const trackingFormSchema = z
   });
 
 type TrackingFormValues = z.infer<typeof trackingFormSchema>;
+
+const MIN_TRACKING_ESTIMATE_SECONDS = 60;
+const MAX_TRACKING_ESTIMATE_SECONDS = 10 * 60;
+const TRACKING_SECONDS_PER_VIDEO_SECOND = 2;
 
 export function MatchWorkflow({ job }: { job: AnalysisJob }) {
   const queryClient = useQueryClient();
@@ -176,60 +180,63 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
         isPending={detectionMutation.isPending}
         error={detectionMutation.error}
         onDetect={() => detectionMutation.mutate()}
-      />
-
-      {job.calibration_completed ? (
-        <PlayerTrackingPanel
-          analysisId={analysisId}
-          job={job}
-          calibrationIds={calibrationIds}
-          trackingForm={trackingForm}
-          submitTracking={submitTracking}
-          trackingError={trackingMutation.error}
-          isTracking={trackingMutation.isPending}
-          candidatesQuery={{
-            collection: candidatesQuery.data ?? null,
-            isLoading: candidatesQuery.isLoading,
-            error: candidatesQuery.error,
-            onRetry: () => void candidatesQuery.refetch(),
-          }}
-          review={{
-            pendingCandidateId:
-              selectionMutation.variables ??
-              rejectionMutation.variables ??
-              unmergeMutation.variables ??
-              restoreMutation.variables ??
-              null,
-            isPending:
-              selectionMutation.isPending ||
-              rejectionMutation.isPending ||
-              mergeMutation.isPending ||
-              restoreMutation.isPending ||
-              unmergeMutation.isPending,
-            error:
-              selectionMutation.error ??
-              rejectionMutation.error ??
-              mergeMutation.error ??
-              restoreMutation.error ??
-              unmergeMutation.error,
-            onSelect: (candidateId) => selectionMutation.mutate(candidateId),
-            onReject: (candidateId) => rejectionMutation.mutate(candidateId),
-            onMerge: (candidateIds) => mergeMutation.mutate(candidateIds),
-            onUnmerge: (candidateId) => unmergeMutation.mutate(candidateId),
-            onRestore: (candidateId) => restoreMutation.mutate(candidateId),
-          }}
-        />
-      ) : null}
-
-      {job.player_selected ? (
-        <MatchIQPanel
-          analysisId={analysisId}
-          analyticsCompleted={job.analytics_completed}
-          isPending={analyticsMutation.isPending}
-          error={analyticsMutation.error}
-          onGenerate={() => analyticsMutation.mutate()}
-        />
-      ) : null}
+      >
+        {job.calibration_completed ? (
+          <>
+            <PlayerTrackingPanel
+              analysisId={analysisId}
+              job={job}
+              calibrationIds={calibrationIds}
+              trackingForm={trackingForm}
+              submitTracking={submitTracking}
+              trackingError={trackingMutation.error}
+              isTracking={trackingMutation.isPending}
+              candidatesQuery={{
+                collection: candidatesQuery.data ?? null,
+                isLoading: candidatesQuery.isLoading,
+                error: candidatesQuery.error,
+                onRetry: () => void candidatesQuery.refetch(),
+              }}
+              review={{
+                pendingCandidateId:
+                  selectionMutation.variables ??
+                  rejectionMutation.variables ??
+                  unmergeMutation.variables ??
+                  restoreMutation.variables ??
+                  null,
+                isPending:
+                  selectionMutation.isPending ||
+                  rejectionMutation.isPending ||
+                  mergeMutation.isPending ||
+                  restoreMutation.isPending ||
+                  unmergeMutation.isPending,
+                error:
+                  selectionMutation.error ??
+                  rejectionMutation.error ??
+                  mergeMutation.error ??
+                  restoreMutation.error ??
+                  unmergeMutation.error,
+                onSelect: (candidateId) => selectionMutation.mutate(candidateId),
+                onReject: (candidateId) => rejectionMutation.mutate(candidateId),
+                onMerge: (candidateIds) => mergeMutation.mutate(candidateIds),
+                onUnmerge: (candidateId) => unmergeMutation.mutate(candidateId),
+                onRestore: (candidateId) => restoreMutation.mutate(candidateId),
+              }}
+              matchIQPanel={
+                job.player_selected ? (
+                  <MatchIQPanel
+                    analysisId={analysisId}
+                    analyticsCompleted={job.analytics_completed}
+                    isPending={analyticsMutation.isPending}
+                    error={analyticsMutation.error}
+                    onGenerate={() => analyticsMutation.mutate()}
+                  />
+                ) : null
+              }
+            />
+          </>
+        ) : null}
+      </CourtRecognitionPanel>
     </div>
   );
 }
@@ -240,12 +247,14 @@ function CourtRecognitionPanel({
   isPending,
   error,
   onDetect,
+  children,
 }: {
   job: AnalysisJob;
   result: CourtDetectionResponse | undefined;
   isPending: boolean;
   error: unknown;
   onDetect: () => void;
+  children: ReactNode;
 }) {
   const artifacts = result?.artifacts.length ? result.artifacts : job.available_artifacts;
   const verification = findArtifact(artifacts, "verification.jpg");
@@ -257,13 +266,19 @@ function CourtRecognitionPanel({
     (job.manual_calibration_required && !job.calibration_completed);
 
   return (
-    <section className="rounded-md border border-court-line bg-white p-5 shadow-panel">
+    <section
+      aria-labelledby="court-recognition-heading"
+      className="rounded-md border border-court-line bg-white p-5 shadow-panel"
+    >
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-sm font-semibold uppercase tracking-wide text-court-green">
-            Court recognized
+            Court setup
           </p>
-          <h2 className="mt-2 text-lg font-semibold text-court-ink">
+          <h2
+            id="court-recognition-heading"
+            className="mt-2 text-lg font-semibold text-court-ink"
+          >
             {job.calibration_completed
               ? "Court recognized"
               : isPending
@@ -272,7 +287,7 @@ function CourtRecognitionPanel({
           </h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-court-muted">
             {job.calibration_completed
-              ? "Court4 found the court and is ready to measure player movement."
+              ? "We found the court and are ready to measure player movement."
               : "Court4 checks the match video to understand where play happens."}
           </p>
         </div>
@@ -288,7 +303,9 @@ function CourtRecognitionPanel({
         ) : (
           <span className="inline-flex items-center gap-2 rounded-md bg-green-50 px-3 py-2 text-sm font-semibold text-court-green">
             <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
-            Ready to find players
+            {detectionStatus === "detected" && detectionConfidence !== null
+              ? `${toPercent(detectionConfidence)}% confidence`
+              : "Court ready"}
           </span>
         )}
       </div>
@@ -301,8 +318,10 @@ function CourtRecognitionPanel({
 
       <WorkflowError error={error} onRetry={onDetect} />
 
-      {result ? <DetectionResultMessage analysisId={job.analysis_id} result={result} /> : null}
-      {!result && detectionStatus ? (
+      {!job.calibration_completed && result ? (
+        <DetectionResultMessage analysisId={job.analysis_id} result={result} />
+      ) : null}
+      {!job.calibration_completed && !result && detectionStatus ? (
         <PersistedDetectionMessage
           analysisId={job.analysis_id}
           status={detectionStatus}
@@ -313,14 +332,8 @@ function CourtRecognitionPanel({
 
       {job.calibration_completed ? (
         <div className="mt-5 space-y-5">
-          <div className="grid gap-4 text-sm sm:grid-cols-2">
-            {detectionConfidence !== null ? (
-              <ResultMetric label="Detection confidence" value={`${toPercent(detectionConfidence)}%`} />
-            ) : null}
-            <ResultMetric
-              label="Readiness"
-              value={job.tracking_completed ? "Players identified" : "Ready to find players"}
-            />
+          <div className="rounded-md border border-green-200 bg-green-50 p-4">
+            {children}
           </div>
 
           {verification ? (
@@ -369,12 +382,6 @@ function DetectionResultMessage({
           Court recognized with {toPercent(result.confidence)}% confidence.
         </p>
         <p className="mt-1 text-sm text-court-muted">Ready to find players.</p>
-        <div className="mt-4">
-          <ButtonLink href="#player-tracking">
-            Continue to Find Players
-            <ArrowRight aria-hidden="true" className="h-4 w-4" />
-          </ButtonLink>
-        </div>
       </div>
     );
   }
@@ -447,6 +454,7 @@ function PlayerTrackingPanel({
   isTracking,
   candidatesQuery,
   review,
+  matchIQPanel,
 }: {
   analysisId: string;
   job: AnalysisJob;
@@ -471,50 +479,54 @@ function PlayerTrackingPanel({
     onUnmerge: (candidateId: string) => void;
     onRestore: (candidateId: string) => void;
   };
+  matchIQPanel: ReactNode;
 }) {
   return (
-    <section id="player-tracking" className="rounded-md border border-court-line bg-white p-5 shadow-panel">
+    <section id="player-tracking" aria-labelledby="player-tracking-heading">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <p className="text-sm font-semibold uppercase tracking-wide text-court-green">
-            Players identified
+            {job.tracking_completed ? "Player selection" : isTracking ? "Player tracking" : "Next step"}
           </p>
-          <h2 className="mt-2 text-lg font-semibold text-court-ink">
-            {job.tracking_completed ? "Players identified" : isTracking ? "Finding players" : "Find the players"}
+          <h2
+            id="player-tracking-heading"
+            className="mt-2 text-lg font-semibold text-court-ink"
+          >
+            {job.tracking_completed ? "Choose your player" : isTracking ? "Finding players" : "Find the players"}
           </h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-court-muted">
             {job.tracking_completed
               ? "Choose the player that represents you."
               : isTracking
                 ? "Court4 is analyzing movement across the match. This may take a few minutes."
-                : "Court4 will follow each player throughout the match so you can select yourself."}
+                : "We will analyze movement across the match, then choose yourself."}
           </p>
         </div>
         {job.tracking_completed ? (
           <span className="inline-flex items-center gap-2 rounded-md bg-green-50 px-3 py-2 text-sm font-semibold text-court-green">
             <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
-            Players identified
+            <span className="tabular-nums">100%</span>
+            Complete
           </span>
         ) : null}
       </div>
 
       {!job.tracking_completed ? (
         <form onSubmit={submitTracking} className="mt-5 space-y-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <Button type="submit" disabled={isTracking || calibrationIds.length === 0}>
-              {isTracking ? (
-                <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />
-              ) : (
+          {isTracking ? (
+            <TrackingProgress
+              sourceDurationSeconds={
+                job.upload_preflight?.upload_signals?.duration_seconds ?? null
+              }
+            />
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
+              <Button type="submit" disabled={calibrationIds.length === 0}>
                 <UserCheck aria-hidden="true" className="h-4 w-4" />
-              )}
-              {isTracking ? "Finding players" : "Find Players"}
-            </Button>
-            {isTracking ? (
-              <span className="text-sm text-court-muted" role="status">
-                Tracking player movement now.
-              </span>
-            ) : null}
-          </div>
+                Find Players
+              </Button>
+            </div>
+          )}
 
           <FormError message={trackingForm.formState.errors.detectionsJsonl?.message} />
           <WorkflowError
@@ -539,9 +551,71 @@ function PlayerTrackingPanel({
           onUnmerge={review.onUnmerge}
           onRestore={review.onRestore}
           onRetry={candidatesQuery.onRetry}
+          matchIQPanel={matchIQPanel}
         />
       )}
     </section>
+  );
+}
+
+function TrackingProgress({
+  sourceDurationSeconds,
+}: {
+  sourceDurationSeconds: number | null;
+}) {
+  const estimatedSeconds = estimateTrackingSeconds(sourceDurationSeconds);
+  const [progress, setProgress] = useState(1);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    const startedAt = Date.now();
+
+    const updateProgress = () => {
+      const elapsed = Math.max(0, (Date.now() - startedAt) / 1000);
+      const nextProgress = Math.min(
+        99,
+        Math.max(1, Math.floor((elapsed / estimatedSeconds) * 98) + 1),
+      );
+      setElapsedSeconds(Math.floor(elapsed));
+      setProgress(nextProgress);
+    };
+
+    updateProgress();
+    const intervalId = window.setInterval(updateProgress, 500);
+    return () => window.clearInterval(intervalId);
+  }, [estimatedSeconds]);
+
+  return (
+    <div className="rounded-md border border-green-200 bg-white/80 p-4 shadow-sm">
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <p className="text-sm font-semibold text-court-ink">Analyzing player movement</p>
+          <p className="mt-1 text-xs text-court-muted">
+            {progress === 99
+              ? "Finalizing player tracks."
+              : `${formatElapsedTime(elapsedSeconds)} elapsed · ${formatElapsedTime(
+                  estimatedSeconds,
+                )} estimated total`}
+          </p>
+        </div>
+        <span className="text-2xl font-semibold tabular-nums text-court-green">
+          {progress}%
+        </span>
+      </div>
+      <div
+        role="progressbar"
+        aria-label="Player tracking progress"
+        aria-valuemin={1}
+        aria-valuemax={100}
+        aria-valuenow={progress}
+        className="mt-3 h-2.5 overflow-hidden rounded-full bg-green-100"
+      >
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-court-green to-lime-400 transition-[width] duration-500 ease-out"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -559,6 +633,7 @@ function PlayerSelectionPanel({
   onUnmerge,
   onRestore,
   onRetry,
+  matchIQPanel,
 }: {
   analysisId: string;
   collection: PlayerCandidateCollection | null;
@@ -573,6 +648,7 @@ function PlayerSelectionPanel({
   onUnmerge: (candidateId: string) => void;
   onRestore: (candidateId: string) => void;
   onRetry: () => void;
+  matchIQPanel: ReactNode;
 }) {
   const [mergeSourceId, setMergeSourceId] = useState<string | null>(null);
   const [mergeTargetId, setMergeTargetId] = useState<string | null>(null);
@@ -707,7 +783,11 @@ function PlayerSelectionPanel({
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      <div
+        role="group"
+        aria-label="Player choices and Match IQ"
+        className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3"
+      >
         {playerCards.map(({ candidate, label }) => {
           const isSelected = collection.selected_candidate_id === candidate.candidate_id;
           const isCurrentSelectionPending =
@@ -834,6 +914,7 @@ function PlayerSelectionPanel({
             </article>
           );
         })}
+        {matchIQPanel}
       </div>
 
       {restorableExcludedCandidates.length ? (
@@ -882,13 +963,16 @@ function MatchIQPanel({
   onGenerate: () => void;
 }) {
   return (
-    <section className="rounded-md border border-court-line bg-white p-5 shadow-panel">
+    <section
+      aria-labelledby="match-iq-heading"
+      className="rounded-md border border-court-line bg-white p-5 shadow-panel"
+    >
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <p className="text-sm font-semibold uppercase tracking-wide text-court-green">
             Your Match IQ
           </p>
-          <h2 className="mt-2 text-lg font-semibold text-court-ink">
+          <h2 id="match-iq-heading" className="mt-2 text-lg font-semibold text-court-ink">
             {analyticsCompleted ? "Match IQ is ready" : "Generate your Match IQ"}
           </h2>
           <p className="mt-1 text-sm text-court-muted">
@@ -931,19 +1015,7 @@ function ArtifactPreview({
           className="h-full w-full object-contain"
         />
       </div>
-      <figcaption className="border-t border-court-line px-3 py-2 text-sm font-medium text-court-ink">
-        {label}
-      </figcaption>
     </figure>
-  );
-}
-
-function ResultMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="border-l-4 border-court-green pl-3">
-      <p className="text-xs font-semibold uppercase tracking-wide text-court-muted">{label}</p>
-      <p className="mt-1 text-lg font-semibold text-court-ink">{value}</p>
-    </div>
   );
 }
 
@@ -1068,6 +1140,23 @@ function formatTrackedDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = Math.round(seconds % 60);
   return `${minutes} min ${remainingSeconds} sec`;
+}
+
+function estimateTrackingSeconds(sourceDurationSeconds: number | null): number {
+  const videoDuration = sourceDurationSeconds ?? MIN_TRACKING_ESTIMATE_SECONDS;
+  return Math.min(
+    MAX_TRACKING_ESTIMATE_SECONDS,
+    Math.max(
+      MIN_TRACKING_ESTIMATE_SECONDS,
+      Math.ceil(videoDuration * TRACKING_SECONDS_PER_VIDEO_SECOND),
+    ),
+  );
+}
+
+function formatElapsedTime(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 }
 
 function toPercent(value: number): number {

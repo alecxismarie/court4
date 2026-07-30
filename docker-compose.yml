@@ -8,6 +8,71 @@ services:
       - .env.example
     environment:
       COURT4_DETECTOR_MODEL_PATH: /app/models/yolo11n.pt
+      PICKLEBALL_AI_DATABASE_URL: postgresql+psycopg://court4:court4_local_only@postgres:5432/court4
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - ./data:/app/data
       - ./models:/app/models:ro
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "55433:5432"
+    environment:
+      POSTGRES_DB: court4
+      POSTGRES_USER: court4
+      POSTGRES_PASSWORD: court4_local_only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U court4 -d court4"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - court4-postgres:/var/lib/postgresql/data
+
+  postgres-spike:
+    image: postgres:16-alpine
+    profiles:
+      - spike
+    ports:
+      - "55432:5432"
+    environment:
+      POSTGRES_DB: court4_spike
+      POSTGRES_USER: court4_spike
+      POSTGRES_PASSWORD: court4_spike_local_only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U court4_spike -d court4_spike"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - court4-spike-postgres:/var/lib/postgresql/data
+
+  postgres-test:
+    image: postgres:16-alpine
+    profiles:
+      - test
+    ports:
+      - "55434:5432"
+    environment:
+      POSTGRES_DB: court4_test
+      POSTGRES_USER: court4_test
+      POSTGRES_PASSWORD: court4_test_local_only
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U court4_test -d court4_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - court4-test-postgres:/var/lib/postgresql/data
+
+volumes:
+  court4-postgres:
+  court4-spike-postgres:
+  court4-test-postgres:

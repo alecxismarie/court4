@@ -101,6 +101,22 @@ export const analysisJobSchema = z.object({
   available_artifacts: z.array(analysisArtifactSchema),
 });
 
+export const duplicateUploadResponseSchema = z.object({
+  status: z.literal("duplicate"),
+  duplicate_type: z.literal("exact"),
+  existing_analysis_id: z.string(),
+  uploaded_at: z.string(),
+  actions: z.object({
+    open_existing: z.boolean(),
+    reanalyze: z.boolean(),
+  }),
+});
+
+export const uploadAnalysisResponseSchema = z.union([
+  analysisJobSchema,
+  duplicateUploadResponseSchema,
+]);
+
 export const sampledFrameSchema = z.object({
   frame_number: z.number().int().positive(),
   path: z.string(),
@@ -651,6 +667,7 @@ export type CalibrationResponse = z.infer<typeof calibrationResponseSchema>;
 export type MatchIQInsight = z.infer<typeof matchIQInsightSchema>;
 export type MatchIQReport = z.infer<typeof matchIQReportSchema>;
 export type CourtDetectionResponse = z.infer<typeof courtDetectionResponseSchema>;
+export type DuplicateUploadResponse = z.infer<typeof duplicateUploadResponseSchema>;
 export type PlayersResponse = z.infer<typeof playersResponseSchema>;
 export type PlayerSelectionResponse = z.infer<typeof playerSelectionResponseSchema>;
 export type PlayerCandidate = z.infer<typeof playerCandidateSchema>;
@@ -662,6 +679,7 @@ export type SampledFramesResponse = z.infer<typeof sampledFramesResponseSchema>;
 export type TrackSummary = z.infer<typeof trackSummarySchema>;
 export type TrackingBackend = z.infer<typeof trackingBackendSchema>;
 export type TrackingResponse = z.infer<typeof trackingResponseSchema>;
+export type UploadAnalysisResponse = z.infer<typeof uploadAnalysisResponseSchema>;
 
 export type TrackingRequest = {
   calibration_id: string;

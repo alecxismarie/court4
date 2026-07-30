@@ -71,13 +71,12 @@ def test_analysis_history_includes_every_persisted_analysis(tmp_path: Path) -> N
 
     result = HistoryProjectionService(repository=repository).analysis_history(limit=100, offset=0)
 
-    assert result.total == 5
+    assert result.total == 4
     by_id = {item.analysis_id: item for item in result.items}
-    assert set(by_id) == {"ready", "unsuitable", "failed", "processing", "legacy"}
+    assert set(by_id) == {"ready", "unsuitable", "failed", "processing"}
     assert by_id["unsuitable"].status == "UNSUITABLE"
     assert by_id["failed"].status == "FAILED"
     assert by_id["processing"].status == "PROCESSING"
-    assert by_id["legacy"].status == "LEGACY"
     assert all(item.report_url.startswith("/matches/") for item in result.items)
 
 
@@ -443,6 +442,7 @@ def test_missing_measurements_are_unavailable_and_never_zero(tmp_path: Path) -> 
         json.dumps({"analysis_id": job.analysis_id}),
         encoding="utf-8",
     )
+    repository.register_current_artifacts(job.analysis_id)
 
     result = HistoryProjectionService(repository=repository).play_history(recent_limit=5)
 
@@ -767,6 +767,7 @@ def _write_analytics(
         json.dumps(analytics.model_dump(mode="json")),
         encoding="utf-8",
     )
+    repository.register_current_artifacts(analysis_id)
 
 
 def _write_match_iq(
@@ -780,6 +781,7 @@ def _write_match_iq(
         json.dumps(match_iq.model_dump(mode="json")),
         encoding="utf-8",
     )
+    repository.register_current_artifacts(analysis_id)
 
 
 def _persist_qualified_report(

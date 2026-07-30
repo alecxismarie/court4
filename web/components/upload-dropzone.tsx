@@ -10,10 +10,15 @@ import { z } from "zod";
 
 import { createAnalysis } from "@/lib/api/analyses";
 import { normalizeApiError } from "@/lib/api/client";
-import type { AnalysisJob, UploadProgress as UploadProgressValue } from "@/lib/api/types";
+import type {
+  AnalysisJob,
+  DuplicateUploadResponse,
+  UploadAnalysisResponse,
+  UploadProgress as UploadProgressValue,
+} from "@/lib/api/types";
 import { getPublicEnv } from "@/lib/env";
 import { rememberAnalysisId } from "@/lib/recent-analyses";
-import { cn, formatFileSize } from "@/lib/utils";
+import { cn, formatDateTime, formatFileSize } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { UploadProgress } from "@/components/upload-progress";
 
@@ -24,7 +29,17 @@ type UploadFormValues = {
 export type UploadAnalysisFn = (
   file: File,
   onProgress?: (progress: UploadProgressValue) => void,
-) => Promise<AnalysisJob>;
+  options?: {
+    idempotencyKey?: string;
+    reanalyze?: boolean;
+  },
+) => Promise<UploadAnalysisResponse>;
+
+type UploadCommand = {
+  file: File;
+  idempotencyKey: string;
+  reanalyze: boolean;
+};
 
 export function UploadDropzone({
   uploadAnalysis = createAnalysis,
@@ -36,9 +51,11 @@ export function UploadDropzone({
   const router = useRouter();
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const uploadIdempotencyKeyRef = useRef<string | null>(null);
   const publicEnv = getPublicEnv();
   const [progress, setProgress] = useState<UploadProgressValue | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [duplicate, setDuplicate] = useState<DuplicateUploadResponse | null>(null);
 
   const form = useForm<UploadFormValues>({
     resolver: zodResolver(buildUploadSchema(publicEnv)),
@@ -46,12 +63,22 @@ export function UploadDropzone({
   const selectedFile = form.watch("file");
 
   const uploadMutation = useMutation({
-    mutationFn: (file: File) => uploadAnalysis(file, setProgress),
-    onMutate: () => {
+    mutationFn: (command: UploadCommand) =>
+      uploadAnalysis(command.file, setProgress, {
+        idempotencyKey: command.idempotencyKey,
+        reanalyze: command.reanalyze,
+      }),
+    onMutate: (command) => {
       setApiError(null);
-      setProgress({ loaded: 0, total: selectedFile?.size ?? null, percent: 0 });
+      setProgress({ loaded: 0, total: command.file.size, percent: 0 });
     },
-    onSuccess: (job) => {
+    onSuccess: (result) => {
+      if (isDuplicateUpload(result)) {
+        setDuplicate(result);
+        return;
+      }
+      const job = result;
+      setDuplicate(null);
       rememberAnalysisId(job.analysis_id);
       void queryClient.invalidateQueries({ queryKey: ["analysis"] });
       void queryClient.invalidateQueries({ queryKey: ["recent-analyses"] });
@@ -72,6 +99,8 @@ export function UploadDropzone({
       return;
     }
     form.setValue("file", file, { shouldDirty: true, shouldValidate: true });
+    uploadIdempotencyKeyRef.current = crypto.randomUUID();
+    setDuplicate(null);
     setApiError(null);
     setProgress(null);
   };
@@ -80,7 +109,14 @@ export function UploadDropzone({
     if (uploadMutation.isPending) {
       return;
     }
-    uploadMutation.mutate(values.file);
+    const idempotencyKey =
+      uploadIdempotencyKeyRef.current ?? crypto.randomUUID();
+    uploadIdempotencyKeyRef.current = idempotencyKey;
+    uploadMutation.mutate({
+      file: values.file,
+      idempotencyKey,
+      reanalyze: false,
+    });
   });
 
   const reset = () => {
@@ -88,6 +124,8 @@ export function UploadDropzone({
       return;
     }
     form.reset();
+    uploadIdempotencyKeyRef.current = null;
+    setDuplicate(null);
     setProgress(null);
     setApiError(null);
     if (inputRef.current) {
@@ -182,18 +220,79 @@ export function UploadDropzone({
 
       {progress ? <UploadProgress progress={progress} /> : null}
 
-      <div className="flex flex-wrap items-center gap-3">
-        <Button type="submit" disabled={!selectedFile || uploadMutation.isPending}>
-          <Upload aria-hidden="true" className="h-4 w-4" />
-          {uploadMutation.isPending ? "Uploading" : "Upload selected video"}
-        </Button>
-        <p className="text-sm text-court-muted">
-          Accepted formats: {publicEnv.supportedVideoExtensions.join(", ")}. Maximum size:{" "}
-          {formatFileSize(publicEnv.maxUploadBytes)}.
-        </p>
-      </div>
+      {duplicate ? (
+        <section
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="duplicate-upload-heading"
+          className="rounded-md border border-amber-200 bg-amber-50 p-5"
+        >
+          <h2 id="duplicate-upload-heading" className="text-lg font-semibold text-court-ink">
+            This video has already been uploaded.
+          </h2>
+          <p className="mt-2 text-sm text-court-muted">
+            You analyzed this video on {formatDateTime(duplicate.uploaded_at)}.
+          </p>
+          <div className="mt-5 flex flex-wrap gap-3">
+            <Button
+              type="button"
+              onClick={() => {
+                rememberAnalysisId(duplicate.existing_analysis_id);
+                router.push(`/matches/${duplicate.existing_analysis_id}`);
+              }}
+            >
+              Open Existing Analysis
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={uploadMutation.isPending || !selectedFile}
+              onClick={() => {
+                if (!selectedFile) {
+                  return;
+                }
+                uploadMutation.mutate({
+                  file: selectedFile,
+                  idempotencyKey: crypto.randomUUID(),
+                  reanalyze: true,
+                });
+              }}
+            >
+              {uploadMutation.isPending ? "Uploading" : "Analyze Again"}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={uploadMutation.isPending}
+              onClick={() => {
+                setDuplicate(null);
+                setProgress(null);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        </section>
+      ) : (
+        <div className="flex flex-wrap items-center gap-3">
+          <Button type="submit" disabled={!selectedFile || uploadMutation.isPending}>
+            <Upload aria-hidden="true" className="h-4 w-4" />
+            {uploadMutation.isPending ? "Uploading" : "Upload selected video"}
+          </Button>
+          <p className="text-sm text-court-muted">
+            Accepted formats: {publicEnv.supportedVideoExtensions.join(", ")}. Maximum size:{" "}
+            {formatFileSize(publicEnv.maxUploadBytes)}.
+          </p>
+        </div>
+      )}
     </form>
   );
+}
+
+function isDuplicateUpload(
+  response: UploadAnalysisResponse,
+): response is DuplicateUploadResponse {
+  return response.status === "duplicate";
 }
 
 function buildUploadSchema(env: ReturnType<typeof getPublicEnv>) {

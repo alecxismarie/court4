@@ -9,6 +9,8 @@ from httpx import Response
 
 from app.config import get_settings
 from app.main import create_app
+from app.schemas.jobs import AnalysisJob
+from app.services.jobs import AnalysisJobRepository
 from app.services.tracking.json_tracking_backend import build_controlled_detection_line
 from app.services.video.player_analysis import load_calibration_report
 from app.sports.pickleball.calibration import court_point_to_image
@@ -88,6 +90,66 @@ def test_upload_rejects_oversized_file(
 
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "upload_too_large"
+
+
+def test_exact_duplicate_renamed_retry_and_analyze_again(
+    tmp_path: Path,
+    synthetic_video_factory: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, output_dir = _api_client(tmp_path, monkeypatch)
+    video_path = synthetic_video_factory(
+        tmp_path / "original.avi",
+        frame_count=15,
+        fps=10.0,
+        width=800,
+        height=900,
+    )
+
+    first = _upload_video(client, video_path, idempotency_key="first-upload")
+    retry = _upload_video(client, video_path, idempotency_key="first-upload")
+    renamed = _upload_video(
+        client,
+        video_path,
+        filename="renamed-copy.avi",
+        idempotency_key="renamed-upload",
+    )
+
+    assert first.status_code == 201
+    first_analysis_id = first.json()["analysis_id"]
+    assert retry.status_code == 201
+    assert retry.json()["analysis_id"] == first_analysis_id
+    assert renamed.status_code == 200
+    assert renamed.json() == {
+        "status": "duplicate",
+        "duplicate_type": "exact",
+        "existing_analysis_id": first_analysis_id,
+        "uploaded_at": renamed.json()["uploaded_at"],
+        "actions": {"open_existing": True, "reanalyze": True},
+    }
+    assert {
+        path.name
+        for path in output_dir.iterdir()
+        if path.is_dir() and path.name != "_uploads"
+    } == {
+        first_analysis_id
+    }
+
+    reanalyzed = _upload_video(
+        client,
+        video_path,
+        filename="renamed-copy.avi",
+        idempotency_key="reanalyze-upload",
+        reanalyze=True,
+    )
+
+    assert reanalyzed.status_code == 201
+    assert reanalyzed.json()["analysis_id"] != first_analysis_id
+    history = client.get("/api/v1/analyses")
+    assert history.status_code == 200
+    assert {
+        item["analysis_id"] for item in history.json()["items"]
+    } == {first_analysis_id, reanalyzed.json()["analysis_id"]}
 
 
 def test_missing_analysis_returns_404(
@@ -523,6 +585,12 @@ def test_legacy_job_without_court_detection_fields_still_loads(
         + "\n",
         encoding="utf-8",
     )
+    repository = AnalysisJobRepository(output_dir=output_dir, api_base_path="/api/v1")
+    repository.save_job(
+        AnalysisJob.model_validate(
+            json.loads((analysis_dir / "job.json").read_text(encoding="utf-8"))
+        )
+    )
 
     response = client.get(f"/api/v1/analyses/{analysis_id}")
     active_play = client.get(f"/api/v1/analyses/{analysis_id}/debug/active-play")
@@ -598,6 +666,12 @@ def test_legacy_analytics_without_match_iq_returns_null(
         + "\n",
         encoding="utf-8",
     )
+    repository = AnalysisJobRepository(output_dir=output_dir, api_base_path="/api/v1")
+    repository.save_job(
+        AnalysisJob.model_validate(
+            json.loads((output_dir / analysis_id / "job.json").read_text(encoding="utf-8"))
+        )
+    )
 
     response = client.get(f"/api/v1/analyses/{analysis_id}/analytics")
 
@@ -662,10 +736,18 @@ def _upload_video(
     video_path: Path,
     *,
     filename: str | None = None,
+    idempotency_key: str | None = None,
+    reanalyze: bool = False,
 ) -> Response:
     with video_path.open("rb") as video:
         response = client.post(
             "/api/v1/analyses",
+            headers=(
+                {"Idempotency-Key": idempotency_key}
+                if idempotency_key is not None
+                else None
+            ),
+            data={"reanalyze": "true"} if reanalyze else None,
             files={
                 "file": (
                     filename or video_path.name,
@@ -710,6 +792,8 @@ def _write_controlled_api_detections(
         lines.append(_line_from_ground_point(frame_index, 1, ground, confidence=0.92))
     detections_path = output_dir / analysis_id / "uploads" / "detections.jsonl"
     detections_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    repository = AnalysisJobRepository(output_dir=output_dir, api_base_path="/api/v1")
+    repository.register_current_artifacts(analysis_id)
 
 
 def _line_from_ground_point(

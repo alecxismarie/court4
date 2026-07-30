@@ -15,6 +15,7 @@ import {
   type CalibrationRequest,
   type CalibrationResponse,
   type CourtDetectionResponse,
+  type UploadAnalysisResponse,
   type PlayerSelectionResponse,
   type PlayerCandidateCollection,
   type PlayersResponse,
@@ -25,6 +26,7 @@ import {
   analyticsGenerationResponseSchema,
   analyticsResponseSchema,
   analysisJobSchema,
+  uploadAnalysisResponseSchema,
   calibrationResponseSchema,
   courtDetectionResponseSchema,
   playerSelectionResponseSchema,
@@ -37,11 +39,18 @@ import {
 export function createAnalysis(
   file: File,
   onProgress?: (progress: UploadProgress) => void,
-): Promise<AnalysisJob> {
+  options?: {
+    idempotencyKey?: string;
+    reanalyze?: boolean;
+  },
+): Promise<UploadAnalysisResponse> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const formData = new FormData();
     formData.append("file", file);
+    if (options?.reanalyze) {
+      formData.append("reanalyze", "true");
+    }
 
     xhr.upload.addEventListener("progress", (event) => {
       if (!onProgress) {
@@ -63,7 +72,7 @@ export function createAnalysis(
 
       try {
         const payload: unknown = JSON.parse(xhr.responseText);
-        resolve(analysisJobSchema.parse(payload));
+        resolve(uploadAnalysisResponseSchema.parse(payload));
       } catch (error) {
         reject(normalizeApiError(error));
       }
@@ -79,6 +88,7 @@ export function createAnalysis(
 
     xhr.open("POST", toApiUrl("/api/v1/analyses"));
     xhr.setRequestHeader("Accept", "application/json");
+    xhr.setRequestHeader("Idempotency-Key", options?.idempotencyKey ?? crypto.randomUUID());
     xhr.send(formData);
   });
 }

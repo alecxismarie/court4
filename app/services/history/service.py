@@ -1,5 +1,4 @@
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -46,17 +45,14 @@ from app.services.history.grouping import (
     ComparisonSplit,
     deterministic_split,
 )
-from app.services.history.policy import (
-    ANALYTICS_SCHEMA_VERSION,
-    PLAY_HISTORY_POLICY_VERSION,
-    evaluate_contribution,
-)
+from app.services.history.policy import PLAY_HISTORY_POLICY_VERSION, evaluate_contribution
 from app.services.history.progress_policy import (
     INTERPRETATION_POLICY_VERSION,
     TREND_POLICY_VERSION,
     evaluate_interpretation_eligibility,
     evaluate_trend_eligibility,
 )
+from app.services.jobs.exceptions import JobWorkflowError
 from app.services.jobs.repository import AnalysisJobRepository
 
 ANALYTICS_PATH = Path("analytics") / "analytics.json"
@@ -163,10 +159,7 @@ class HistoryProjectionService:
         )
 
     def _project_analysis(self, analysis_id: str) -> AnalysisHistoryItem:
-        try:
-            job = self.repository.load_job_metadata(analysis_id)
-        except Exception:
-            return self._legacy_item(analysis_id)
+        job = self.repository.load_job_metadata(analysis_id)
         analytics = self._load_analytics(analysis_id)
         match_iq = self._load_match_iq(analysis_id)
         evaluated_at = max(
@@ -211,51 +204,23 @@ class HistoryProjectionService:
             thumbnail_url=_thumbnail(job),
         )
 
-    def _legacy_item(self, analysis_id: str) -> AnalysisHistoryItem:
-        job_path = self.repository.job_path(analysis_id)
-        timestamp = datetime.fromtimestamp(job_path.stat().st_mtime, tz=UTC)
-        decision = ContributionDecision(
-            status=ContributionStatus.not_evaluated,
-            reason_codes=["LEGACY_METADATA_UNREADABLE"],
-            explanation=(
-                "This report was created before Play History tracking was added, so it does not "
-                "contribute to your Play History."
-            ),
-            policy_version=PLAY_HISTORY_POLICY_VERSION,
-            evaluated_at=timestamp,
-            source_analysis_version=ANALYTICS_SCHEMA_VERSION,
-            limitations=["Unreadable legacy metadata is not inferred."],
-            source_versions={"analytics_schema": ANALYTICS_SCHEMA_VERSION},
-        )
-        return AnalysisHistoryItem(
-            analysis_id=analysis_id,
-            title="Legacy analysis",
-            created_at=timestamp,
-            updated_at=timestamp,
-            status=AnalysisHistoryStatus.legacy,
-            processing_status="legacy",
-            recording_quality=None,
-            observation_coverage_ratio=None,
-            reliable_observation_seconds=None,
-            measurement_available=False,
-            match_iq_available=False,
-            contribution=decision,
-            limitation="Legacy analysis details are not available in the current format.",
-            report_url=f"/matches/{analysis_id}",
-            thumbnail_url=None,
-        )
-
     def _load_analytics(self, analysis_id: str) -> AnalyticsReport | None:
-        return _load_model(
-            self.repository.analysis_dir(analysis_id) / ANALYTICS_PATH,
-            AnalyticsReport,
-        )
+        try:
+            path = self.repository.resolve_artifact(
+                analysis_id, ANALYTICS_PATH.as_posix()
+            )
+        except JobWorkflowError:
+            return None
+        return _load_model(path, AnalyticsReport)
 
     def _load_match_iq(self, analysis_id: str) -> MatchIQReport | None:
-        return _load_model(
-            self.repository.analysis_dir(analysis_id) / MATCH_IQ_PATH,
-            MatchIQReport,
-        )
+        try:
+            path = self.repository.resolve_artifact(
+                analysis_id, MATCH_IQ_PATH.as_posix()
+            )
+        except JobWorkflowError:
+            return None
+        return _load_model(path, MatchIQReport)
 
     def _unique_included(self, items: list[AnalysisHistoryItem]) -> list[AnalysisHistoryItem]:
         unique: dict[str, AnalysisHistoryItem] = {}

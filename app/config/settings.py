@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import (
     AliasChoices,
@@ -22,6 +23,29 @@ class Settings(BaseSettings):
 
     input_dir: Path = Path("data/input")
     output_dir: Path = Path("data/output")
+    environment: Literal["development", "test", "staging", "production"] = "development"
+    persistence_backend: Literal["postgresql"] = "postgresql"
+    database_url: str = (
+        "postgresql+psycopg://court4:court4_local_only@127.0.0.1:55433/court4"
+    )
+    database_pool_size: PositiveInt = 10
+    database_max_overflow: int = Field(default=10, ge=0)
+    database_pool_timeout_seconds: PositiveInt = 10
+    database_pool_recycle_seconds: PositiveInt = 1800
+    database_pool_pre_ping: bool = True
+    database_statement_timeout_ms: PositiveInt = 10_000
+    database_lock_timeout_ms: PositiveInt = 5_000
+    database_idle_transaction_timeout_ms: PositiveInt = 15_000
+    local_storage_root: Path = Path("data/output")
+    bootstrap_user_enabled: bool = False
+    bootstrap_user_id: UUID | None = None
+    bootstrap_user_identity: str | None = None
+    legacy_import_enabled: bool = False
+    pipeline_version: str = "court4-1.8b"
+    persistence_schema_version: PositiveInt = 1
+    policy_version: str = "phase-1.8b"
+    software_commit_identifier: str = "working-tree"
+    deployment_build_identifier: str = "local"
     default_sample_interval_seconds: PositiveFloat = Field(default=30)
     max_upload_size_bytes: PositiveInt = Field(default=1_073_741_824)
     supported_extensions: Annotated[tuple[str, ...], NoDecode] = (

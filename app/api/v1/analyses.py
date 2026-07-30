@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from app.config import get_settings
@@ -15,13 +15,14 @@ from app.schemas.jobs import (
     CalibrationRequest,
     CalibrationResponse,
     CourtDetectionResponse,
+    DuplicateUploadResponse,
     PlayerSelectionRequest,
     PlayerSelectionResponse,
     PlayersResponse,
     SampledFramesResponse,
     TrackingRequest,
     TrackingResponse,
-    UploadVideoResponse,
+    UploadAnalysisResponse,
 )
 from app.schemas.player_candidates import (
     CandidateMergeRequest,
@@ -76,7 +77,7 @@ def list_analyses(
 
 @router.post(
     "",
-    response_model=UploadVideoResponse,
+    response_model=UploadAnalysisResponse,
     status_code=201,
     summary="Upload a match video",
     description=(
@@ -88,8 +89,18 @@ def list_analyses(
 async def upload_video(
     file: VideoUploadFile,
     workflow: WorkflowDependency,
-) -> UploadVideoResponse:
-    return await workflow.create_analysis(file)
+    response: Response,
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    reanalyze: Annotated[bool, Form()] = False,
+) -> UploadAnalysisResponse:
+    result = await workflow.create_analysis(
+        file,
+        idempotency_key=idempotency_key,
+        reanalyze=reanalyze,
+    )
+    if isinstance(result, DuplicateUploadResponse):
+        response.status_code = 200
+    return result
 
 
 @router.get(

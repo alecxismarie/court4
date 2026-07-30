@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import re
@@ -11,6 +12,7 @@ from pydantic import ValidationError
 from starlette.datastructures import UploadFile
 
 from app.config.settings import Settings
+from app.persistence.errors import IdempotencyConflictError, OperationInProgressError
 from app.schemas.active_play import ActivePlayReport
 from app.schemas.analytics import AnalyticsReport
 from app.schemas.calibration import CourtCalibrationReport
@@ -28,6 +30,7 @@ from app.schemas.jobs import (
     CourtDetectionOutcome,
     CourtDetectionResponse,
     DetectedCourtCorners,
+    DuplicateUploadResponse,
     PlayerSelectionRequest,
     PlayerSelectionResponse,
     PlayersResponse,
@@ -36,6 +39,7 @@ from app.schemas.jobs import (
     TrackingBackend,
     TrackingRequest,
     TrackingResponse,
+    UploadAnalysisResponse,
     UploadVideoResponse,
 )
 from app.schemas.match_iq import MatchIQReport
@@ -125,13 +129,65 @@ class AnalysisWorkflowService:
             api_base_path=settings.api_base_path,
         )
 
-    async def create_analysis(self, upload: UploadFile) -> UploadVideoResponse:
+    async def create_analysis(
+        self,
+        upload: UploadFile,
+        *,
+        idempotency_key: str | None = None,
+        reanalyze: bool = False,
+    ) -> UploadAnalysisResponse:
+        if idempotency_key is not None and (
+            not idempotency_key.strip() or len(idempotency_key) > 256
+        ):
+            raise JobRequestError(
+                "invalid_idempotency_key",
+                "Idempotency-Key must contain 1 to 256 characters.",
+            )
         analysis_id = uuid4().hex
-        staging_path = await self._save_upload_to_staging(upload, analysis_id)
+        staging_path, source_checksum, upload_size_bytes = await self._save_upload_to_staging(
+            upload, analysis_id
+        )
         source_video_path: Path | None = None
         now = datetime.now(tz=UTC)
+        filename = upload.filename or "upload"
+        request_fingerprint = hashlib.sha256(
+            f"{filename}\0{source_checksum}\0reanalyze={reanalyze}".encode()
+        ).hexdigest()
+        initial_job = AnalysisJob(
+            analysis_id=analysis_id,
+            status=AnalysisStatus.processing,
+            current_stage=AnalysisStage.uploaded,
+            created_at=now,
+            updated_at=now,
+        )
 
         try:
+            try:
+                reservation = self.repository.persistence.service.reserve_analysis(
+                    owner_user_id=self.repository.persistence.owner_user_id,
+                    analysis_id=analysis_id,
+                    idempotency_key=idempotency_key or analysis_id,
+                    request_fingerprint=request_fingerprint,
+                    original_filename=filename,
+                    content_type=upload.content_type,
+                    size_bytes=upload_size_bytes,
+                    source_checksum=source_checksum,
+                    job_payload=initial_job.model_dump(mode="json"),
+                    allow_duplicate=reanalyze,
+                )
+            except IdempotencyConflictError as exc:
+                raise JobConflictError("idempotency_conflict", str(exc)) from exc
+            except OperationInProgressError as exc:
+                raise JobConflictError("operation_in_progress", str(exc)) from exc
+            if reservation.duplicate is not None:
+                return DuplicateUploadResponse(
+                    existing_analysis_id=reservation.duplicate.existing_analysis_id,
+                    uploaded_at=reservation.duplicate.uploaded_at,
+                )
+            if not reservation.created:
+                return UploadVideoResponse.model_validate(
+                    self.repository.load_job(reservation.analysis_id).model_dump(mode="json")
+                )
             inspection = inspect_video(
                 input_path=staging_path,
                 output_dir=self.settings.analysis_output_dir,
@@ -185,22 +241,18 @@ class AnalysisWorkflowService:
         )
 
     def list_sampled_frames(self, analysis_id: str) -> SampledFramesResponse:
-        self.repository.load_job(analysis_id)
-        frames_dir = self.repository.analysis_dir(analysis_id) / "frames"
+        job = self.repository.load_job(analysis_id)
         frames = []
-        if frames_dir.exists():
-            for frame_path in sorted(frames_dir.glob("frame_*.jpg")):
-                match = FRAME_NAME_PATTERN.fullmatch(frame_path.name)
-                if match is None or not frame_path.is_file():
-                    continue
-                artifact = self.repository.artifact_from_path(analysis_id, frame_path)
+        for artifact in job.available_artifacts:
+            path = Path(artifact.path)
+            if path.parent.as_posix() != "frames":
+                continue
+            match = FRAME_NAME_PATTERN.fullmatch(path.name)
+            if match is not None:
                 frames.append(
                     SampledFrameArtifact(
                         frame_number=int(match.group(1)),
-                        path=artifact.path,
-                        url=artifact.url,
-                        content_type=artifact.content_type,
-                        size_bytes=artifact.size_bytes,
+                        **artifact.model_dump(),
                     )
                 )
         return SampledFramesResponse(analysis_id=analysis_id, frames=frames)
@@ -349,18 +401,20 @@ class AnalysisWorkflowService:
         self._require(job.calibration_completed, "calibration_required", "Calibration is required.")
         calibration_id = self._validate_output_id(request.calibration_id, "calibration")
         tracking_path = self.repository.analysis_dir(analysis_id) / "tracking" / "tracking.json"
-
-        if tracking_path.exists():
-            tracking = self._load_tracking(tracking_path)
-        else:
-            calibration_path = (
-                self.repository.analysis_dir(analysis_id)
-                / "calibrations"
-                / calibration_id
-                / "calibration.json"
+        try:
+            registered_tracking = self.repository.resolve_artifact(
+                analysis_id, "tracking/tracking.json"
             )
-            if not calibration_path.is_file():
-                raise JobNotFoundError("Calibration not found.")
+        except JobNotFoundError:
+            registered_tracking = None
+
+        if registered_tracking is not None:
+            tracking = self._load_tracking(registered_tracking)
+        else:
+            calibration_path = self.repository.resolve_artifact(
+                analysis_id,
+                f"calibrations/{calibration_id}/calibration.json",
+            )
             if job.source_video is None:
                 raise JobConflictError("source_video_missing", "Source video is missing.")
 
@@ -443,7 +497,9 @@ class AnalysisWorkflowService:
     def list_player_candidates(self, analysis_id: str) -> PlayerCandidateCollection:
         job = self.repository.load_job(analysis_id)
         self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
-        tracking_path = self.repository.analysis_dir(analysis_id) / "tracking" / "tracking.json"
+        tracking_path = self.repository.resolve_artifact(
+            analysis_id, "tracking/tracking.json"
+        )
         collection = self._ensure_player_candidates(
             analysis_id,
             job=job,
@@ -456,7 +512,9 @@ class AnalysisWorkflowService:
     def generate_player_candidates(self, analysis_id: str) -> PlayerCandidateCollection:
         job = self.repository.load_job(analysis_id)
         self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
-        tracking_path = self.repository.analysis_dir(analysis_id) / "tracking" / "tracking.json"
+        tracking_path = self.repository.resolve_artifact(
+            analysis_id, "tracking/tracking.json"
+        )
         collection = self._build_player_candidates(
             analysis_id,
             job=job,
@@ -624,7 +682,9 @@ class AnalysisWorkflowService:
     def list_players(self, analysis_id: str) -> PlayersResponse:
         job = self.repository.load_job(analysis_id)
         self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
-        tracking_path = self.repository.analysis_dir(analysis_id) / "tracking" / "tracking.json"
+        tracking_path = self.repository.resolve_artifact(
+            analysis_id, "tracking/tracking.json"
+        )
         tracking = self._load_tracking(tracking_path)
         tracking = self._refresh_player_selection_metrics(tracking_path, tracking)
         tracking = self._ensure_player_previews(job, tracking_path, tracking)
@@ -766,10 +826,12 @@ class AnalysisWorkflowService:
             "Player tracking is required.",
         )
         try:
-            return generate_shadow_active_play(
+            report = generate_shadow_active_play(
                 analysis_id=analysis_id,
                 analysis_dir=self.repository.analysis_dir(analysis_id),
             )
+            self.repository.save_job(job)
+            return report
         except ActivePlayNotReadyError as exc:
             raise JobConflictError("active_play_not_ready", str(exc)) from exc
         except ActivePlayError as exc:
@@ -782,12 +844,15 @@ class AnalysisWorkflowService:
         """Load an existing internal shadow artifact without legacy migration."""
 
         self.repository.load_job(analysis_id)
-        report_path = self.repository.analysis_dir(analysis_id) / "active_play" / "active_play.json"
-        if not report_path.is_file():
+        try:
+            report_path = self.repository.resolve_artifact(
+                analysis_id, "active_play/active_play.json"
+            )
+        except JobNotFoundError:
             raise JobConflictError(
                 "active_play_not_ready",
                 "Shadow Active Play evidence has not been generated.",
-            )
+            ) from None
         try:
             return load_active_play_report(report_path)
         except ActivePlayError as exc:
@@ -799,16 +864,27 @@ class AnalysisWorkflowService:
     def get_analytics(self, analysis_id: str) -> AnalyticsResponse:
         job = self.repository.load_job(analysis_id)
         self._require(job.analytics_completed, "analytics_not_ready", "Analytics are not ready.")
-        analytics_path = self.repository.analysis_dir(analysis_id) / "analytics" / "analytics.json"
-        if not analytics_path.is_file():
-            raise JobConflictError("analytics_not_ready", "Analytics are not ready.")
+        try:
+            analytics_path = self.repository.resolve_artifact(
+                analysis_id, "analytics/analytics.json"
+            )
+        except JobNotFoundError:
+            raise JobConflictError("analytics_not_ready", "Analytics are not ready.") from None
+        try:
+            match_iq_path = self.repository.resolve_artifact(
+                analysis_id, f"analytics/{MATCH_IQ_FILENAME}"
+            )
+        except JobNotFoundError:
+            match_iq_path = analytics_path.parent / "__not_registered__"
         return AnalyticsResponse(
             analysis_id=analysis_id,
             analytics=self._load_analytics(analytics_path),
-            match_iq=self._load_optional_match_iq(analytics_path.parent / MATCH_IQ_FILENAME),
+            match_iq=self._load_optional_match_iq(match_iq_path),
         )
 
-    async def _save_upload_to_staging(self, upload: UploadFile, analysis_id: str) -> Path:
+    async def _save_upload_to_staging(
+        self, upload: UploadFile, analysis_id: str
+    ) -> tuple[Path, str, int]:
         original_name = Path(upload.filename or "").name
         suffix = self._validate_upload_filename(original_name)
         self._validate_upload_content_type(upload.content_type)
@@ -817,12 +893,14 @@ class AnalysisWorkflowService:
         staging_dir.mkdir(parents=True, exist_ok=False)
         staging_path = staging_dir / f"source{suffix}"
         bytes_written = 0
+        digest = hashlib.sha256()
         try:
             with staging_path.open("wb") as output:
                 while chunk := await upload.read(self.settings.upload_chunk_size_bytes):
                     bytes_written += len(chunk)
                     if bytes_written > self.settings.max_upload_size_bytes:
                         raise JobTooLargeError("Uploaded video exceeds the configured size limit.")
+                    digest.update(chunk)
                     output.write(chunk)
         except JobTooLargeError:
             if staging_path.exists():
@@ -831,7 +909,7 @@ class AnalysisWorkflowService:
 
         if bytes_written == 0:
             raise JobRequestError("empty_upload", "Uploaded video cannot be empty.")
-        return staging_path
+        return staging_path, digest.hexdigest(), bytes_written
 
     def _validate_upload_filename(self, filename: str) -> str:
         suffix = Path(filename).suffix.lower()

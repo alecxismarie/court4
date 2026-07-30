@@ -49,7 +49,6 @@ from app.schemas.evidence_calibration import (
     ThresholdSimulationResult,
     TrackingContinuityMetrics,
 )
-from app.schemas.jobs import AnalysisJob
 from app.schemas.match_iq import MatchIQReport
 from app.schemas.player_candidates import (
     CandidateQuality,
@@ -108,7 +107,7 @@ class _ArtifactContext:
     sample: CalibrationSample
     artifact_root: Path
     metadata: VideoMetadataReport | None
-    job: AnalysisJob | None
+    job: None
     tracking: PlayerTrackingReport | None
     candidates: PlayerCandidateCollection | None
     normalized_candidates: tuple[PlayerCandidate, ...]
@@ -378,17 +377,6 @@ def _load_artifacts(sample: CalibrationSample, repository_root: Path) -> _Artifa
         warnings=warnings,
         errors=errors,
     )
-    job = _load_standard_artifact(
-        artifact_root=artifact_root,
-        analysis_id=reuse.inspection_analysis_id,
-        relative_path="job.json",
-        label="analysis_job",
-        model=AnalysisJob,
-        artifacts=artifacts,
-        warnings=warnings,
-        errors=errors,
-        required=False,
-    )
     tracking = _load_standard_artifact(
         artifact_root=artifact_root,
         analysis_id=reuse.tracking_analysis_id,
@@ -520,7 +508,7 @@ def _load_artifacts(sample: CalibrationSample, repository_root: Path) -> _Artifa
         sample=sample,
         artifact_root=artifact_root,
         metadata=metadata,
-        job=job,
+        job=None,
         tracking=tracking,
         candidates=candidates,
         normalized_candidates=normalized_candidates,
@@ -803,14 +791,8 @@ def _assessment_for(
     return assess_analysis_readiness(
         upload_preflight=upload,
         calibration_completed=context.calibration_available,
-        court_detection_status=(
-            context.job.court_detection_status.value
-            if context.job is not None and context.job.court_detection_status is not None
-            else None
-        ),
-        court_detection_confidence=(
-            context.job.court_detection_confidence if context.job is not None else None
-        ),
+        court_detection_status=None,
+        court_detection_confidence=None,
         detected_people=detected_people,
         candidates=context.normalized_candidates,
         selected_candidate_id=selected_id,

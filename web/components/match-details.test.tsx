@@ -163,9 +163,19 @@ describe("match details workflow", () => {
     renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
     await user.click(await screen.findByRole("button", { name: /recognize court/i }));
 
-    expect(await screen.findByText("Court recognized with 91% confidence.")).toBeInTheDocument();
+    expect(await screen.findByText("91% confidence")).toBeInTheDocument();
     expect(await screen.findByText("Find the players")).toBeInTheDocument();
+    const courtRecognition = screen.getByRole("region", { name: "Court recognized" });
+    const playerTracking = within(courtRecognition).getByRole("region", {
+      name: "Find the players",
+    });
+    expect(playerTracking).toBeInTheDocument();
+    expect(within(playerTracking).getByText("Next step")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: /continue to find players/i }),
+    ).not.toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Detected court" })).toBeInTheDocument();
+    expect(screen.queryByText("Detected court")).not.toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "Top-down court view" })).not.toBeInTheDocument();
     expect(screen.queryByText("Confidence value")).not.toBeInTheDocument();
     expect(screen.queryByText("Calibration source")).not.toBeInTheDocument();
@@ -192,9 +202,8 @@ describe("match details workflow", () => {
 
     renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
 
-    expect(await screen.findByText("Court recognized with 91% confidence.")).toBeInTheDocument();
-    expect(screen.getByText("Detection confidence")).toBeInTheDocument();
-    expect(screen.getAllByText("91%")[0]).toBeInTheDocument();
+    expect(await screen.findByText("91% confidence")).toBeInTheDocument();
+    expect(screen.queryByText("Detection confidence")).not.toBeInTheDocument();
     expect(mockedDetectCourt).not.toHaveBeenCalled();
   });
 
@@ -274,7 +283,7 @@ describe("match details workflow", () => {
     expect(screen.getByRole("button", { name: /find players/i })).toBeInTheDocument();
   });
 
-  it("shows the player-tracking loading state and prevents duplicate requests", async () => {
+  it("shows time-based player-tracking progress without duplicate controls", async () => {
     const user = userEvent.setup();
     mockedGetAnalysis.mockResolvedValue(makeCalibratedJob());
     mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
@@ -282,11 +291,16 @@ describe("match details workflow", () => {
 
     renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
     await user.click(await screen.findByRole("button", { name: /find players/i }));
-    await user.click(screen.getByRole("button", { name: /finding players/i }));
 
     expect(mockedStartTracking).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Tracking player movement now.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /finding players/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /find players/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Analyzing player movement")).toBeInTheDocument();
+    expect(screen.getByText("1%")).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: "Player tracking progress" })).toHaveAttribute(
+      "aria-valuenow",
+      "1",
+    );
+    expect(screen.queryByText("Tracking player movement now.")).not.toBeInTheDocument();
   });
 
   it("starts tracking with automatic defaults and displays eligible player cards", async () => {
@@ -323,6 +337,7 @@ describe("match details workflow", () => {
       }),
     );
     expect(await screen.findByText("Player 1")).toBeInTheDocument();
+    expect(screen.getByText("100%")).toBeInTheDocument();
     expect(screen.queryByText("Track 1")).not.toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /this is me/i })).toHaveLength(2);
   });
@@ -589,6 +604,16 @@ describe("match details workflow", () => {
     mockedGenerateAnalytics.mockResolvedValue(makeAnalyticsGenerationResponse());
 
     renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+
+    const playerChoices = await screen.findByRole("group", {
+      name: "Player choices and Match IQ",
+    });
+    const matchIQ = screen.getByRole("region", { name: "Generate your Match IQ" });
+    const selectedPlayer = within(playerChoices).getByText("Player 1").closest("article");
+    expect(within(playerChoices).getByRole("region", { name: "Generate your Match IQ" })).toBe(
+      matchIQ,
+    );
+    expect(selectedPlayer?.nextElementSibling).toBe(matchIQ);
 
     await user.click(await screen.findByRole("button", { name: /generate my match iq/i }));
 

@@ -9,11 +9,14 @@ description = "Upload-first pickleball performance analytics foundation."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "alembic>=1.13,<2.0",
     "fastapi>=0.111,<1.0",
     "numpy>=1.26,<3.0",
     "opencv-python-headless>=4.10,<5.0",
+    "psycopg[binary]>=3.2,<4.0",
     "pydantic-settings>=2.3,<3.0",
     "python-multipart>=0.0.9,<1.0",
+    "sqlalchemy>=2.0,<3.0",
     "uvicorn[standard]>=0.30,<1.0",
 ]
 
@@ -28,6 +31,7 @@ detector = [
     "lap>=0.5.12,<0.6",
     "ultralytics>=8.3,<9.0",
 ]
+spike = []
 
 [tool.setuptools.packages.find]
 include = ["app*", "scripts*"]
@@ -37,6 +41,8 @@ testpaths = ["tests"]
 addopts = "-q"
 markers = [
     "integration: tests that require optional local model weights or external detector dependencies",
+    "postgres: tests that require the isolated Phase 1.8B0 PostgreSQL service",
+    "production_postgres: tests that require the Phase 1.8B production PostgreSQL service",
 ]
 
 [tool.ruff]

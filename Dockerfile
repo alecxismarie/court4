@@ -22,6 +22,7 @@ ENV YOLO_CONFIG_DIR=/tmp
 ENV MPLCONFIGDIR=/tmp/matplotlib
 
 COPY app ./app
+COPY alembic.ini ./
 COPY scripts ./scripts
 COPY tests ./tests
 COPY calibration ./calibration

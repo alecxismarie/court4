@@ -1,4 +1,4 @@
-"""Filesystem-backed analysis job services."""
+"""PostgreSQL-authoritative analysis job services with local artifact bytes."""
 
 from app.services.jobs.exceptions import (
     JobConflictError,

@@ -1,6 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -240,6 +241,26 @@ class AnalyticsResponse(BaseModel):
 
 class UploadVideoResponse(AnalysisJobResponse):
     model_config = ConfigDict(frozen=True)
+
+
+class DuplicateUploadActions(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    open_existing: bool = True
+    reanalyze: bool = True
+
+
+class DuplicateUploadResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["duplicate"] = "duplicate"
+    duplicate_type: Literal["exact"] = "exact"
+    existing_analysis_id: str
+    uploaded_at: datetime
+    actions: DuplicateUploadActions = Field(default_factory=DuplicateUploadActions)
+
+
+UploadAnalysisResponse = UploadVideoResponse | DuplicateUploadResponse
 
 
 class InspectionMetadataResponse(BaseModel):

@@ -8,6 +8,8 @@ __pycache__/
 htmlcov/
 .venv/
 venv/
+build/
+*.egg-info/
 *.tsbuildinfo
 .env
 data/input/*

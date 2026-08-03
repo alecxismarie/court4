@@ -9,6 +9,15 @@ __pycache__/
 .coverage
 htmlcov/
 .env
+.env.*
+!.env.example
+web/
+build/
+docs/
+*.log
+artifacts/
+test-results/
+playwright-report/
 data/input/*
 data/output/*
 !data/input/.gitkeep

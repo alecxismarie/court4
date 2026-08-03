@@ -206,18 +206,14 @@ class HistoryProjectionService:
 
     def _load_analytics(self, analysis_id: str) -> AnalyticsReport | None:
         try:
-            path = self.repository.resolve_artifact(
-                analysis_id, ANALYTICS_PATH.as_posix()
-            )
+            path = self.repository.resolve_artifact(analysis_id, ANALYTICS_PATH.as_posix())
         except JobWorkflowError:
             return None
         return _load_model(path, AnalyticsReport)
 
     def _load_match_iq(self, analysis_id: str) -> MatchIQReport | None:
         try:
-            path = self.repository.resolve_artifact(
-                analysis_id, MATCH_IQ_PATH.as_posix()
-            )
+            path = self.repository.resolve_artifact(analysis_id, MATCH_IQ_PATH.as_posix())
         except JobWorkflowError:
             return None
         return _load_model(path, MatchIQReport)

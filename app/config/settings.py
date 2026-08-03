@@ -22,15 +22,14 @@ class Settings(BaseSettings):
         env_file=".env",
         env_prefix="PICKLEBALL_AI_",
         case_sensitive=False,
+        populate_by_name=True,
     )
 
     input_dir: Path = Path("data/input")
     output_dir: Path = Path("data/output")
     environment: Literal["development", "test", "staging", "production"] = "development"
     persistence_backend: Literal["postgresql"] = "postgresql"
-    database_url: str = (
-        "postgresql+psycopg://court4:court4_local_only@127.0.0.1:55433/court4"
-    )
+    database_url: str = "postgresql+psycopg://court4:court4_local_only@127.0.0.1:55433/court4"
     database_pool_size: PositiveInt = 10
     database_max_overflow: int = Field(default=10, ge=0)
     database_pool_timeout_seconds: PositiveInt = 10
@@ -119,9 +118,46 @@ class Settings(BaseSettings):
     auth_register_rate_limit: PositiveInt = 5
     auth_login_rate_limit: PositiveInt = 10
     auth_refresh_rate_limit: PositiveInt = 30
-    auth_frontend_base_url: str = "http://localhost:3000"
-    auth_email_backend: Literal["development", "provider"] = "development"
+    auth_frontend_base_url: str = Field(
+        default="http://localhost:3000",
+        validation_alias=AliasChoices("FRONTEND_BASE_URL", "PICKLEBALL_AI_AUTH_FRONTEND_BASE_URL"),
+    )
+    registration_enabled: bool | None = Field(
+        default=None,
+        validation_alias=AliasChoices("REGISTRATION_ENABLED", "PICKLEBALL_AI_REGISTRATION_ENABLED"),
+    )
+    private_alpha_allowlist_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "PRIVATE_ALPHA_ALLOWLIST_ENABLED",
+            "PICKLEBALL_AI_PRIVATE_ALPHA_ALLOWLIST_ENABLED",
+        ),
+    )
+    private_alpha_allowed_emails: Annotated[tuple[str, ...], NoDecode] = Field(
+        default=(),
+        validation_alias=AliasChoices(
+            "PRIVATE_ALPHA_ALLOWED_EMAILS",
+            "PICKLEBALL_AI_PRIVATE_ALPHA_ALLOWED_EMAILS",
+        ),
+    )
+    auth_email_backend: Literal["development", "resend"] = Field(
+        default="development",
+        validation_alias=AliasChoices("EMAIL_PROVIDER", "PICKLEBALL_AI_AUTH_EMAIL_BACKEND"),
+    )
     auth_development_email_sink_enabled: bool = True
+    email_from_address: str = Field(
+        default="court4@localhost.invalid",
+        validation_alias=AliasChoices("EMAIL_FROM_ADDRESS", "PICKLEBALL_AI_EMAIL_FROM_ADDRESS"),
+    )
+    email_from_name: str = Field(
+        default="Court4",
+        validation_alias=AliasChoices("EMAIL_FROM_NAME", "PICKLEBALL_AI_EMAIL_FROM_NAME"),
+    )
+    resend_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("RESEND_API_KEY", "PICKLEBALL_AI_RESEND_API_KEY"),
+    )
+    email_request_timeout_seconds: PositiveInt = 10
     auth_verification_token_hours: PositiveInt = 24
     auth_password_reset_token_minutes: PositiveInt = 45
     auth_resend_verification_rate_limit: PositiveInt = 3
@@ -208,6 +244,21 @@ class Settings(BaseSettings):
             raise ValueError("Credentialed CORS does not permit a wildcard origin.")
         return tuple(dict.fromkeys(origin.rstrip("/") for origin in value))
 
+    @field_validator("private_alpha_allowed_emails", mode="before")
+    @classmethod
+    def parse_private_alpha_allowed_emails(cls, value: object) -> object:
+        if isinstance(value, str):
+            return tuple(item.strip() for item in value.split(",") if item.strip())
+        return value
+
+    @field_validator("private_alpha_allowed_emails")
+    @classmethod
+    def normalize_private_alpha_allowed_emails(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(dict.fromkeys(item.strip().casefold() for item in value if item.strip()))
+        if any("@" not in email or len(email) > 320 for email in normalized):
+            raise ValueError("Private-alpha allowlist contains an invalid email address.")
+        return normalized
+
     @field_validator("auth_access_token_secret")
     @classmethod
     def validate_auth_secret(cls, value: SecretStr, info: ValidationInfo) -> SecretStr:
@@ -238,6 +289,12 @@ class Settings(BaseSettings):
             return self.auth_cookie_secure
         return self.environment in {"staging", "production"}
 
+    @property
+    def registration_open(self) -> bool:
+        if self.registration_enabled is not None:
+            return self.registration_enabled
+        return self.environment in {"development", "test"}
+
     @model_validator(mode="after")
     def validate_auth_deployment_security(self) -> "Settings":
         if (
@@ -260,6 +317,24 @@ class Settings(BaseSettings):
             and self.auth_development_email_sink_enabled
         ):
             raise ValueError("The development email sink must be disabled in a deployment.")
+        if self.environment in {"staging", "production"} and self.registration_enabled is None:
+            raise ValueError("REGISTRATION_ENABLED must be set explicitly in a deployment.")
+        if (
+            self.environment in {"staging", "production"}
+            and self.registration_open
+            and (not self.private_alpha_allowlist_enabled or not self.private_alpha_allowed_emails)
+        ):
+            raise ValueError(
+                "Open deployment registration requires a non-empty private-alpha allowlist."
+            )
+        if self.auth_email_backend == "resend" and self.resend_api_key is None:
+            raise ValueError("RESEND_API_KEY is required when EMAIL_PROVIDER=resend.")
+        if self.environment in {"staging", "production"} and self.auth_email_backend != "resend":
+            raise ValueError("A real production email provider is required in a deployment.")
+        if self.environment in {"staging", "production"} and self.email_from_address.endswith(
+            ".invalid"
+        ):
+            raise ValueError("A verified EMAIL_FROM_ADDRESS is required in a deployment.")
         if self.environment in {
             "staging",
             "production",

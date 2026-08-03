@@ -49,9 +49,7 @@ def upgrade() -> None:
             "state in ('pending', 'available', 'failed')",
             name="ck_spike_video_state",
         ),
-        sa.ForeignKeyConstraint(
-            ["owner_user_id"], ["spike_users.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["owner_user_id"], ["spike_users.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("id", "owner_user_id", name="uq_spike_video_id_owner"),
     )
@@ -77,9 +75,7 @@ def upgrade() -> None:
             "state in ('created', 'processing', 'completed', 'failed', 'cancelled')",
             name="ck_spike_analysis_state",
         ),
-        sa.ForeignKeyConstraint(
-            ["owner_user_id"], ["spike_users.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["owner_user_id"], ["spike_users.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
             ["uploaded_video_id", "owner_user_id"],
             ["spike_uploaded_videos.id", "spike_uploaded_videos.owner_user_id"],
@@ -110,15 +106,9 @@ def upgrade() -> None:
         sa.Column("pipeline_version", sa.String(length=64), nullable=False),
         sa.Column("schema_version", sa.Integer(), nullable=False),
         sa.Column("policy_version", sa.String(length=64), nullable=False),
-        sa.Column(
-            "configuration_fingerprint", sa.String(length=64), nullable=False
-        ),
-        sa.Column(
-            "software_commit_identifier", sa.String(length=64), nullable=False
-        ),
-        sa.Column(
-            "deployment_build_identifier", sa.String(length=128), nullable=False
-        ),
+        sa.Column("configuration_fingerprint", sa.String(length=64), nullable=False),
+        sa.Column("software_commit_identifier", sa.String(length=64), nullable=False),
+        sa.Column("deployment_build_identifier", sa.String(length=128), nullable=False),
         sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("heartbeat_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
@@ -137,13 +127,10 @@ def upgrade() -> None:
             name="ck_spike_run_source_checksum",
         ),
         sa.CheckConstraint(
-            "state in "
-            "('queued', 'processing', 'completed', 'failed', 'cancelled', 'stale')",
+            "state in ('queued', 'processing', 'completed', 'failed', 'cancelled', 'stale')",
             name="ck_spike_run_state",
         ),
-        sa.ForeignKeyConstraint(
-            ["analysis_id"], ["spike_analyses.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["analysis_id"], ["spike_analyses.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
             ["previous_run_id"], ["spike_analysis_runs.id"], ondelete="RESTRICT"
         ),
@@ -185,9 +172,7 @@ def upgrade() -> None:
             "(subject_type = 'run' and analysis_run_id is not null)",
             name="ck_spike_event_subject",
         ),
-        sa.ForeignKeyConstraint(
-            ["analysis_id"], ["spike_analyses.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["analysis_id"], ["spike_analyses.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
             ["analysis_run_id"], ["spike_analysis_runs.id"], ondelete="RESTRICT"
         ),
@@ -228,9 +213,7 @@ def upgrade() -> None:
             "status in ('in_progress', 'completed', 'failed')",
             name="ck_spike_idempotency_status",
         ),
-        sa.ForeignKeyConstraint(
-            ["owner_user_id"], ["spike_users.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["owner_user_id"], ["spike_users.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "owner_user_id",
@@ -247,24 +230,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "ix_spike_idempotency_expiry", table_name="spike_idempotency_records"
-    )
+    op.drop_index("ix_spike_idempotency_expiry", table_name="spike_idempotency_records")
     op.drop_table("spike_idempotency_records")
-    op.drop_index(
-        "ix_spike_event_run_created", table_name="spike_analysis_state_events"
-    )
-    op.drop_index(
-        "ix_spike_event_analysis_created", table_name="spike_analysis_state_events"
-    )
+    op.drop_index("ix_spike_event_run_created", table_name="spike_analysis_state_events")
+    op.drop_index("ix_spike_event_analysis_created", table_name="spike_analysis_state_events")
     op.drop_table("spike_analysis_state_events")
     op.drop_index("uq_spike_run_one_active", table_name="spike_analysis_runs")
     op.drop_index("ix_spike_run_stale_scan", table_name="spike_analysis_runs")
     op.drop_table("spike_analysis_runs")
     op.drop_index("ix_spike_analysis_owner_created", table_name="spike_analyses")
     op.drop_table("spike_analyses")
-    op.drop_index(
-        "ix_spike_video_owner_created", table_name="spike_uploaded_videos"
-    )
+    op.drop_index("ix_spike_video_owner_created", table_name="spike_uploaded_videos")
     op.drop_table("spike_uploaded_videos")
     op.drop_table("spike_users")

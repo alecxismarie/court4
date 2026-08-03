@@ -134,12 +134,8 @@ def test_exact_duplicate_renamed_retry_and_analyze_again(
         "actions": {"open_existing": True, "reanalyze": True},
     }
     assert {
-        path.name
-        for path in output_dir.iterdir()
-        if path.is_dir() and path.name != "_uploads"
-    } == {
-        first_analysis_id
-    }
+        path.name for path in output_dir.iterdir() if path.is_dir() and path.name != "_uploads"
+    } == {first_analysis_id}
 
     reanalyzed = _upload_video(
         client,
@@ -153,9 +149,10 @@ def test_exact_duplicate_renamed_retry_and_analyze_again(
     assert reanalyzed.json()["analysis_id"] != first_analysis_id
     history = client.get("/api/v1/analyses")
     assert history.status_code == 200
-    assert {
-        item["analysis_id"] for item in history.json()["items"]
-    } == {first_analysis_id, reanalyzed.json()["analysis_id"]}
+    assert {item["analysis_id"] for item in history.json()["items"]} == {
+        first_analysis_id,
+        reanalyzed.json()["analysis_id"],
+    }
 
 
 def test_missing_analysis_returns_404(
@@ -761,11 +758,7 @@ def _upload_video(
     with video_path.open("rb") as video:
         response = client.post(
             "/api/v1/analyses",
-            headers=(
-                {"Idempotency-Key": idempotency_key}
-                if idempotency_key is not None
-                else None
-            ),
+            headers=({"Idempotency-Key": idempotency_key} if idempotency_key is not None else None),
             data={"reanalyze": "true"} if reanalyze else None,
             files={
                 "file": (

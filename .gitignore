@@ -20,5 +20,9 @@ models/*
 web/.next/
 web/.next-e2e/
 web/.next-dev*.log
+web/.frontend-runtime*.log
+web/artifacts/
+web/playwright-report/
+web/test-results/
 web/coverage/
 web/node_modules/

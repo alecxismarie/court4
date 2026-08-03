@@ -34,9 +34,7 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (
-        CheckConstraint(
-            "account_status in ('active','disabled')", name="ck_user_account_status"
-        ),
+        CheckConstraint("account_status in ('active','disabled')", name="ck_user_account_status"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -205,9 +203,7 @@ class AnalysisRun(Base):
     __tablename__ = "analysis_runs"
     __table_args__ = (
         UniqueConstraint("id", "analysis_id", name="uq_run_id_analysis"),
-        UniqueConstraint(
-            "analysis_id", "attempt_number", name="uq_run_analysis_attempt"
-        ),
+        UniqueConstraint("analysis_id", "attempt_number", name="uq_run_analysis_attempt"),
         CheckConstraint(
             "state in ('queued','processing','completed','failed','cancelled','stale')",
             name="ck_run_state",
@@ -215,8 +211,7 @@ class AnalysisRun(Base):
         CheckConstraint("row_version > 0", name="ck_run_row_version"),
         CheckConstraint("schema_version > 0", name="ck_run_schema_version"),
         CheckConstraint(
-            "source_video_checksum is null or "
-            "source_video_checksum ~ '^[a-f0-9]{64}$'",
+            "source_video_checksum is null or source_video_checksum ~ '^[a-f0-9]{64}$'",
             name="ck_run_source_checksum",
         ),
         CheckConstraint(
@@ -348,9 +343,7 @@ class AnalysisArtifact(Base):
             "analysis_id", "storage_provider", "storage_key", name="uq_artifact_storage_key"
         ),
         CheckConstraint("size_bytes >= 0", name="ck_artifact_size"),
-        CheckConstraint(
-            "checksum_sha256 ~ '^[a-f0-9]{64}$'", name="ck_artifact_checksum"
-        ),
+        CheckConstraint("checksum_sha256 ~ '^[a-f0-9]{64}$'", name="ck_artifact_checksum"),
         CheckConstraint(
             "state in ('pending','available','quarantined','deleted')",
             name="ck_artifact_state",

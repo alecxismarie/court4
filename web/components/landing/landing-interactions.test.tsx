@@ -26,14 +26,13 @@ describe("landing page planned interactions", () => {
     expect(screen.queryByRole("navigation", { name: /mobile landing navigation/i })).not.toBeInTheDocument();
   });
 
-  it("never pretends to submit or store a newsletter address", async () => {
-    const user = userEvent.setup();
+  it("clearly disables unavailable newsletter signup", () => {
     render(<NewsletterForm />);
 
-    await user.type(screen.getByLabelText(/email address/i), "player@example.com");
-    await user.click(screen.getByRole("button", { name: /join the list/i }));
+    expect(screen.getByLabelText(/email address/i)).toBeDisabled();
+    expect(screen.getByRole("button", { name: /coming soon/i })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Your email was not stored or submitted",
+      "No email is collected",
     );
   });
 

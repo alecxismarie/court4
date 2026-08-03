@@ -1,11 +1,10 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { PublicLandingPage } from "@/components/landing/public-landing-page";
 import {
   journeySteps,
   landingStatistics,
-  partnerClubs,
 } from "@/lib/landing-content";
 
 vi.mock("@/components/landing/landing-auth-panel", () => ({
@@ -22,7 +21,7 @@ describe("public Court4 landing page", () => {
     expect(screen.getByRole("heading", { name: /your journey with court4/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /data that drives/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /apparel & paddle store/i })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /play more. save more./i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /partner program in development/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /stay ahead of the game/i })).toBeInTheDocument();
 
     const sectionIds = Array.from(container.querySelectorAll("main section[id]")).map(
@@ -37,7 +36,7 @@ describe("public Court4 landing page", () => {
     ]);
   });
 
-  it("uses the centralized approved statistics, journey, and reference rates", () => {
+  it("uses truthful alpha status and current upload-first journey copy", () => {
     render(<PublicLandingPage />);
 
     for (const statistic of landingStatistics) {
@@ -49,13 +48,10 @@ describe("public Court4 landing page", () => {
       expect(screen.getByText(step.copy)).toBeInTheDocument();
     }
 
-    const rates = screen.getByRole("table", { name: /reference court4 partner club rates/i });
-    for (const club of partnerClubs) {
-      const row = within(rates).getByRole("row", { name: new RegExp(club.name, "i") });
-      expect(row).toHaveTextContent(club.standardRate);
-      expect(row).toHaveTextContent(club.court4Rate);
-      expect(row).toHaveTextContent(club.discount);
-    }
+    expect(screen.getByText(/has not announced club partners/i)).toBeInTheDocument();
+    expect(screen.queryByText(/10K\+|5K\+|95%|20% OFF/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Privacy Policy" })).toHaveAttribute("href", "/privacy");
+    expect(screen.getByRole("link", { name: "Terms of Service" })).toHaveAttribute("href", "/terms");
   });
 
   it("exposes accessible navigation and visual alternative text", () => {

@@ -165,8 +165,7 @@ class PersistenceService:
                     select(IdempotencyRecord).where(
                         IdempotencyRecord.owner_user_id == owner_user_id,
                         IdempotencyRecord.scope == "analysis_upload",
-                        IdempotencyRecord.key_hash
-                        == sha256(idempotency_key.encode()).hexdigest(),
+                        IdempotencyRecord.key_hash == sha256(idempotency_key.encode()).hexdigest(),
                     )
                 )
                 if record is None:
@@ -430,9 +429,7 @@ class PersistenceService:
                 )
                 if existing is not None:
                     return self._resolve_run_record(existing, request_fingerprint)
-                analysis = self._owned_analysis(
-                    session.get(Analysis, analysis_id), owner_user_id
-                )
+                analysis = self._owned_analysis(session.get(Analysis, analysis_id), owner_user_id)
                 if synchronization_hook is not None:
                     synchronization_hook(backend_pid)
                 record = IdempotencyRecord(
@@ -526,9 +523,7 @@ class PersistenceService:
             if current is None:
                 raise ResourceNotFoundError("Run was not found.")
             if current.state == new_state:
-                return TransitionResult(
-                    current.id, current.state, current.row_version, backend_pid
-                )
+                return TransitionResult(current.id, current.state, current.row_version, backend_pid)
             if observation_hook is not None:
                 observation_hook(backend_pid, current.state, current.row_version)
             if new_state not in allowed.get(current.state, set()):
@@ -601,9 +596,7 @@ class PersistenceService:
                     event_metadata={},
                 )
             )
-            return TransitionResult(
-                run_id, new_state, transitioned.row_version, backend_pid
-            )
+            return TransitionResult(run_id, new_state, transitioned.row_version, backend_pid)
 
     def run_is_stale(self, run_id: UUID, *, now: datetime | None = None) -> bool:
         at = now or utc_now()
@@ -629,9 +622,7 @@ class PersistenceService:
 
     def load_job(self, *, owner_user_id: UUID, analysis_id: str) -> dict[str, Any]:
         with self._session_factory() as session:
-            analysis = self._owned_analysis(
-                session.get(Analysis, analysis_id), owner_user_id
-            )
+            analysis = self._owned_analysis(session.get(Analysis, analysis_id), owner_user_id)
             return dict(analysis.job_payload)
 
     def list_analysis_ids(self, *, owner_user_id: UUID) -> list[str]:
@@ -683,9 +674,7 @@ class PersistenceService:
                 self._add_event(
                     session, analysis, None, analysis.state, "legacy_imported", "development"
                 )
-                self._add_run_event(
-                    session, initial_run, None, "processing", "run_started"
-                )
+                self._add_run_event(session, initial_run, None, "processing", "run_started")
             else:
                 analysis = self._owned_analysis(analysis, owner_user_id)
 
@@ -740,9 +729,7 @@ class PersistenceService:
                 else:
                     run.failed_at = now
                     run.error_detail = str(payload.get("error") or "")[:4000] or None
-                self._add_run_event(
-                    session, run, previous_run_state, new_state, f"run_{new_state}"
-                )
+                self._add_run_event(session, run, previous_run_state, new_state, f"run_{new_state}")
 
             self._replace_artifacts(
                 session,
@@ -759,9 +746,7 @@ class PersistenceService:
                 selection=player_selection,
             )
 
-    def list_artifacts(
-        self, *, owner_user_id: UUID, analysis_id: str
-    ) -> list[AnalysisArtifact]:
+    def list_artifacts(self, *, owner_user_id: UUID, analysis_id: str) -> list[AnalysisArtifact]:
         with self._session_factory() as session:
             analysis = session.get(Analysis, analysis_id)
             self._assert_owner(analysis, owner_user_id)
@@ -802,9 +787,7 @@ class PersistenceService:
         return True
 
     @staticmethod
-    def _resolve_run_record(
-        record: IdempotencyRecord, request_fingerprint: str
-    ) -> RunResult:
+    def _resolve_run_record(record: IdempotencyRecord, request_fingerprint: str) -> RunResult:
         if record.request_fingerprint != request_fingerprint:
             raise IdempotencyConflictError(
                 "Idempotency key was already used for a different run request."
@@ -934,9 +917,7 @@ class PersistenceService:
         PersistenceService._owned_analysis(analysis, owner_user_id)
 
     @staticmethod
-    def _owned_analysis(
-        analysis: Analysis | None, owner_user_id: UUID
-    ) -> Analysis:
+    def _owned_analysis(analysis: Analysis | None, owner_user_id: UUID) -> Analysis:
         if analysis is None:
             raise ResourceNotFoundError("Analysis was not found.")
         if analysis.owner_user_id != owner_user_id:

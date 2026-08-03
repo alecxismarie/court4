@@ -1494,7 +1494,7 @@ def _active_play_threshold_analysis(
         field.name
         for field in fields(type(ACTIVE_PLAY_POLICY))
         if field.name != "policy_version"
-        and isinstance(getattr(ACTIVE_PLAY_POLICY, field.name), (int, float))
+        and isinstance(getattr(ACTIVE_PLAY_POLICY, field.name), int | float)
     }
     eligible = [item for item in evaluated if item.sample.dataset_split == DatasetSplit.development]
     excluded = sorted(

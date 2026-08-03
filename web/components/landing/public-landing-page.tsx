@@ -14,7 +14,6 @@ import {
   journeySteps,
   landingStatistics,
   mapPins,
-  partnerClubs,
 } from "@/lib/landing-content";
 import { LandingAuthPanel } from "@/components/landing/landing-auth-panel";
 import {
@@ -174,7 +173,7 @@ export function PublicLandingPage() {
               <h2 id="store-heading">
                 <strong>Court4</strong> apparel &amp; paddle store
               </h2>
-              <p>Play the game. Live the game.</p>
+              <p><strong>Coming soon.</strong> Concept preview only; no products are for sale.</p>
               <PlannedFeatureAction message="The Court4 store is planned and is not accepting orders yet.">
                 Shop now
               </PlannedFeatureAction>
@@ -187,9 +186,10 @@ export function PublicLandingPage() {
             aria-labelledby="clubs-heading"
           >
             <div className="landing-clubs-intro">
-              <h2 id="clubs-heading">Play more. Save more.</h2>
+              <h2 id="clubs-heading">Partner program in development</h2>
               <p>
-                Exclusive hourly rate for Court4 users at our partner clubs.
+                Court4 has not announced club partners, locations, rates, or discounts.
+                This map is a concept preview of a possible future directory.
               </p>
               <div className="landing-map" aria-label="Illustrative partner club map">
                 {mapPins.map((pin, index) => (
@@ -200,45 +200,20 @@ export function PublicLandingPage() {
                   />
                 ))}
               </div>
-              <PlannedFeatureAction message="The live partner-club directory is planned. The reference rates are shown here for preview.">
+              <PlannedFeatureAction message="The partner program is planned. No club partnerships or discounts are currently offered.">
                 View all partner clubs
               </PlannedFeatureAction>
             </div>
 
-            <div className="landing-club-table-wrap">
-              <table>
-                <caption className="sr-only">
-                  Reference Court4 partner club rates
-                </caption>
-                <thead>
-                  <tr>
-                    <th scope="col">Club &amp; location</th>
-                    <th scope="col">Standard hourly rate</th>
-                    <th scope="col">Court4 user rate</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {partnerClubs.map((club) => (
-                    <tr key={club.name}>
-                      <th scope="row">
-                        <MapPin aria-hidden="true" />
-                        <span>
-                          {club.name}
-                          <small>{club.location}</small>
-                        </span>
-                      </th>
-                      <td>{club.standardRate}</td>
-                      <td>
-                        <strong>{club.court4Rate}</strong>
-                        <span>{club.discount}</span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="landing-club-table-wrap" id="alpha-status">
+              <h3>Private-alpha status</h3>
+              <p>
+                Access is limited to approved testers. Court4 does not currently
+                publish subscription pricing or partner-club benefits.
+              </p>
               <p className="landing-reference-note">
-                Reference rates for the approved design preview; availability is
-                not yet live.
+                Planned commercial programs will be announced only after their
+                terms and participating partners are verified.
               </p>
             </div>
           </section>
@@ -251,8 +226,7 @@ export function PublicLandingPage() {
             <div>
               <h2 id="newsletter-heading">Stay ahead of the game.</h2>
               <p>
-                Get early news, product updates, and exclusive early-bird access
-                to partner clubs and offers.
+                Newsletter signup is not available during the private alpha.
               </p>
             </div>
             <NewsletterForm />

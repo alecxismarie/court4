@@ -35,6 +35,7 @@ from app.services.history import HistoryProjectionService
 from app.services.jobs import AnalysisWorkflowService
 
 router = APIRouter(prefix="/analyses", tags=["analyses"])
+development_router = APIRouter(prefix="/analyses", tags=["internal-development"])
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     400: {"model": ApiErrorResponse, "description": "Invalid request."},
@@ -370,7 +371,7 @@ def get_analytics(
     return workflow.get_analytics(analysis_id)
 
 
-@router.post(
+@development_router.post(
     "/{analysis_id}/debug/active-play",
     response_model=ActivePlayReport,
     summary="Generate shadow Active Play evidence",
@@ -388,7 +389,7 @@ def generate_active_play(
     return workflow.generate_active_play(analysis_id)
 
 
-@router.get(
+@development_router.get(
     "/{analysis_id}/debug/active-play",
     response_model=ActivePlayReport,
     summary="Get shadow Active Play evidence",

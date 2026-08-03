@@ -89,6 +89,12 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
             </Link>
           </p>
         ) : null}
+        {isRegister ? (
+          <p className="mt-3 text-center text-xs text-court-muted">
+            By creating an account, you agree to the <Link href="/terms" className="underline">Terms</Link>
+            {" "}and acknowledge the <Link href="/privacy" className="underline">Privacy Policy</Link>.
+          </p>
+        ) : null}
       </form>
     </main>
   );

@@ -1,4 +1,5 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "./fixtures";
+import type { Page } from "@playwright/test";
 
 test("no qualified reports shows the honest empty state", async ({ page }) => {
   await installHistoryMocks(page, playHistoryPayload(0));

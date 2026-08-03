@@ -37,9 +37,7 @@ def spike_engine() -> Iterator[Engine]:
 def session_factory(spike_engine: Engine) -> Iterator[sessionmaker[Session]]:
     factory = create_session_factory(spike_engine)
     with spike_engine.begin() as connection:
-        connection.execute(
-            text(f"TRUNCATE TABLE {', '.join(_TABLES)} RESTART IDENTITY CASCADE")
-        )
+        connection.execute(text(f"TRUNCATE TABLE {', '.join(_TABLES)} RESTART IDENTITY CASCADE"))
     yield factory
 
 

@@ -94,7 +94,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               aria-label="Court4 dashboard"
             >
               <Image
-                src="/brand/court4-logo.png?v=20260728"
+                src="/brand/court4-logo.png"
                 alt="Court4 - Know Your Game"
                 width={512}
                 height={512}

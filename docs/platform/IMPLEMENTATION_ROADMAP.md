@@ -72,6 +72,18 @@ and CI must run the concurrency invariants against production persistence.
 
 ## Phase 1.8C — Authentication and Authorization
 
+### Phase 1.8C.1 private-alpha remediation status (2026-08-03)
+
+The security and product-boundary remediation is implemented: development-only
+routers are absent in production, registration is explicitly controlled, the
+provider-neutral Resend adapter is present, public claims/legal routes are corrected,
+and the covered backend/frontend/browser suites pass. The private-alpha gate remains
+closed because the stable Next.js dependency tree has three high production audit
+findings, live provider delivery has not been evidenced, and the complete required
+real browser matrix is not yet implemented. Do not begin Phase 1.8D or 1.8E as a way
+to bypass these gate failures. See the root `PRIVATE_ALPHA_RELEASE_GATE.md` and
+`PHASE_1_8C_1_VALIDATION_REPORT.md`.
+
 Dependencies: 1.8B ownership schema; managed-auth spike/provider ADR; email service;
 approved account-state and alpha policies.
 

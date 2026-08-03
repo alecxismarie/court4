@@ -1,9 +1,10 @@
 import { MatchDetails } from "@/components/match-details";
 
-export default function MatchDetailsPage({
+export default async function MatchDetailsPage({
   params,
 }: {
-  params: { analysisId: string };
+  params: Promise<{ analysisId: string }>;
 }) {
-  return <MatchDetails analysisId={params.analysisId} />;
+  const { analysisId } = await params;
+  return <MatchDetails analysisId={analysisId} />;
 }

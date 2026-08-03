@@ -5,7 +5,6 @@ import {
   Crosshair,
   LineChart,
   MapPin,
-  QrCode,
   Share2,
   Target,
   UsersRound,
@@ -13,9 +12,9 @@ import {
 } from "lucide-react";
 
 export const landingStatistics = [
-  { value: "10K+", label: "Matches Analyzed", icon: ClipboardList },
-  { value: "5K+", label: "Players Improving", icon: UsersRound },
-  { value: "95%", label: "Would Recommend Court4", icon: Target },
+  { value: "Private alpha", label: "Controlled access", icon: UsersRound },
+  { value: "Upload-first", label: "Player-provided match video", icon: ClipboardList },
+  { value: "Evidence-led", label: "Movement and positioning insights", icon: Target },
 ] as const;
 
 export const heroFeatures = [
@@ -27,64 +26,33 @@ export const heroFeatures = [
 export const journeySteps = [
   {
     number: 1,
-    title: "Scan",
-    copy: "Scan the Court4 QR code at the court to start your match.",
-    icon: QrCode,
+    title: "Upload",
+    copy: "Upload a match video you recorded with permission from visible participants.",
+    icon: CloudUpload,
   },
   {
     number: 2,
-    title: "Play",
-    copy: "We record your match automatically while you focus on your game.",
+    title: "Review",
+    copy: "Court4 checks recording suitability and helps identify the court.",
     icon: Video,
   },
   {
     number: 3,
-    title: "Analyze",
-    copy: "Our AI analyzes every point, movement, and position on the court.",
-    icon: CloudUpload,
+    title: "Select",
+    copy: "Review discovered player candidates and select the player to analyze.",
+    icon: UsersRound,
   },
   {
     number: 4,
     title: "Insights",
-    copy: "Get performance insights that reveal your strengths and opportunities.",
+    copy: "Generate evidence-led movement and positioning results when video quality permits.",
     icon: BarChart3,
   },
   {
     number: 5,
     title: "Improve",
-    copy: "Track your progress over time and elevate every match.",
+    copy: "Review analysis and play history without fabricated point-level claims.",
     icon: LineChart,
-  },
-] as const;
-
-export const partnerClubs = [
-  {
-    name: "ACE Pickleball Club",
-    location: "Los Angeles, CA",
-    standardRate: "$60/hr",
-    court4Rate: "$48/hr",
-    discount: "20% OFF",
-  },
-  {
-    name: "The Pickle Yard",
-    location: "Irvine, CA",
-    standardRate: "$55/hr",
-    court4Rate: "$44/hr",
-    discount: "20% OFF",
-  },
-  {
-    name: "Bay Area Pickle Club",
-    location: "San Jose, CA",
-    standardRate: "$50/hr",
-    court4Rate: "$40/hr",
-    discount: "20% OFF",
-  },
-  {
-    name: "Smash House",
-    location: "San Diego, CA",
-    standardRate: "$45/hr",
-    court4Rate: "$36/hr",
-    discount: "20% OFF",
   },
 ] as const;
 
@@ -94,7 +62,7 @@ export const footerGroups = [
     links: [
       { label: "Features", href: "#features" },
       { label: "How It Works", href: "#journey" },
-      { label: "Pricing", href: "#partner-clubs" },
+      { label: "Pricing", href: "#alpha-status" },
     ],
   },
   {
@@ -117,8 +85,8 @@ export const footerGroups = [
     title: "Support",
     links: [
       { label: "Help Center", href: "#support" },
-      { label: "Privacy Policy", href: "#legal" },
-      { label: "Terms of Service", href: "#legal" },
+      { label: "Privacy Policy", href: "/privacy" },
+      { label: "Terms of Service", href: "/terms" },
     ],
   },
 ] as const;

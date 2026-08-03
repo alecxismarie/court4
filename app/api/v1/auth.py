@@ -11,6 +11,7 @@ from app.auth.rate_limit import auth_rate_limiter
 from app.auth.service import (
     GENERIC_RECOVERY_MESSAGE,
     AuthenticationService,
+    normalize_email,
 )
 from app.config import get_settings
 from app.config.settings import Settings
@@ -35,6 +36,7 @@ from app.schemas.auth import (
 )
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
+development_router = APIRouter(prefix="/auth", tags=["development-email"], include_in_schema=False)
 AuthDependency = Annotated[AuthenticationService, Depends(get_authentication_service)]
 SettingsDependency = Annotated[Settings, Depends(get_settings)]
 
@@ -48,8 +50,24 @@ def register(
     settings: SettingsDependency,
 ) -> AuthResponse:
     _limit(request, "register", settings.auth_register_rate_limit, settings)
+    if not settings.registration_open:
+        raise AuthenticationError(
+            "REGISTRATION_CLOSED",
+            "Private-alpha registration is currently closed. Existing users can still log in.",
+            status_code=403,
+        )
+    normalized_email = normalize_email(credentials.email)
+    if (
+        settings.private_alpha_allowlist_enabled
+        and normalized_email not in settings.private_alpha_allowed_emails
+    ):
+        raise AuthenticationError(
+            "PRIVATE_ALPHA_NOT_APPROVED",
+            "This email is not approved for the Court4 private alpha.",
+            status_code=403,
+        )
     user, tokens = auth.register(
-        credentials.email,
+        normalized_email,
         credentials.password,
         user_agent=request.headers.get("user-agent"),
     )
@@ -299,7 +317,7 @@ def revoke_all_sessions(
     )
 
 
-@router.get("/development/emails", response_model=DevelopmentEmailListResponse)
+@development_router.get("/development/emails", response_model=DevelopmentEmailListResponse)
 def development_emails(
     user: CurrentUser, settings: SettingsDependency
 ) -> DevelopmentEmailListResponse:

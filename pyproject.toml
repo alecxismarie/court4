@@ -12,6 +12,7 @@ dependencies = [
     "alembic>=1.13,<2.0",
     "argon2-cffi>=23.1,<26.0",
     "fastapi>=0.111,<1.0",
+    "httpx>=0.27,<1.0",
     "numpy>=1.26,<3.0",
     "opencv-python-headless>=4.10,<5.0",
     "psycopg[binary]>=3.2,<4.0",
@@ -24,10 +25,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "httpx>=0.27,<1.0",
     "mypy>=1.10,<2.0",
     "pytest>=8.2,<9.0",
-    "ruff>=0.5,<1.0",
+    "ruff>=0.12,<0.13",
 ]
 detector = [
     "lap>=0.5.12,<0.6",

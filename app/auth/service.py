@@ -98,6 +98,13 @@ class AuthenticationService:
                     user_agent=user_agent,
                 )
                 tokens = self._create_session(session, user, user_agent=user_agent)
+                delivery = self._send_verification(user, raw_verification_token, token_id)
+                if delivery == "failed":
+                    raise AuthenticationError(
+                        "EMAIL_DELIVERY_UNAVAILABLE",
+                        "Court4 could not deliver the verification email. Try again later.",
+                        status_code=503,
+                    )
         except IntegrityError:
             logger.info("auth_registration_failed", extra={"category": "duplicate"})
             raise AuthenticationError(
@@ -105,7 +112,6 @@ class AuthenticationService:
                 "An account with that email cannot be created.",
                 status_code=409,
             ) from None
-        self._send_verification(user, raw_verification_token, token_id)
         logger.info("auth_registration_succeeded", extra={"user_id": str(user.id)})
         return user, tokens
 
@@ -761,11 +767,14 @@ class AuthenticationService:
                 status_code=400,
             )
 
-    def _send_verification(self, user: User, raw_token: str | None, token_id: UUID | None) -> None:
+    def _send_verification(
+        self, user: User, raw_token: str | None, token_id: UUID | None
+    ) -> str | None:
         if self._email_service is not None and raw_token is not None and token_id is not None:
-            self._email_service.send_verification_email(
+            return self._email_service.send_verification_email(
                 user.email, raw_token, correlation_id=str(token_id)
-            )
+            ).status
+        return None
 
     @staticmethod
     def _lock_user_security(session: Session, user_id: UUID) -> None:

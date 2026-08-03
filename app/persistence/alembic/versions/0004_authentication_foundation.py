@@ -35,9 +35,7 @@ def upgrade() -> None:
         ),
     )
     op.alter_column("users", "password_hash", server_default=None)
-    op.add_column(
-        "users", sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True)
-    )
+    op.add_column("users", sa.Column("last_login_at", sa.DateTime(timezone=True), nullable=True))
     op.execute(
         """
         UPDATE users
@@ -66,12 +64,8 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("token_hash"),
     )
-    op.create_index(
-        "ix_refresh_session_user", "refresh_sessions", ["user_id", "created_at"]
-    )
-    op.create_index(
-        "ix_refresh_session_family", "refresh_sessions", ["token_family_id"]
-    )
+    op.create_index("ix_refresh_session_user", "refresh_sessions", ["user_id", "created_at"])
+    op.create_index("ix_refresh_session_family", "refresh_sessions", ["token_family_id"])
     op.create_index("ix_refresh_session_expiry", "refresh_sessions", ["expires_at"])
 
 

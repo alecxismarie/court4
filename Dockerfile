@@ -15,8 +15,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md ./
-RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir ".[dev,detector]"
+RUN python -m pip install --no-cache-dir ".[detector]"
 
 ENV YOLO_CONFIG_DIR=/tmp
 ENV MPLCONFIGDIR=/tmp/matplotlib
@@ -24,7 +23,6 @@ ENV MPLCONFIGDIR=/tmp/matplotlib
 COPY app ./app
 COPY alembic.ini ./
 COPY scripts ./scripts
-COPY tests ./tests
 COPY calibration ./calibration
 COPY calibration-results.json CALIBRATION_REPORT.md CALIBRATION_DISAGREEMENTS.md ./
 COPY calibration-readiness-integrity.json ./

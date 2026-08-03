@@ -4,6 +4,7 @@ Revision ID: 0001_phase_1_8b
 Revises:
 Create Date: 2026-07-30
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -50,12 +51,8 @@ def upgrade() -> None:
             name="ck_video_checksum",
         ),
         sa.CheckConstraint("row_version > 0", name="ck_video_row_version"),
-        sa.CheckConstraint(
-            "state in ('pending','available','failed')", name="ck_video_state"
-        ),
-        sa.ForeignKeyConstraint(
-            ["owner_user_id"], ["users.id"], ondelete="RESTRICT"
-        ),
+        sa.CheckConstraint("state in ('pending','available','failed')", name="ck_video_state"),
+        sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("id", "owner_user_id", name="uq_uploaded_video_id_owner"),
     )
@@ -71,9 +68,7 @@ def upgrade() -> None:
         sa.Column("uploaded_video_id", sa.Uuid(), nullable=False),
         sa.Column("state", sa.String(24), nullable=False),
         sa.Column("current_stage", sa.String(32), nullable=False),
-        sa.Column(
-            "job_payload", postgresql.JSONB(astext_type=sa.Text()), nullable=False
-        ),
+        sa.Column("job_payload", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("promoted_run_id", sa.Uuid()),
         sa.Column("row_version", sa.BigInteger(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
@@ -91,9 +86,7 @@ def upgrade() -> None:
             "state in ('pending','processing','completed','failed','cancelled')",
             name="ck_analysis_state",
         ),
-        sa.ForeignKeyConstraint(
-            ["owner_user_id"], ["users.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
             ["uploaded_video_id", "owner_user_id"],
             ["uploaded_videos.id", "uploaded_videos.owner_user_id"],
@@ -103,9 +96,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint("id", "owner_user_id", name="uq_analysis_id_owner"),
     )
-    op.create_index(
-        "ix_analysis_owner_created", "analyses", ["owner_user_id", "created_at"]
-    )
+    op.create_index("ix_analysis_owner_created", "analyses", ["owner_user_id", "created_at"])
     op.create_table(
         "analysis_runs",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -139,29 +130,20 @@ def upgrade() -> None:
         sa.CheckConstraint("row_version > 0", name="ck_run_row_version"),
         sa.CheckConstraint("schema_version > 0", name="ck_run_schema_version"),
         sa.CheckConstraint(
-            "source_video_checksum is null or "
-            "source_video_checksum ~ '^[a-f0-9]{64}$'",
+            "source_video_checksum is null or source_video_checksum ~ '^[a-f0-9]{64}$'",
             name="ck_run_source_checksum",
         ),
         sa.CheckConstraint(
             "state in ('queued','processing','completed','failed','cancelled','stale')",
             name="ck_run_state",
         ),
-        sa.ForeignKeyConstraint(
-            ["analysis_id"], ["analyses.id"], ondelete="RESTRICT"
-        ),
-        sa.ForeignKeyConstraint(
-            ["previous_run_id"], ["analysis_runs.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["analysis_id"], ["analyses.id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["previous_run_id"], ["analysis_runs.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "analysis_id", "attempt_number", name="uq_run_analysis_attempt"
-        ),
+        sa.UniqueConstraint("analysis_id", "attempt_number", name="uq_run_analysis_attempt"),
         sa.UniqueConstraint("id", "analysis_id", name="uq_run_id_analysis"),
     )
-    op.create_index(
-        "ix_run_stale_scan", "analysis_runs", ["state", "lease_expires_at"]
-    )
+    op.create_index("ix_run_stale_scan", "analysis_runs", ["state", "lease_expires_at"])
     op.create_index(
         "uq_run_one_active",
         "analysis_runs",
@@ -200,12 +182,8 @@ def upgrade() -> None:
             "(subject_type='run' and analysis_run_id is not null)",
             name="ck_state_event_subject",
         ),
-        sa.ForeignKeyConstraint(
-            ["analysis_id"], ["analyses.id"], ondelete="RESTRICT"
-        ),
-        sa.ForeignKeyConstraint(
-            ["analysis_run_id"], ["analysis_runs.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["analysis_id"], ["analyses.id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["analysis_run_id"], ["analysis_runs.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
@@ -232,9 +210,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("expires_at", sa.DateTime(timezone=True)),
-        sa.CheckConstraint(
-            "key_hash ~ '^[a-f0-9]{64}$'", name="ck_idempotency_key_hash"
-        ),
+        sa.CheckConstraint("key_hash ~ '^[a-f0-9]{64}$'", name="ck_idempotency_key_hash"),
         sa.CheckConstraint(
             "request_fingerprint ~ '^[a-f0-9]{64}$'",
             name="ck_idempotency_request_fingerprint",
@@ -243,9 +219,7 @@ def upgrade() -> None:
             "status in ('in_progress','completed','failed')",
             name="ck_idempotency_status",
         ),
-        sa.ForeignKeyConstraint(
-            ["owner_user_id"], ["users.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "owner_user_id",
@@ -254,9 +228,7 @@ def upgrade() -> None:
             name="uq_idempotency_owner_scope_key",
         ),
     )
-    op.create_index(
-        "ix_idempotency_expiry", "idempotency_records", ["expires_at"]
-    )
+    op.create_index("ix_idempotency_expiry", "idempotency_records", ["expires_at"])
     op.create_table(
         "analysis_artifacts",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -273,9 +245,7 @@ def upgrade() -> None:
         sa.Column("state", sa.String(24), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.CheckConstraint(
-            "checksum_sha256 ~ '^[a-f0-9]{64}$'", name="ck_artifact_checksum"
-        ),
+        sa.CheckConstraint("checksum_sha256 ~ '^[a-f0-9]{64}$'", name="ck_artifact_checksum"),
         sa.CheckConstraint("size_bytes >= 0", name="ck_artifact_size"),
         sa.CheckConstraint(
             "state in ('pending','available','quarantined','deleted')",
@@ -293,9 +263,7 @@ def upgrade() -> None:
             name="fk_artifact_run_analysis",
             ondelete="RESTRICT",
         ),
-        sa.ForeignKeyConstraint(
-            ["owner_user_id"], ["users.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "analysis_id",
@@ -336,9 +304,7 @@ def upgrade() -> None:
             name="fk_player_selection_run_analysis",
             ondelete="RESTRICT",
         ),
-        sa.ForeignKeyConstraint(
-            ["owner_user_id"], ["users.id"], ondelete="RESTRICT"
-        ),
+        sa.ForeignKeyConstraint(["owner_user_id"], ["users.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
@@ -360,9 +326,7 @@ def downgrade() -> None:
     op.drop_index("ix_state_event_run_created", table_name="analysis_state_events")
     op.drop_index("ix_state_event_analysis_created", table_name="analysis_state_events")
     op.drop_table("analysis_state_events")
-    op.drop_constraint(
-        "fk_analysis_promoted_run", "analyses", type_="foreignkey"
-    )
+    op.drop_constraint("fk_analysis_promoted_run", "analyses", type_="foreignkey")
     op.drop_index("uq_run_one_active", table_name="analysis_runs")
     op.drop_index("ix_run_stale_scan", table_name="analysis_runs")
     op.drop_table("analysis_runs")

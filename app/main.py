@@ -6,7 +6,7 @@ from fastapi.requests import Request
 from fastapi.responses import JSONResponse
 
 from app.api.routes import router
-from app.api.v1 import router as api_v1_router
+from app.api.v1 import create_api_v1_router
 from app.auth.errors import AuthenticationError
 from app.config import get_settings
 from app.core.logging import configure_logging
@@ -26,7 +26,7 @@ def create_app() -> FastAPI:
         version="0.5.0",
     )
     application.include_router(router)
-    application.include_router(api_v1_router, prefix=settings.api_base_path)
+    application.include_router(create_api_v1_router(settings), prefix=settings.api_base_path)
     if settings.frontend_allowed_origins:
         application.add_middleware(
             CORSMiddleware,

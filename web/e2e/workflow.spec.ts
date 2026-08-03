@@ -1,4 +1,5 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { test, expect } from "./fixtures";
+import type { Page, Route } from "@playwright/test";
 
 type Scenario =
   | "happy"
@@ -41,7 +42,9 @@ test("controlled happy path persists Match IQ and renders share preview", async 
 
   await expect(page.getByText("Recognize the court")).toBeVisible();
   await page.getByRole("button", { name: /recognize court/i }).click();
-  await expect(page.getByText("Court recognized with 91% confidence.")).toBeVisible();
+  const courtResult = page.getByRole("region", { name: "Court recognized" });
+  await expect(courtResult.getByRole("heading", { name: "Court recognized" })).toBeVisible();
+  await expect(courtResult.getByText("91% confidence")).toBeVisible();
 
   await page.getByRole("button", { name: /find players/i }).click();
   await expect(page.getByText("Player 1")).toBeVisible();

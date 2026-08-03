@@ -141,9 +141,7 @@ class AnalysisRun(Base):
     analysis_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("spike_analyses.id", ondelete="RESTRICT"), nullable=False
     )
-    attempt_number: Mapped[int] = mapped_column(
-        BigInteger, Identity(), unique=True, nullable=False
-    )
+    attempt_number: Mapped[int] = mapped_column(BigInteger, Identity(), unique=True, nullable=False)
     state: Mapped[str] = mapped_column(String(24), nullable=False)
     previous_run_id: Mapped[UUID | None] = mapped_column(
         Uuid, ForeignKey("spike_analysis_runs.id", ondelete="RESTRICT")

@@ -23,9 +23,7 @@ def create_database_engine(settings: Settings) -> Engine:
         del connection_record
         cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
         try:
-            cursor.execute(
-                f"SET statement_timeout = '{settings.database_statement_timeout_ms}ms'"
-            )
+            cursor.execute(f"SET statement_timeout = '{settings.database_statement_timeout_ms}ms'")
             cursor.execute(f"SET lock_timeout = '{settings.database_lock_timeout_ms}ms'")
             cursor.execute(
                 "SET idle_in_transaction_session_timeout = "

@@ -60,7 +60,6 @@ def test_a_same_key_same_payload_high_contention(runtime: PersistenceRuntime) ->
 
 def test_b_same_key_conflicting_payloads(runtime: PersistenceRuntime) -> None:
     for repetition in range(REPETITIONS):
-
         results, errors, pids = _contended(
             ACTORS, partial(_conflicting_payload_action, runtime, repetition)
         )
@@ -249,7 +248,10 @@ def test_i_development_bootstrap_fail_closed_matrix() -> None:
                 "production-test-secret-value-at-least-32-characters"
             ),
             auth_frontend_base_url="https://court4.example",
-            auth_email_backend="provider",
+            auth_email_backend="resend",
+            resend_api_key=SecretStr("re_test_configuration_only"),
+            email_from_address="alpha@court4.example",
+            registration_enabled=False,
             auth_development_email_sink_enabled=False,
             auth_cookie_secure=True,
         ),

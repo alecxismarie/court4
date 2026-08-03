@@ -498,9 +498,7 @@ class AnalysisWorkflowService:
     def list_player_candidates(self, analysis_id: str) -> PlayerCandidateCollection:
         job = self.repository.load_job(analysis_id)
         self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
-        tracking_path = self.repository.resolve_artifact(
-            analysis_id, "tracking/tracking.json"
-        )
+        tracking_path = self.repository.resolve_artifact(analysis_id, "tracking/tracking.json")
         collection = self._ensure_player_candidates(
             analysis_id,
             job=job,
@@ -513,9 +511,7 @@ class AnalysisWorkflowService:
     def generate_player_candidates(self, analysis_id: str) -> PlayerCandidateCollection:
         job = self.repository.load_job(analysis_id)
         self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
-        tracking_path = self.repository.resolve_artifact(
-            analysis_id, "tracking/tracking.json"
-        )
+        tracking_path = self.repository.resolve_artifact(analysis_id, "tracking/tracking.json")
         collection = self._build_player_candidates(
             analysis_id,
             job=job,
@@ -683,9 +679,7 @@ class AnalysisWorkflowService:
     def list_players(self, analysis_id: str) -> PlayersResponse:
         job = self.repository.load_job(analysis_id)
         self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
-        tracking_path = self.repository.resolve_artifact(
-            analysis_id, "tracking/tracking.json"
-        )
+        tracking_path = self.repository.resolve_artifact(analysis_id, "tracking/tracking.json")
         tracking = self._load_tracking(tracking_path)
         tracking = self._refresh_player_selection_metrics(tracking_path, tracking)
         tracking = self._ensure_player_previews(job, tracking_path, tracking)

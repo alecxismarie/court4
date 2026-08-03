@@ -1,9 +1,10 @@
 import { AnalyticsDetails } from "@/components/analytics-details";
 
-export default function AnalyticsPage({
+export default async function AnalyticsPage({
   params,
 }: {
-  params: { analysisId: string };
+  params: Promise<{ analysisId: string }>;
 }) {
-  return <AnalyticsDetails analysisId={params.analysisId} />;
+  const { analysisId } = await params;
+  return <AnalyticsDetails analysisId={analysisId} />;
 }

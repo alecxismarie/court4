@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures";
 
 test("a valid profile photo over 1 MB is resized, previewed, and saved", async ({ page }) => {
   await page.goto("/player");
@@ -19,7 +19,12 @@ test("a valid profile photo over 1 MB is resized, previewed, and saved", async (
   await expect(page.getByRole("status")).toHaveText("Profile saved.");
 
   const storedImage = await page.evaluate(() => {
-    const value = window.localStorage.getItem("court4.playerProfile");
+    const userId = Object.keys(window.localStorage)
+      .find((key) => key.startsWith("court4.playerProfile."))
+      ?.slice("court4.playerProfile.".length);
+    const value = userId
+      ? window.localStorage.getItem(`court4.playerProfile.${userId}`)
+      : null;
     return value ? JSON.parse(value).profileImageDataUrl : null;
   });
   expect(storedImage).toMatch(/^data:image\/(?:webp|png);base64,/);

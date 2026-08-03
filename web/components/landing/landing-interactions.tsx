@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowRight, Menu, X } from "lucide-react";
-import { type FormEvent, type ReactNode, useState } from "react";
+import { type ReactNode, useState } from "react";
 
 export function MobileLandingMenu({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -45,32 +45,19 @@ export function PlannedFeatureAction({
 }
 
 export function NewsletterForm() {
-  const [email, setEmail] = useState("");
-  const [message, setMessage] = useState<string | null>(null);
-
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setMessage(
-      "Newsletter signup is coming soon. Your email was not stored or submitted.",
-    );
-  }
-
   return (
-    <form className="landing-newsletter-form" onSubmit={submit}>
+    <div className="landing-newsletter-form" aria-label="Newsletter unavailable">
       <div>
         <label className="sr-only" htmlFor="landing-newsletter-email">Email address</label>
         <input
           id="landing-newsletter-email"
           type="email"
-          required
+          disabled
           placeholder="Enter your email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
         />
-        <button type="submit">Join the List</button>
+        <button type="button" disabled>Coming soon</button>
       </div>
-      <small>No spam. Unsubscribe anytime.</small>
-      {message ? <p role="status">{message}</p> : null}
-    </form>
+      <p role="status">Newsletter signup is unavailable. No email is collected.</p>
+    </div>
   );
 }

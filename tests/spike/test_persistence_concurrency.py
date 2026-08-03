@@ -114,9 +114,7 @@ def _controlled_transition_race(
     def invoke(index: int) -> _TransitionOutcome:
         def observe(backend_pid: int, state: str, row_version: int) -> None:
             with observation_lock:
-                observations.append(
-                    _TransitionObservation(index, backend_pid, state, row_version)
-                )
+                observations.append(_TransitionObservation(index, backend_pid, state, row_version))
             both_rows_loaded.wait(timeout=10)
             if index == 1 and not winner_committed.wait(timeout=10):
                 raise TimeoutError("Designated transition winner did not commit.")
@@ -136,9 +134,7 @@ def _controlled_transition_race(
     return outcomes, observations, perf_counter() - started
 
 
-def _seed_owner_upload(
-    service: PersistenceSpikeService, suffix: str
-) -> tuple[UUID, UUID]:
+def _seed_owner_upload(service: PersistenceSpikeService, suffix: str) -> tuple[UUID, UUID]:
     owner_id = service.create_user(identity_label=f"owner-{suffix}")
     upload = service.create_upload(
         owner_user_id=owner_id,
@@ -168,9 +164,7 @@ def _seed_analysis(
     return owner_id, analysis.resource_id
 
 
-def _count(
-    factory: sessionmaker[Session], model: type[Any], *criteria: Any
-) -> int:
+def _count(factory: sessionmaker[Session], model: type[Any], *criteria: Any) -> int:
     with factory() as session:
         return int(session.scalar(select(func.count()).select_from(model).where(*criteria)))
 
@@ -185,8 +179,7 @@ def _print_metric(name: str, repetitions: list[float], actors: int) -> None:
 
 def _print_backend_pids(name: str, repetitions: list[tuple[int, int]]) -> None:
     print(
-        f"SPIKE_CONNECTIONS scenario={name} "
-        f"backend_pid_pairs={repetitions} all_pairs_distinct=true"
+        f"SPIKE_CONNECTIONS scenario={name} backend_pid_pairs={repetitions} all_pairs_distinct=true"
     )
 
 
@@ -226,16 +219,19 @@ def test_database_diagnostics_and_bootstrap_user(
         )
     )
     assert str(user_id) == "37de0fc7-b7d2-47b9-917c-48d2b882d6db"
-    assert spike_service.ensure_bootstrap_user(
-        BootstrapUserPolicy(
-            SpikeBootstrapSettings(
-                environment="development",
-                enabled_value="true",
-                user_id_value=str(user_id),
-                identity_label="explicit-local-spike-user",
+    assert (
+        spike_service.ensure_bootstrap_user(
+            BootstrapUserPolicy(
+                SpikeBootstrapSettings(
+                    environment="development",
+                    enabled_value="true",
+                    user_id_value=str(user_id),
+                    identity_label="explicit-local-spike-user",
+                )
             )
         )
-    ) == user_id
+        == user_id
+    )
     assert _count(session_factory, UploadedVideo) == 0
 
 
@@ -259,9 +255,7 @@ def test_scenario_a_duplicate_analysis_creation_same_key(
                 owner_user_id=current_owner,
                 uploaded_video_id=current_upload,
                 idempotency_key=f"same-analysis-key-{current_suffix}",
-                request_fingerprint=_digest(
-                    f"same-analysis-request-{current_suffix}"
-                ),
+                request_fingerprint=_digest(f"same-analysis-request-{current_suffix}"),
                 provenance=_provenance(current_suffix),
                 start_processing=True,
                 synchronization_hook=hook,
@@ -315,13 +309,9 @@ def test_scenario_b_same_key_different_fingerprints_conflict(
             return spike_service.create_upload(
                 owner_user_id=current_owner,
                 idempotency_key=f"same-conflicting-key-{current_repetition}",
-                request_fingerprint=_digest(
-                    f"different-request-{current_repetition}-{index}"
-                ),
+                request_fingerprint=_digest(f"different-request-{current_repetition}-{index}"),
                 original_filename=f"candidate-{index}.mp4",
-                source_checksum=_digest(
-                    f"source-b-{current_repetition}-{index}"
-                ),
+                source_checksum=_digest(f"source-b-{current_repetition}-{index}"),
                 synchronization_hook=hook,
             )
 
@@ -364,9 +354,7 @@ def test_scenario_c_competing_run_start_requests(
                 owner_user_id=current_owner,
                 analysis_id=current_analysis,
                 idempotency_key=f"distinct-run-start-{current_suffix}-{index}",
-                request_fingerprint=_digest(
-                    f"run-start-{current_suffix}-{index}"
-                ),
+                request_fingerprint=_digest(f"run-start-{current_suffix}-{index}"),
                 provenance=_provenance(current_suffix),
                 synchronization_hook=hook,
             )
@@ -423,9 +411,7 @@ def test_scenarios_d_and_j_independent_requests_and_owner_scoped_keys(
     timings: list[float] = []
     for repetition in range(REPETITIONS):
         owners = [
-            spike_service.create_user(
-                identity_label=f"owner-d-{repetition}-{index}"
-            )
+            spike_service.create_user(identity_label=f"owner-d-{repetition}-{index}")
             for index in range(10)
         ]
 
@@ -440,17 +426,13 @@ def test_scenarios_d_and_j_independent_requests_and_owner_scoped_keys(
                 idempotency_key="same-key-across-owners",
                 request_fingerprint=_digest("same-request-across-owners"),
                 original_filename=f"independent-{current_repetition}-{index}.mp4",
-                source_checksum=_digest(
-                    f"independent-source-{current_repetition}-{index}"
-                ),
+                source_checksum=_digest(f"independent-source-{current_repetition}-{index}"),
                 synchronization_hook=hook,
             )
             analysis = spike_service.create_analysis(
                 owner_user_id=current_owners[index],
                 uploaded_video_id=upload.resource_id,
-                idempotency_key=(
-                    f"independent-analysis-{current_repetition}-{index}"
-                ),
+                idempotency_key=(f"independent-analysis-{current_repetition}-{index}"),
                 request_fingerprint=_digest(
                     f"independent-analysis-request-{current_repetition}-{index}"
                 ),
@@ -475,9 +457,7 @@ def test_scenarios_d_and_j_independent_requests_and_owner_scoped_keys(
                 select(Analysis).where(Analysis.id.in_([item.resource_id for item in analyses]))
             ).all()
             assert len(persisted) == 10
-            assert {
-                (item.owner_user_id, item.uploaded_video_id) for item in persisted
-            } == {
+            assert {(item.owner_user_id, item.uploaded_video_id) for item in persisted} == {
                 (owners[index], uploads[index].resource_id) for index in range(10)
             }
     _print_metric("D_J_independent_owner_scoped", timings, 10)
@@ -543,15 +523,11 @@ def test_scenario_f_valid_and_invalid_transition_race(
                 run_id=current_run_id,
                 expected_version=1,
                 to_state="processing" if index == 0 else "completed",
-                reason=(
-                    current_valid_reason if index == 0 else current_rejected_reason
-                ),
+                reason=(current_valid_reason if index == 0 else current_rejected_reason),
                 observation_hook=hook,
             )
 
-        outcomes, observations, duration = _controlled_transition_race(
-            attempt_transition
-        )
+        outcomes, observations, duration = _controlled_transition_race(attempt_transition)
         timings.append(duration)
         assert [(item.state, item.row_version) for item in observations] == [
             ("queued", 1),
@@ -653,15 +629,11 @@ def test_scenario_g_optimistic_transition_conflict(
                 run_id=current_run_id,
                 expected_version=1,
                 to_state="completed" if index == 0 else "failed",
-                reason=(
-                    current_winning_reason if index == 0 else current_stale_reason
-                ),
+                reason=(current_winning_reason if index == 0 else current_stale_reason),
                 observation_hook=hook,
             )
 
-        outcomes, observations, duration = _controlled_transition_race(
-            attempt_transition
-        )
+        outcomes, observations, duration = _controlled_transition_race(attempt_transition)
         timings.append(duration)
         assert [(item.state, item.row_version) for item in observations] == [
             ("processing", 1),
@@ -769,10 +741,7 @@ def test_scenario_h_stale_detection_and_replacement_run_race(
         )
         assert len(transitions) == 1
         assert len(transition_errors) == ACTORS - 1
-        assert all(
-            isinstance(error, OptimisticConcurrencyError)
-            for error in transition_errors
-        )
+        assert all(isinstance(error, OptimisticConcurrencyError) for error in transition_errors)
 
         def start_current_replacement(
             index: int,
@@ -786,9 +755,7 @@ def test_scenario_h_stale_detection_and_replacement_run_race(
                 owner_user_id=current_owner,
                 analysis_id=current_analysis,
                 idempotency_key=f"replacement-run-{current_suffix}-{index}",
-                request_fingerprint=_digest(
-                    f"replacement-run-request-{current_suffix}-{index}"
-                ),
+                request_fingerprint=_digest(f"replacement-run-request-{current_suffix}-{index}"),
                 provenance=_provenance(f"{current_suffix}-new"),
                 previous_run_id=current_old_run_id,
                 synchronization_hook=hook,

@@ -7,15 +7,16 @@ export async function GET(
   {
     params,
   }: {
-    params: { analysisId: string; artifactPath: string[] };
+    params: Promise<{ analysisId: string; artifactPath: string[] }>;
   },
 ) {
-  const artifactPath = params.artifactPath.join("/");
+  const { analysisId, artifactPath: artifactParts } = await params;
+  const artifactPath = artifactParts.join("/");
   if (!isAllowedShareArtifact(artifactPath)) {
     return new Response("Share artifact not found.", { status: 404 });
   }
 
-  const response = await fetch(toBackendArtifactUrl(params.analysisId, artifactPath), {
+  const response = await fetch(toBackendArtifactUrl(analysisId, artifactPath), {
     headers: {
       Accept: "image/png",
       ...(request.headers.get("authorization")

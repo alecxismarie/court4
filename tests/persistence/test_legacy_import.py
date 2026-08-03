@@ -63,6 +63,6 @@ def test_legacy_inventory_import_and_repeat_are_safe(tmp_path: Path) -> None:
     assert second["already_present"] == ["legacy-preserved"]
     assert job_path.is_file()
     assert report_path.read_text(encoding="utf-8") == '{"schema":"legacy"}'
-    assert runtime.service.list_analysis_ids(
-        owner_user_id=runtime.owner_user_id
-    ) == ["legacy-preserved"]
+    assert runtime.service.list_analysis_ids(owner_user_id=runtime.owner_user_id) == [
+        "legacy-preserved"
+    ]

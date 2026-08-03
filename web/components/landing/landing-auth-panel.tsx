@@ -191,9 +191,9 @@ export function LandingAuthPanel() {
           <small>Coming soon</small>
         </button>
 
-        <p className="landing-legal" id="legal">
+        <p className="landing-legal">
           By continuing, you agree to our<br />
-          <a href="#legal">Terms of Service</a> and <a href="#legal">Privacy Policy</a>.
+          <a href="/terms">Terms of Service</a> and <a href="/privacy">Privacy Policy</a>.
         </p>
       </div>
     </section>

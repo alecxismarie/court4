@@ -1,5 +1,7 @@
 # Court4 Current-State Audit
 
+> **2026-08-03 Phase 1.8C.1 addendum:** The authentication/account baseline is checkpointed at `bd14ea1`. Production now omits calibration-readiness, development-email and Active Play debug routers; registration fails closed behind an explicit toggle/normalized allowlist; a provider-neutral Resend adapter exists; the public claims and draft legal routes have been corrected; Next.js is upgraded to stable 16.2.12; and the covered browser suite passes 23/23. This audit's earlier statements that those items are wholly unimplemented are superseded by [the remediation validation report](PHASE_1_8C_1_VALIDATION_REPORT.md). Court4 remains **not ready for private alpha** because npm reports three high production dependency findings, real production email delivery has not been validated, and the complete required real browser matrix is not yet covered.
+
 **Audit date:** 2026-08-01
 **Repository snapshot:** current working tree based on commit `3d18c56` plus substantial uncommitted Phase 1.8C, landing-page, and profile changes
 **Scope:** audit and planning only; no runtime, schema, migration, test, or feature changes

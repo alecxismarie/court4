@@ -17,12 +17,8 @@ os.environ.setdefault(
     ),
 )
 os.environ.setdefault("PICKLEBALL_AI_BOOTSTRAP_USER_ENABLED", "true")
-os.environ.setdefault(
-    "PICKLEBALL_AI_BOOTSTRAP_USER_ID", "00000000-0000-4000-8000-000000000002"
-)
-os.environ.setdefault(
-    "PICKLEBALL_AI_BOOTSTRAP_USER_IDENTITY", "test-suite@court4.invalid"
-)
+os.environ.setdefault("PICKLEBALL_AI_BOOTSTRAP_USER_ID", "00000000-0000-4000-8000-000000000002")
+os.environ.setdefault("PICKLEBALL_AI_BOOTSTRAP_USER_IDENTITY", "test-suite@court4.invalid")
 
 
 def pytest_sessionstart(session: pytest.Session) -> None:

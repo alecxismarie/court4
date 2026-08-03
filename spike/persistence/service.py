@@ -57,9 +57,7 @@ class ProvenanceInput:
 
     def validated(self) -> ProvenanceInput:
         _validate_fingerprint(self.source_video_checksum, "source video checksum")
-        _validate_fingerprint(
-            self.configuration_fingerprint, "configuration fingerprint"
-        )
+        _validate_fingerprint(self.configuration_fingerprint, "configuration fingerprint")
         if self.schema_version <= 0:
             raise ValueError("schema_version must be positive")
         for label, value, maximum in (
@@ -290,9 +288,7 @@ class PersistenceSpikeService:
             try:
                 session.flush()
             except IntegrityError as error:
-                if not _is_constraint(
-                    error, {"uq_spike_idempotency_owner_scope_key"}
-                ):
+                if not _is_constraint(error, {"uq_spike_idempotency_owner_scope_key"}):
                     raise
                 raise OperationInProgressError(
                     "Concurrent idempotency resolution must be retried."
@@ -324,9 +320,7 @@ class PersistenceSpikeService:
             if synchronization_hook is not None:
                 synchronization_hook()
             if observed_version != expected_version:
-                raise OptimisticConcurrencyError(
-                    "The supplied run row version is stale."
-                )
+                raise OptimisticConcurrencyError("The supplied run row version is stale.")
             if to_state not in _RUN_TRANSITIONS.get(from_state, frozenset()):
                 raise InvalidStateTransitionError(
                     f"Run transition {from_state!r} -> {to_state!r} is invalid."
@@ -361,9 +355,7 @@ class PersistenceSpikeService:
                 ),
             )
             if result.rowcount != 1:
-                raise OptimisticConcurrencyError(
-                    "A competing run transition committed first."
-                )
+                raise OptimisticConcurrencyError("A competing run transition committed first.")
             session.add(
                 _run_event(
                     run_id=run.id,
@@ -441,9 +433,7 @@ class PersistenceSpikeService:
                 record.resource_id = resource_id
             return ResourceResult(resource_id, True, "created", backend_pid)
         except IntegrityError as error:
-            if not _is_constraint(
-                error, {"uq_spike_idempotency_owner_scope_key"}
-            ):
+            if not _is_constraint(error, {"uq_spike_idempotency_owner_scope_key"}):
                 raise
 
         existing = self._resolve_idempotency(
@@ -532,14 +522,10 @@ class PersistenceSpikeService:
         )
         if upload is None:
             if session.get(UploadedVideo, uploaded_video_id) is not None:
-                raise OwnershipMismatchError(
-                    "The uploaded video belongs to a different user."
-                )
+                raise OwnershipMismatchError("The uploaded video belongs to a different user.")
             raise ResourceNotFoundError("Uploaded video does not exist.")
         if upload.state != "available":
-            raise InvalidStateTransitionError(
-                "An analysis requires an available uploaded video."
-            )
+            raise InvalidStateTransitionError("An analysis requires an available uploaded video.")
         initial_state = "processing" if start_processing else "created"
         analysis = Analysis(
             owner_user_id=owner_user_id,
@@ -608,9 +594,7 @@ class PersistenceSpikeService:
         return run
 
     @staticmethod
-    def _assert_analysis_owner(
-        session: Session, analysis_id: UUID, owner_user_id: UUID
-    ) -> None:
+    def _assert_analysis_owner(session: Session, analysis_id: UUID, owner_user_id: UUID) -> None:
         analysis = session.get(Analysis, analysis_id)
         if analysis is None:
             raise ResourceNotFoundError("Analysis does not exist.")

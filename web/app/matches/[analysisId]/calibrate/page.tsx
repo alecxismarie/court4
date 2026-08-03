@@ -1,13 +1,14 @@
 import { ManualCalibrationWorkspace } from "@/components/manual-calibration-workspace";
 
-export default function ManualCalibrationPage({
+export default async function ManualCalibrationPage({
   params,
 }: {
-  params: { analysisId: string };
+  params: Promise<{ analysisId: string }>;
 }) {
+  const { analysisId } = await params;
   return (
     <div className="mx-auto max-w-7xl">
-      <ManualCalibrationWorkspace analysisId={params.analysisId} />
+      <ManualCalibrationWorkspace analysisId={analysisId} />
     </div>
   );
 }

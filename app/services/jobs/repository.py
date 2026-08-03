@@ -92,9 +92,7 @@ class AnalysisJobRepository:
             ) from None
 
     def list_job_ids(self) -> list[str]:
-        return self.persistence.service.list_analysis_ids(
-            owner_user_id=self.owner_user_id
-        )
+        return self.persistence.service.list_analysis_ids(owner_user_id=self.owner_user_id)
 
     def find_uploaded_video_by_owner_and_checksum(
         self, checksum_sha256: str
@@ -159,10 +157,7 @@ class AnalysisJobRepository:
         return [
             AnalysisArtifact(
                 path=record.storage_key,
-                url=(
-                    f"{self.api_base_path}/analyses/{analysis_id}/artifacts/"
-                    f"{record.storage_key}"
-                ),
+                url=(f"{self.api_base_path}/analyses/{analysis_id}/artifacts/{record.storage_key}"),
                 content_type=record.content_type,
                 size_bytes=record.size_bytes,
             )
@@ -192,8 +187,7 @@ class AnalysisJobRepository:
             artifacts.append(
                 ArtifactInput(
                     storage_key=relative,
-                    content_type=mimetypes.guess_type(path.name)[0]
-                    or "application/octet-stream",
+                    content_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
                     size_bytes=path.stat().st_size,
                     checksum_sha256=_file_sha256(path),
                     artifact_kind=_artifact_kind(relative),

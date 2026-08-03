@@ -4,7 +4,7 @@ Status: **NOT READY** as of 2026-08-03.
 
 | Gate | Result | Release impact |
 |---|---|---|
-| Repository checkpoint and generated-file exclusions | Pass | Baseline commit `bd14ea1`; final remediation commit recorded in validation report |
+| Repository checkpoint and generated-file exclusions | Pass | Baseline `bd14ea1`; remediation source/test checkpoint `b8ae24e` |
 | Docker incident understood and safe cleanup complete | Pass with operational follow-up | Internal cache reclaimed; WSL VHD compaction still pending |
 | Production internal/debug route absence | Pass | Calibration, development email, and Active Play debug routes absent and undiscoverable |
 | Registration controlled and fail-closed | Pass | Explicit production choice plus allowlist requirement |

@@ -57,7 +57,7 @@ Invented usage/recommendation figures and fictional partner/rate/discount claims
 
 ## Git and environment
 
-The inspected Phase 1.8B/C baseline was explicitly staged without environments, databases, media, artifacts, caches, logs or `node_modules`, reviewed, and committed as `bd14ea1`. Generated frontend logs, Playwright results and artifacts are ignored. `web/scripts/capture-landing.mjs` remains an unrelated untracked developer utility and is not staged. No completion tag is created because this gate fails.
+The inspected Phase 1.8B/C baseline was explicitly staged without environments, databases, media, artifacts, caches, logs or `node_modules`, reviewed, and committed as `bd14ea1`. The reviewed remediation source/test checkpoint is `b8ae24e`. Generated frontend logs, Playwright results and artifacts are ignored. `web/scripts/capture-landing.mjs` remains an unrelated untracked developer utility and is not staged. No completion tag is created because this gate fails.
 
 Docker root cause, exact cleanup and final measurements are in `DOCKER_DISK_RUNBOOK.md`. Host free space was 11,830,042,624 bytes before and 10,402,066,432 after the final large image/build operations; 53.73 GB was reclaimed inside Docker's WSL disk but the VHD was not compacted.
 

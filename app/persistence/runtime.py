@@ -10,7 +10,6 @@ from sqlalchemy import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
-from app.persistence.bootstrap import configured_bootstrap_identity
 from app.persistence.database import create_database_engine, create_session_factory
 from app.persistence.service import PersistenceService, RunProvenance
 from app.persistence.storage import LocalStorage
@@ -22,13 +21,20 @@ class PersistenceRuntime:
     session_factory: sessionmaker[Session]
     service: PersistenceService
     storage: LocalStorage
-    owner_user_id: UUID
+    _bootstrap_owner_user_id: UUID | None = None
+
+    @property
+    def owner_user_id(self) -> UUID:
+        if self._bootstrap_owner_user_id is None:
+            raise RuntimeError(
+                "No development bootstrap owner is configured; pass an authenticated owner."
+            )
+        return self._bootstrap_owner_user_id
 
 
 @lru_cache
 def get_persistence() -> PersistenceRuntime:
     settings = get_settings()
-    identity = configured_bootstrap_identity(settings)
     engine = create_database_engine(settings)
     session_factory = create_session_factory(engine)
     fingerprint_payload = {
@@ -52,11 +58,15 @@ def get_persistence() -> PersistenceRuntime:
             deployment_build_identifier=settings.deployment_build_identifier,
         ),
     )
-    owner_user_id = service.ensure_bootstrap_user(identity)
+    owner_user_id: UUID | None = None
+    if settings.bootstrap_user_enabled:
+        from app.persistence.bootstrap import configured_bootstrap_identity
+
+        owner_user_id = service.ensure_bootstrap_user(configured_bootstrap_identity(settings))
     return PersistenceRuntime(
         engine=engine,
         session_factory=session_factory,
         service=service,
         storage=LocalStorage(settings.local_storage_root),
-        owner_user_id=owner_user_id,
+        _bootstrap_owner_user_id=owner_user_id,
     )

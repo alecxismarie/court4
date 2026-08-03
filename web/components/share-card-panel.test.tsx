@@ -15,6 +15,11 @@ vi.mock("@/lib/share-card-renderer", () => ({
 
 const mockedRenderShareCardToCanvas = vi.mocked(renderShareCardToCanvas);
 const mockedCreateShareCardPng = vi.mocked(createShareCardPng);
+const authUserId = vi.hoisted(() => "56ae6283-69ee-44b6-9f19-6bf9dc1d7092");
+
+vi.mock("@/lib/auth-context", () => ({
+  useOptionalAuth: () => ({ user: { id: authUserId } }),
+}));
 
 describe("share card panel", () => {
   beforeEach(() => {
@@ -89,7 +94,7 @@ describe("share card panel", () => {
   });
 
   it("uses the saved player profile as the default display name", async () => {
-    savePlayerProfile({
+    savePlayerProfile(authUserId, {
       displayName: "Ava",
       dominantHand: "right",
       experienceLevel: "advanced",

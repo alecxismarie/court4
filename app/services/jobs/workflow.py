@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile
@@ -122,11 +122,12 @@ class ArtifactFile:
 
 
 class AnalysisWorkflowService:
-    def __init__(self, *, settings: Settings) -> None:
+    def __init__(self, *, settings: Settings, owner_user_id: UUID | None = None) -> None:
         self.settings = settings
         self.repository = AnalysisJobRepository(
             output_dir=settings.analysis_output_dir,
             api_base_path=settings.api_base_path,
+            owner_user_id=owner_user_id,
         )
 
     async def create_analysis(
@@ -164,7 +165,7 @@ class AnalysisWorkflowService:
         try:
             try:
                 reservation = self.repository.persistence.service.reserve_analysis(
-                    owner_user_id=self.repository.persistence.owner_user_id,
+                    owner_user_id=self.repository.owner_user_id,
                     analysis_id=analysis_id,
                     idempotency_key=idempotency_key or analysis_id,
                     request_fingerprint=request_fingerprint,

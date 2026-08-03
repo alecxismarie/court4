@@ -1,7 +1,9 @@
 import json
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,11 +11,15 @@ from httpx import Response
 
 from app.config import get_settings
 from app.main import create_app
+from app.persistence.models import User
+from app.persistence.runtime import get_persistence
 from app.schemas.jobs import AnalysisJob
 from app.services.jobs import AnalysisJobRepository
 from app.services.tracking.json_tracking_backend import build_controlled_detection_line
 from app.services.video.player_analysis import load_calibration_report
 from app.sports.pickleball.calibration import court_point_to_image
+
+API_TEST_OWNERS: dict[Path, UUID] = {}
 
 
 @pytest.fixture(autouse=True)
@@ -585,7 +591,7 @@ def test_legacy_job_without_court_detection_fields_still_loads(
         + "\n",
         encoding="utf-8",
     )
-    repository = AnalysisJobRepository(output_dir=output_dir, api_base_path="/api/v1")
+    repository = _api_repository(output_dir)
     repository.save_job(
         AnalysisJob.model_validate(
             json.loads((analysis_dir / "job.json").read_text(encoding="utf-8"))
@@ -666,7 +672,7 @@ def test_legacy_analytics_without_match_iq_returns_null(
         + "\n",
         encoding="utf-8",
     )
-    repository = AnalysisJobRepository(output_dir=output_dir, api_base_path="/api/v1")
+    repository = _api_repository(output_dir)
     repository.save_job(
         AnalysisJob.model_validate(
             json.loads((output_dir / analysis_id / "job.json").read_text(encoding="utf-8"))
@@ -728,7 +734,20 @@ def _api_client(
     if detector_model_path is not None:
         monkeypatch.setenv("COURT4_DETECTOR_MODEL_PATH", str(detector_model_path))
     get_settings.cache_clear()
-    return TestClient(create_app()), output_dir
+    client = TestClient(create_app())
+    registered = client.post(
+        "/api/v1/auth/register",
+        json={"email": "workflow@example.com", "password": "a sufficiently long password"},
+    )
+    assert registered.status_code == 201
+    client.headers["Authorization"] = f"Bearer {registered.json()['access_token']}"
+    owner_id = UUID(registered.json()["user"]["id"])
+    with get_persistence().session_factory.begin() as session:
+        user = session.get(User, owner_id)
+        assert user is not None
+        user.email_verified_at = datetime.now(tz=UTC)
+    API_TEST_OWNERS[output_dir] = owner_id
+    return client, output_dir
 
 
 def _upload_video(
@@ -792,8 +811,16 @@ def _write_controlled_api_detections(
         lines.append(_line_from_ground_point(frame_index, 1, ground, confidence=0.92))
     detections_path = output_dir / analysis_id / "uploads" / "detections.jsonl"
     detections_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    repository = AnalysisJobRepository(output_dir=output_dir, api_base_path="/api/v1")
+    repository = _api_repository(output_dir)
     repository.register_current_artifacts(analysis_id)
+
+
+def _api_repository(output_dir: Path) -> AnalysisJobRepository:
+    return AnalysisJobRepository(
+        output_dir=output_dir,
+        api_base_path="/api/v1",
+        owner_user_id=API_TEST_OWNERS[output_dir],
+    )
 
 
 def _line_from_ground_point(

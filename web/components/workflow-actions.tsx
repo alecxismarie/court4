@@ -29,6 +29,7 @@ import {
   unmergePlayerCandidate,
 } from "@/lib/api/analyses";
 import { getArtifactUrl, normalizeApiError } from "@/lib/api/client";
+import { AuthenticatedImage } from "@/components/authenticated-image";
 import type {
   AnalysisArtifact,
   AnalysisJob,
@@ -812,8 +813,7 @@ function PlayerSelectionPanel({
               <div className="mt-4 overflow-hidden rounded-md border border-court-line bg-court-panel">
                 {previewPath ? (
                   <div className="aspect-video bg-white">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
+                    <AuthenticatedImage
                       src={getArtifactUrl(analysisId, previewPath)}
                       alt={`${label} reference`}
                       className="h-full w-full object-contain"
@@ -899,8 +899,7 @@ function PlayerSelectionPanel({
                 <div className="mt-3 grid gap-2">
                   {candidate.preview_frames.map((preview) =>
                     preview.full_frame_artifact ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
+                      <AuthenticatedImage
                         key={`${candidate.candidate_id}-${preview.frame_index}`}
                         src={getArtifactUrl(analysisId, preview.full_frame_artifact)}
                         alt={`${label} at ${preview.timestamp_seconds.toFixed(1)} seconds`}
@@ -1008,8 +1007,7 @@ function ArtifactPreview({
   return (
     <figure className="overflow-hidden rounded-md border border-court-line bg-court-panel">
       <div className="aspect-video bg-white">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+        <AuthenticatedImage
           src={getArtifactUrl(analysisId, artifact.path)}
           alt={label}
           className="h-full w-full object-contain"

@@ -17,6 +17,7 @@ import { Skeleton } from "@/components/skeleton";
 import { Button } from "@/components/ui/button";
 import { getAnalysis, getAnalytics } from "@/lib/api/analyses";
 import { getArtifactUrl, normalizeApiError } from "@/lib/api/client";
+import { AuthenticatedImage } from "@/components/authenticated-image";
 import type {
   AnalysisJob,
   AnalyticsReport,
@@ -580,8 +581,7 @@ function AnalyticsImage({
   return (
     <figure className="min-w-0 overflow-hidden rounded-md border border-court-line bg-white">
       <div className="aspect-[10/22] bg-court-panel">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+        <AuthenticatedImage
           src={getArtifactUrl(analysisId, path)}
           alt={label}
           className="h-full w-full object-contain"

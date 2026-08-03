@@ -3,8 +3,10 @@ import { z } from "zod";
 import {
   Court4ApiError,
   apiErrorFromResponse,
+  getAccessToken,
   normalizeApiError,
   postJson,
+  refreshAccessToken,
   requestJson,
   toApiUrl,
 } from "@/lib/api/client";
@@ -45,51 +47,72 @@ export function createAnalysis(
   },
 ): Promise<UploadAnalysisResponse> {
   return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    const formData = new FormData();
-    formData.append("file", file);
-    if (options?.reanalyze) {
-      formData.append("reanalyze", "true");
+    const idempotencyKey = options?.idempotencyKey ?? crypto.randomUUID();
+
+    function sendAttempt(canRefresh: boolean) {
+      const xhr = new XMLHttpRequest();
+      const formData = new FormData();
+      formData.append("file", file);
+      if (options?.reanalyze) {
+        formData.append("reanalyze", "true");
+      }
+
+      xhr.upload.addEventListener("progress", (event) => {
+        if (!onProgress) {
+          return;
+        }
+        const total = event.lengthComputable ? event.total : null;
+        onProgress({
+          loaded: event.loaded,
+          total,
+          percent: total ? Math.round((event.loaded / total) * 100) : null,
+        });
+      });
+
+      xhr.addEventListener("load", () => {
+        if (xhr.status === 401 && canRefresh) {
+          void refreshAccessToken()
+            .then(() => sendAttempt(false))
+            .catch((error) => reject(normalizeApiError(error)));
+          return;
+        }
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(errorFromXhr(xhr));
+          return;
+        }
+
+        try {
+          const payload: unknown = JSON.parse(xhr.responseText);
+          resolve(uploadAnalysisResponseSchema.parse(payload));
+        } catch (error) {
+          reject(normalizeApiError(error));
+        }
+      });
+
+      xhr.addEventListener("error", () => {
+        reject(
+          new Court4ApiError("Court4 backend is unavailable.", {
+            code: "backend_unavailable",
+          }),
+        );
+      });
+
+      xhr.addEventListener("abort", () => {
+        reject(new Court4ApiError("Upload was canceled.", { code: "upload_canceled" }));
+      });
+
+      xhr.open("POST", toApiUrl("/api/v1/analyses"));
+      xhr.withCredentials = true;
+      xhr.setRequestHeader("Accept", "application/json");
+      const accessToken = getAccessToken();
+      if (accessToken) {
+        xhr.setRequestHeader("Authorization", `Bearer ${accessToken}`);
+      }
+      xhr.setRequestHeader("Idempotency-Key", idempotencyKey);
+      xhr.send(formData);
     }
 
-    xhr.upload.addEventListener("progress", (event) => {
-      if (!onProgress) {
-        return;
-      }
-      const total = event.lengthComputable ? event.total : null;
-      onProgress({
-        loaded: event.loaded,
-        total,
-        percent: total ? Math.round((event.loaded / total) * 100) : null,
-      });
-    });
-
-    xhr.addEventListener("load", () => {
-      if (xhr.status < 200 || xhr.status >= 300) {
-        reject(errorFromXhr(xhr));
-        return;
-      }
-
-      try {
-        const payload: unknown = JSON.parse(xhr.responseText);
-        resolve(uploadAnalysisResponseSchema.parse(payload));
-      } catch (error) {
-        reject(normalizeApiError(error));
-      }
-    });
-
-    xhr.addEventListener("error", () => {
-      reject(new Court4ApiError("Court4 backend is unavailable.", { code: "backend_unavailable" }));
-    });
-
-    xhr.addEventListener("abort", () => {
-      reject(new Court4ApiError("Upload was canceled.", { code: "upload_canceled" }));
-    });
-
-    xhr.open("POST", toApiUrl("/api/v1/analyses"));
-    xhr.setRequestHeader("Accept", "application/json");
-    xhr.setRequestHeader("Idempotency-Key", options?.idempotencyKey ?? crypto.randomUUID());
-    xhr.send(formData);
+    sendAttempt(true);
   });
 }
 

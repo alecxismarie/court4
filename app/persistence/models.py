@@ -40,12 +40,78 @@ class User(Base):
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    identity_label: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
     account_status: Mapped[str] = mapped_column(String(24), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RefreshSession(Base):
+    __tablename__ = "refresh_sessions"
+    __table_args__ = (
+        Index("ix_refresh_session_user", "user_id", "created_at"),
+        Index("ix_refresh_session_family", "token_family_id"),
+        Index("ix_refresh_session_expiry", "expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    token_family_id: Mapped[UUID] = mapped_column(Uuid, nullable=False, default=uuid4)
+    replaced_by_session_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("refresh_sessions.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revocation_reason: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(512))
+
+
+class AccountToken(Base):
+    __tablename__ = "account_tokens"
+    __table_args__ = (
+        CheckConstraint(
+            "purpose in ('email_verification','password_reset')",
+            name="ck_account_token_purpose",
+        ),
+        CheckConstraint("expires_at > created_at", name="ck_account_token_expiry"),
+        CheckConstraint(
+            "consumed_at is null or invalidated_at is null",
+            name="ck_account_token_terminal_state",
+        ),
+        Index("ix_account_token_hash", "token_hash", unique=True),
+        Index("ix_account_token_user_purpose", "user_id", "purpose", "created_at"),
+        Index("ix_account_token_expiry", "expires_at"),
+        Index(
+            "uq_account_token_active_purpose",
+            "user_id",
+            "purpose",
+            unique=True,
+            postgresql_where=text("consumed_at is null and invalidated_at is null"),
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    purpose: Mapped[str] = mapped_column(String(32), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    request_user_agent: Mapped[str | None] = mapped_column(String(512))
 
 
 class UploadedVideo(Base):

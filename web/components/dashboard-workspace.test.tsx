@@ -13,6 +13,7 @@ import { renderWithQueryClient } from "@/test/render";
 const analysisHistoryMock = vi.hoisted(() => vi.fn());
 const playHistoryMock = vi.hoisted(() => vi.fn());
 const profileMock = vi.hoisted(() => vi.fn());
+const authMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/use-history", () => ({
   useAnalysisHistory: analysisHistoryMock,
@@ -23,8 +24,14 @@ vi.mock("@/lib/use-player-profile", () => ({
   usePlayerProfile: profileMock,
 }));
 
+vi.mock("@/lib/auth-context", () => ({
+  useOptionalAuth: authMock,
+}));
+
 describe("dashboard workspace", () => {
   beforeEach(() => {
+    window.sessionStorage.clear();
+    authMock.mockReturnValue(null);
     profileMock.mockReturnValue({
       profile: emptyPlayerProfile,
       isLoaded: true,
@@ -43,13 +50,13 @@ describe("dashboard workspace", () => {
   it("shows a neutral welcome without a configured profile", () => {
     renderWithQueryClient(<DashboardWorkspace />);
 
-    expect(screen.getByRole("heading", { name: "Welcome back" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Welcome back!" })).toBeInTheDocument();
     expect(screen.queryByText(/Welcome back,/)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open player profile" })).toHaveAttribute(
       "href",
       "/player",
     );
-    const header = screen.getByRole("heading", { name: "Welcome back" }).closest("section");
+    const header = screen.getByRole("heading", { name: "Welcome back!" }).closest("section");
     expect(header).not.toBeNull();
     expect(
       within(header as HTMLElement).queryByRole("link", { name: /upload match/i }),
@@ -66,8 +73,33 @@ describe("dashboard workspace", () => {
 
     renderWithQueryClient(<DashboardWorkspace />);
 
-    expect(screen.getByRole("heading", { name: "Welcome back, Ava" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Welcome back, Ava!" })).toBeInTheDocument();
+    expect(
+      screen.getByText("Review your latest report and see how your game is developing over time."),
+    ).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Ava profile photo" })).toHaveTextContent("A");
+  });
+
+  it("welcomes a newly onboarded player without saying welcome back", async () => {
+    const userId = "56ae6283-69ee-44b6-9f19-6bf9dc1d7092";
+    authMock.mockReturnValue({ user: { id: userId, last_login_at: null } });
+    profileMock.mockReturnValue({
+      profile: { ...emptyPlayerProfile, displayName: "Mimi" },
+      isLoaded: true,
+      save: vi.fn(),
+    });
+
+    renderWithQueryClient(<DashboardWorkspace />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Welcome, Mimi" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Start uploading your matches and see how your game is developing over time.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Welcome back, Mimi!" })).not.toBeInTheDocument();
   });
 
   it("shows the saved profile photo in the dashboard header", () => {

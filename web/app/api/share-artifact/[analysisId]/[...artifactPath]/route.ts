@@ -3,7 +3,7 @@ import { getPublicEnv } from "@/lib/env";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   {
     params,
   }: {
@@ -16,7 +16,12 @@ export async function GET(
   }
 
   const response = await fetch(toBackendArtifactUrl(params.analysisId, artifactPath), {
-    headers: { Accept: "image/png" },
+    headers: {
+      Accept: "image/png",
+      ...(request.headers.get("authorization")
+        ? { Authorization: request.headers.get("authorization")! }
+        : {}),
+    },
     cache: "no-store",
   });
 

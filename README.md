@@ -130,6 +130,19 @@ Phase 1.8 defines the personal-account platform foundation before shared deploym
 - Private-alpha evidence collection and readiness review precede Phase 1.9 advanced
   match intelligence
 
+Phase 1.8C-B adds provider-neutral account security:
+
+- opaque, hashed, single-use email-verification and password-reset tokens;
+- verification enforcement for uploads and Analyze Again;
+- safe forgot/reset and authenticated password-change flows;
+- active-session listing, individual revocation, and revoke-all controls;
+- Court4-owned email templates with a development-only inspectable sink.
+
+See
+[Phase 1.8C-B account security](docs/platform/PHASE_1_8C_B_ACCOUNT_SECURITY.md).
+Implementation validation is recorded in
+[the Phase 1.8C-B validation report](docs/platform/PHASE_1_8C_B_VALIDATION_REPORT.md).
+
 Exact duplicate upload hardening detects byte-identical videos within the current
 owner's history, returns a typed duplicate response, and lets the user open the
 existing analysis or explicitly analyze the video again. See

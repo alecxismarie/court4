@@ -10,6 +10,7 @@ from threading import Barrier, Event, Lock
 from uuid import UUID, uuid4
 
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import func, select
 
 from app.config import Settings
@@ -244,6 +245,13 @@ def test_i_development_bootstrap_fail_closed_matrix() -> None:
             bootstrap_user_enabled=True,
             bootstrap_user_id=uuid4(),
             bootstrap_user_identity="production@example.invalid",
+            auth_access_token_secret=SecretStr(
+                "production-test-secret-value-at-least-32-characters"
+            ),
+            auth_frontend_base_url="https://court4.example",
+            auth_email_backend="provider",
+            auth_development_email_sink_enabled=False,
+            auth_cookie_secure=True,
         ),
     ]
     for settings in invalid:

@@ -2,17 +2,23 @@
 
 import { ArrowRight } from "lucide-react";
 import Link from "next/link";
+import { useEffect, useState } from "react";
 
 import { AnalysisStatusBadge } from "@/components/history-badges";
 import { ProfileAvatar } from "@/components/profile-avatar";
 import { ButtonLink } from "@/components/ui/button";
+import { FirstTimeProfileModal } from "@/components/first-time-profile-modal";
+import { useOptionalAuth } from "@/lib/auth-context";
 import { useAnalysisHistory, usePlayHistory } from "@/lib/use-history";
 import { usePlayerProfile } from "@/lib/use-player-profile";
+import { isFirstPlayerWelcome } from "@/lib/profile-onboarding";
 import { formatDateTime } from "@/lib/utils";
 import { formatTrackedTime } from "@/lib/workspace-data";
 
 export function DashboardWorkspace() {
-  const { profile } = usePlayerProfile();
+  const auth = useOptionalAuth();
+  const { profile, isLoaded, save } = usePlayerProfile();
+  const [firstWelcome, setFirstWelcome] = useState(false);
   const analyses = useAnalysisHistory();
   const playHistory = usePlayHistory();
   const displayName = profile.displayName;
@@ -25,8 +31,24 @@ export function DashboardWorkspace() {
       ["READY", "LIMITED", "UNSUITABLE"].includes(item.status),
     ).length ?? 0;
 
+  useEffect(() => {
+    setFirstWelcome(
+      auth?.user
+        ? auth.user.last_login_at === null || isFirstPlayerWelcome(auth.user.id)
+        : false,
+    );
+  }, [auth?.user]);
+
   return (
     <div className="space-y-6">
+      <FirstTimeProfileModal
+        userId={auth?.user?.id ?? null}
+        profile={profile}
+        isProfileLoaded={isLoaded}
+        isNewAccount={auth?.user?.last_login_at === null}
+        saveProfile={save}
+        onComplete={() => setFirstWelcome(true)}
+      />
       <section className="rounded-md border border-court-line bg-white p-6 shadow-panel">
         <div className="flex items-center gap-4 sm:gap-5">
           <Link
@@ -42,10 +64,18 @@ export function DashboardWorkspace() {
           </Link>
           <div className="min-w-0">
             <h1 className="text-3xl font-semibold text-court-ink md:text-4xl">
-              {displayName ? `Welcome back, ${displayName}` : "Welcome back"}
+              {displayName
+                ? firstWelcome
+                  ? `Welcome, ${displayName}`
+                  : `Welcome back, ${displayName}!`
+                : firstWelcome
+                  ? "Welcome"
+                  : "Welcome back!"}
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-court-muted">
-              Review your latest report and see how your game is developing over time.
+              {firstWelcome
+                ? "Start uploading your matches and see how your game is developing over time."
+                : "Review your latest report and see how your game is developing over time."}
             </p>
           </div>
         </div>

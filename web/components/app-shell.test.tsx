@@ -5,16 +5,24 @@ import { AppShell } from "@/components/app-shell";
 import { savePlayerProfile } from "@/lib/player-profile";
 import { renderWithQueryClient } from "@/test/render";
 
-const pathnameMock = vi.hoisted(() => vi.fn(() => "/"));
+const pathnameMock = vi.hoisted(() => vi.fn(() => "/dashboard"));
+const authUserId = vi.hoisted(() => "56ae6283-69ee-44b6-9f19-6bf9dc1d7092");
 
 vi.mock("next/navigation", () => ({
   usePathname: pathnameMock,
 }));
 
+vi.mock("@/lib/auth-context", () => ({
+  useOptionalAuth: () => ({
+    user: { id: authUserId, email: "player@example.com" },
+    logout: vi.fn(),
+  }),
+}));
+
 describe("app shell navigation", () => {
   beforeEach(() => {
     window.localStorage.clear();
-    pathnameMock.mockReturnValue("/");
+    pathnameMock.mockReturnValue("/dashboard");
   });
 
   it("renders the six player-facing navigation items with expected routes", () => {
@@ -23,7 +31,7 @@ describe("app shell navigation", () => {
     const navigation = screen.getAllByRole("navigation", { name: "Primary navigation" })[0];
     expect(within(navigation).getByRole("link", { name: /dashboard/i })).toHaveAttribute(
       "href",
-      "/",
+      "/dashboard",
     );
     expect(within(navigation).getByRole("link", { name: /^player$/i })).toHaveAttribute(
       "href",
@@ -119,7 +127,7 @@ describe("app shell navigation", () => {
   });
 
   it("uses the saved display name in the shell", async () => {
-    savePlayerProfile({
+    savePlayerProfile(authUserId, {
       displayName: "Ava",
       dominantHand: "right",
       experienceLevel: "advanced",

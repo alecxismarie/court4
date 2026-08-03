@@ -3,6 +3,17 @@ import { z } from "zod";
 import { getPublicEnv } from "@/lib/env";
 import { apiErrorResponseSchema } from "@/lib/api/types";
 
+let accessToken: string | null = null;
+let refreshPromise: Promise<string> | null = null;
+
+export function setAccessToken(token: string | null): void {
+  accessToken = token;
+}
+
+export function getAccessToken(): string | null {
+  return accessToken;
+}
+
 export class Court4ApiError extends Error {
   readonly code: string;
   readonly status: number | null;
@@ -39,7 +50,7 @@ export async function requestJson<TResponse>(
   path: string,
   schema: z.ZodType<TResponse, z.ZodTypeDef, unknown>,
 ): Promise<TResponse> {
-  const response = await fetch(toApiUrl(path), {
+  const response = await authenticatedFetch(toApiUrl(path), {
     headers: { Accept: "application/json" },
   });
 
@@ -56,7 +67,7 @@ export async function postJson<TResponse>(
   schema: z.ZodType<TResponse, z.ZodTypeDef, unknown>,
   body?: unknown,
 ): Promise<TResponse> {
-  const response = await fetch(toApiUrl(path), {
+  const response = await authenticatedFetch(toApiUrl(path), {
     method: "POST",
     headers:
       body === undefined
@@ -71,6 +82,61 @@ export async function postJson<TResponse>(
 
   const payload: unknown = await response.json();
   return schema.parse(payload);
+}
+
+export async function authenticatedFetch(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+): Promise<Response> {
+  const response = await fetch(input, withAuthentication(init));
+  if (response.status !== 401 || isAuthEndpoint(input)) {
+    return response;
+  }
+  try {
+    await refreshAccessToken();
+  } catch {
+    accessToken = null;
+    return response;
+  }
+  return fetch(input, withAuthentication(init));
+}
+
+export async function refreshAccessToken(): Promise<string> {
+  if (!refreshPromise) {
+    refreshPromise = performRefresh().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+}
+
+async function performRefresh(): Promise<string> {
+  const response = await fetch(toApiUrl("/api/v1/auth/refresh"), {
+    method: "POST",
+    credentials: "include",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    accessToken = null;
+    throw await apiErrorFromResponse(response);
+  }
+  const payload: unknown = await response.json();
+  const parsed = z.object({ access_token: z.string().min(1) }).parse(payload);
+  accessToken = parsed.access_token;
+  return parsed.access_token;
+}
+
+function withAuthentication(init: RequestInit): RequestInit {
+  const headers = new Headers(init.headers);
+  if (accessToken) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
+  return { ...init, headers, credentials: "include" };
+}
+
+function isAuthEndpoint(input: RequestInfo | URL): boolean {
+  const value = typeof input === "string" ? input : input.toString();
+  return value.includes("/api/v1/auth/");
 }
 
 export function toApiUrl(path: string): string {

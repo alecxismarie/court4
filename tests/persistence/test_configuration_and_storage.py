@@ -2,6 +2,7 @@ from pathlib import Path
 from uuid import UUID
 
 import pytest
+from pydantic import SecretStr
 
 from app.config import Settings
 from app.persistence.bootstrap import configured_bootstrap_identity
@@ -15,6 +16,11 @@ def test_bootstrap_is_rejected_in_production() -> None:
         bootstrap_user_enabled=True,
         bootstrap_user_id=UUID("00000000-0000-4000-8000-000000000099"),
         bootstrap_user_identity="unsafe@example.invalid",
+        auth_access_token_secret=SecretStr("production-test-secret-value-at-least-32-characters"),
+        auth_frontend_base_url="https://court4.example",
+        auth_email_backend="provider",
+        auth_development_email_sink_enabled=False,
+        auth_cookie_secure=True,
     )
     with pytest.raises(PersistenceConfigurationError):
         configured_bootstrap_identity(settings)

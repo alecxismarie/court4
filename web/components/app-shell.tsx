@@ -1,16 +1,17 @@
 "use client";
 
-import { ChartNoAxesCombined, History, Home, Settings, Upload, UserRound } from "lucide-react";
+import { ChartNoAxesCombined, History, Home, LogOut, Settings, Upload, UserRound } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { cn } from "@/lib/utils";
+import { useOptionalAuth } from "@/lib/auth-context";
 import { usePlayerProfile } from "@/lib/use-player-profile";
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: Home, disabled: false },
+  { href: "/dashboard", label: "Dashboard", icon: Home, disabled: false },
   { href: "/player", label: "Player", icon: UserRound, disabled: false },
   { href: "/upload-match", label: "Upload Match", icon: Upload, disabled: false },
   {
@@ -34,14 +35,27 @@ const activeRouteAliases: Partial<Record<(typeof navItems)[number]["href"], read
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const auth = useOptionalAuth();
   const { profile } = usePlayerProfile();
   const playerLabel = profile.displayName || "Local Player";
+
+  if (
+    pathname === "/" ||
+    pathname === "/login" ||
+    pathname === "/register" ||
+    pathname === "/forgot-password" ||
+    pathname === "/reset-password" ||
+    pathname === "/verification-pending" ||
+    pathname === "/verify-email"
+  ) {
+    return children;
+  }
 
   return (
     <div className="min-h-screen bg-[#eef4f0]">
       <header className="border-b border-court-line bg-white md:hidden">
         <div className="flex items-center justify-between px-4 py-3">
-          <Link href="/" className="flex items-center gap-2 font-semibold" aria-label="Court4 dashboard">
+          <Link href="/dashboard" className="flex items-center gap-2 font-semibold" aria-label="Court4 dashboard">
             <Image
               src="/brand/court4-logo-64.png"
               alt=""
@@ -75,7 +89,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <aside className="hidden w-72 shrink-0 border-r border-court-line bg-white md:block">
           <div className="sticky top-0 flex h-screen flex-col px-5 py-6">
             <Link
-              href="/"
+              href="/dashboard"
               className="mb-8 flex justify-center"
               aria-label="Court4 dashboard"
             >
@@ -101,6 +115,18 @@ export function AppShell({ children }: { children: ReactNode }) {
                 />
               ))}
             </nav>
+            {auth?.user ? (
+              <div className="mt-auto border-t border-court-line pt-4">
+                <button
+                  type="button"
+                  onClick={() => void auth.logout()}
+                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-court-muted hover:bg-court-panel hover:text-court-ink"
+                >
+                  <LogOut aria-hidden="true" className="h-4 w-4" />
+                  Log out
+                </button>
+              </div>
+            ) : null}
           </div>
         </aside>
 
@@ -151,8 +177,8 @@ function NavLink({
 }
 
 function isActive(pathname: string, href: (typeof navItems)[number]["href"]): boolean {
-  if (href === "/") {
-    return pathname === "/";
+  if (href === "/dashboard") {
+    return pathname === "/dashboard";
   }
   const routePrefixes = [href, ...(activeRouteAliases[href] ?? [])];
   return routePrefixes.some(

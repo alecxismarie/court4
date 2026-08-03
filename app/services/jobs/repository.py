@@ -6,6 +6,7 @@ import mimetypes
 import re
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from uuid import UUID
 
 from pydantic import ValidationError
 
@@ -30,12 +31,14 @@ class AnalysisJobRepository:
         *,
         output_dir: Path,
         api_base_path: str,
+        owner_user_id: UUID | None = None,
         persistence: PersistenceRuntime | None = None,
     ) -> None:
         self.output_dir = output_dir.expanduser().resolve()
         self.storage = LocalStorage(self.output_dir)
         self.api_base_path = api_base_path.rstrip("/")
         self.persistence = persistence or get_persistence()
+        self.owner_user_id = owner_user_id or self.persistence.owner_user_id
 
     def create_or_replace_job(self, job: AnalysisJob) -> AnalysisJob:
         return self.save_job(job)
@@ -60,7 +63,7 @@ class AnalysisJobRepository:
         )
         try:
             self.persistence.service.persist_job(
-                owner_user_id=self.persistence.owner_user_id,
+                owner_user_id=self.owner_user_id,
                 payload=projected.model_dump(mode="json"),
                 artifacts=filesystem_artifacts,
                 player_selection=self._player_selection(job.analysis_id),
@@ -77,7 +80,7 @@ class AnalysisJobRepository:
         self.validate_analysis_id(analysis_id)
         try:
             payload = self.persistence.service.load_job(
-                owner_user_id=self.persistence.owner_user_id,
+                owner_user_id=self.owner_user_id,
                 analysis_id=analysis_id,
             )
             return AnalysisJob.model_validate(payload)
@@ -90,14 +93,14 @@ class AnalysisJobRepository:
 
     def list_job_ids(self) -> list[str]:
         return self.persistence.service.list_analysis_ids(
-            owner_user_id=self.persistence.owner_user_id
+            owner_user_id=self.owner_user_id
         )
 
     def find_uploaded_video_by_owner_and_checksum(
         self, checksum_sha256: str
     ) -> DuplicateVideoMatch | None:
         return self.persistence.service.find_uploaded_video_by_owner_and_checksum(
-            owner_user_id=self.persistence.owner_user_id,
+            owner_user_id=self.owner_user_id,
             checksum_sha256=checksum_sha256,
         )
 
@@ -121,7 +124,7 @@ class AnalysisJobRepository:
         relative_path = validate_relative_artifact_path(artifact_path)
         try:
             self.persistence.service.get_artifact(
-                owner_user_id=self.persistence.owner_user_id,
+                owner_user_id=self.owner_user_id,
                 analysis_id=analysis_id,
                 storage_key=relative_path,
             )
@@ -148,7 +151,7 @@ class AnalysisJobRepository:
     def list_artifacts(self, analysis_id: str) -> list[AnalysisArtifact]:
         try:
             records = self.persistence.service.list_artifacts(
-                owner_user_id=self.persistence.owner_user_id,
+                owner_user_id=self.owner_user_id,
                 analysis_id=analysis_id,
             )
         except (ResourceNotFoundError, OwnershipMismatchError):

@@ -1,5 +1,10 @@
-import { DashboardWorkspace } from "@/components/dashboard-workspace";
+import { PublicLandingPage } from "@/components/landing/public-landing-page";
+import { LandingSessionBoundary } from "@/components/landing/landing-session-boundary";
 
-export default function DashboardPage() {
-  return <DashboardWorkspace />;
+export default function LandingPage() {
+  return (
+    <LandingSessionBoundary>
+      <PublicLandingPage />
+    </LandingSessionBoundary>
+  );
 }

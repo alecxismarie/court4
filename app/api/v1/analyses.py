@@ -3,6 +3,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 
+from app.auth import CurrentUser, VerifiedUser
 from app.config import get_settings
 from app.config.settings import Settings
 from app.schemas.active_play import ActivePlayReport
@@ -47,8 +48,10 @@ SettingsDependency = Annotated[Settings, Depends(get_settings)]
 VideoUploadFile = Annotated[UploadFile, File(description="Pickleball match video file.")]
 
 
-def get_workflow_service(settings: SettingsDependency) -> AnalysisWorkflowService:
-    return AnalysisWorkflowService(settings=settings)
+def get_workflow_service(
+    settings: SettingsDependency, user: CurrentUser
+) -> AnalysisWorkflowService:
+    return AnalysisWorkflowService(settings=settings, owner_user_id=user.id)
 
 
 WorkflowDependency = Annotated[AnalysisWorkflowService, Depends(get_workflow_service)]
@@ -90,6 +93,7 @@ async def upload_video(
     file: VideoUploadFile,
     workflow: WorkflowDependency,
     response: Response,
+    _verified_user: VerifiedUser,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     reanalyze: Annotated[bool, Form()] = False,
 ) -> UploadAnalysisResponse:

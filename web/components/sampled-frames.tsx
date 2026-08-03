@@ -4,6 +4,7 @@ import { ImageOff } from "lucide-react";
 import { useState } from "react";
 
 import { getArtifactUrl } from "@/lib/api/client";
+import { AuthenticatedImage } from "@/components/authenticated-image";
 import type { SampledFrame } from "@/lib/api/types";
 import { formatFileSize } from "@/lib/utils";
 import { EmptyState } from "@/components/empty-state";
@@ -75,8 +76,7 @@ function SampledFrameCard({ analysisId, frame }: { analysisId: string; frame: Sa
             </span>
           </div>
         ) : (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+          <AuthenticatedImage
             src={getArtifactUrl(analysisId, frame.path)}
             alt={`Sampled frame ${frame.frame_number}`}
             className="h-full w-full object-cover"

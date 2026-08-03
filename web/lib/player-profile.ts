@@ -1,4 +1,5 @@
-export const PLAYER_PROFILE_STORAGE_KEY = "court4.playerProfile";
+export const LEGACY_PLAYER_PROFILE_STORAGE_KEY = "court4.playerProfile";
+export const PLAYER_PROFILE_STORAGE_KEY_PREFIX = "court4.playerProfile.";
 export const PLAYER_PROFILE_UPDATED_EVENT = "court4:player-profile-updated";
 export const MAX_PROFILE_IMAGE_BYTES = 10_000_000;
 export const PROFILE_IMAGE_ACCEPT = ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp";
@@ -42,14 +43,18 @@ export const emptyPlayerProfile: PlayerProfile = {
 const MAX_DISPLAY_NAME_LENGTH = 36;
 const MAX_HOME_CLUB_LENGTH = 80;
 
-export function getPlayerProfile(): PlayerProfile {
+export function playerProfileStorageKey(userId: string): string {
+  return `${PLAYER_PROFILE_STORAGE_KEY_PREFIX}${userId}`;
+}
+
+export function getPlayerProfile(userId: string): PlayerProfile {
   const storage = safeStorage();
   if (!storage) {
     return emptyPlayerProfile;
   }
 
   try {
-    const raw = storage.getItem(PLAYER_PROFILE_STORAGE_KEY);
+    const raw = storage.getItem(playerProfileStorageKey(userId));
     if (!raw) {
       return emptyPlayerProfile;
     }
@@ -59,7 +64,7 @@ export function getPlayerProfile(): PlayerProfile {
   }
 }
 
-export function savePlayerProfile(profile: PlayerProfile): PlayerProfile {
+export function savePlayerProfile(userId: string, profile: PlayerProfile): PlayerProfile {
   const normalized = normalizePlayerProfile(profile);
   const errors = validatePlayerProfile(normalized);
   if (Object.keys(errors).length > 0) {
@@ -68,7 +73,7 @@ export function savePlayerProfile(profile: PlayerProfile): PlayerProfile {
 
   const storage = safeStorage();
   if (storage) {
-    storage.setItem(PLAYER_PROFILE_STORAGE_KEY, JSON.stringify(normalized));
+    storage.setItem(playerProfileStorageKey(userId), JSON.stringify(normalized));
     window.dispatchEvent(new Event(PLAYER_PROFILE_UPDATED_EVENT));
   }
   return normalized;

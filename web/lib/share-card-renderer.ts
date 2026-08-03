@@ -1,4 +1,5 @@
 import type { ShareCardData, ShareCardFormat } from "@/lib/share-card";
+import { authenticatedFetch } from "@/lib/api/client";
 
 const LOGO_URL = "/brand/court4-logo-192.png";
 
@@ -573,7 +574,7 @@ async function loadImage(url: string): Promise<LoadedImage> {
 }
 
 async function loadImageFromBlob(url: string): Promise<LoadedImage> {
-  const response = await fetch(url);
+  const response = await authenticatedFetch(url);
   if (!response.ok) {
     throw new Error("Image could not be loaded.");
   }

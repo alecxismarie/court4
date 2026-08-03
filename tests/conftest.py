@@ -37,7 +37,9 @@ def pytest_sessionstart(session: pytest.Session) -> None:
 def clean_production_database() -> None:
     from sqlalchemy import text
 
+    from app.auth.rate_limit import auth_rate_limiter
     from app.config import get_settings
+    from app.email.dependencies import get_development_email_sink
     from app.persistence.bootstrap import configured_bootstrap_identity
     from app.persistence.runtime import get_persistence
 
@@ -45,13 +47,16 @@ def clean_production_database() -> None:
     with runtime.engine.begin() as connection:
         connection.execute(
             text(
-                "TRUNCATE TABLE player_selections, analysis_artifacts, "
+                "TRUNCATE TABLE account_tokens, refresh_sessions, player_selections, "
+                "analysis_artifacts, "
                 "analysis_state_events, idempotency_records, analysis_runs, "
                 "analyses, uploaded_videos, users RESTART IDENTITY CASCADE"
             )
         )
     identity = configured_bootstrap_identity(get_settings())
     runtime.service.ensure_bootstrap_user(identity)
+    auth_rate_limiter.reset()
+    get_development_email_sink().clear()
 
 
 @pytest.fixture

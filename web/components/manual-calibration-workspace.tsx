@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { getAnalysisFrames, submitCalibration } from "@/lib/api/analyses";
 import { getArtifactUrl, normalizeApiError } from "@/lib/api/client";
+import { AuthenticatedImage } from "@/components/authenticated-image";
 import type { AnalysisArtifact, CalibrationRequest, SampledFrame } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { Button, ButtonLink } from "@/components/ui/button";
@@ -215,8 +216,7 @@ export function ManualCalibrationWorkspace({ analysisId }: { analysisId: string 
           </div>
 
           <div className="relative overflow-hidden rounded-md border border-court-line bg-court-panel">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
+            <AuthenticatedImage
               src={getArtifactUrl(analysisId, selectedFrame.path)}
               alt="Manual calibration frame"
               className={cn(
@@ -374,8 +374,7 @@ function CalibrationArtifact({
   return (
     <figure className="overflow-hidden rounded-md border border-court-line bg-white">
       <div className="aspect-video bg-court-panel">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
+        <AuthenticatedImage
           src={getArtifactUrl(analysisId, artifact.path)}
           alt={label}
           className="h-full w-full object-contain"

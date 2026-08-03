@@ -3,11 +3,15 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   emptyPlayerProfile,
   getPlayerProfile,
-  PLAYER_PROFILE_STORAGE_KEY,
+  LEGACY_PLAYER_PROFILE_STORAGE_KEY,
+  playerProfileStorageKey,
   savePlayerProfile,
   validateProfileImageFile,
   validatePlayerProfile,
 } from "@/lib/player-profile";
+
+const playerOneId = "56ae6283-69ee-44b6-9f19-6bf9dc1d7092";
+const playerTwoId = "57bd7394-70ff-45c7-8a20-7ca0ed2e8103";
 
 describe("player profile storage", () => {
   beforeEach(() => {
@@ -15,11 +19,11 @@ describe("player profile storage", () => {
   });
 
   it("returns an empty browser-local profile by default", () => {
-    expect(getPlayerProfile()).toEqual(emptyPlayerProfile);
+    expect(getPlayerProfile(playerOneId)).toEqual(emptyPlayerProfile);
   });
 
   it("trims and sanitizes explicitly entered values before saving", () => {
-    const saved = savePlayerProfile({
+    const saved = savePlayerProfile(playerOneId, {
       displayName: "  <Ava>  Court4  ",
       dominantHand: "right",
       experienceLevel: "competitive",
@@ -33,12 +37,12 @@ describe("player profile storage", () => {
       experienceLevel: "competitive",
       homeClub: "Downtown Courts",
     });
-    expect(getPlayerProfile()).toEqual(saved);
+    expect(getPlayerProfile(playerOneId)).toEqual(saved);
   });
 
   it("filters malformed stored profile fields", () => {
     window.localStorage.setItem(
-      PLAYER_PROFILE_STORAGE_KEY,
+      playerProfileStorageKey(playerOneId),
       JSON.stringify({
         displayName: "<script>alert(1)</script>",
         dominantHand: "both",
@@ -48,7 +52,7 @@ describe("player profile storage", () => {
       }),
     );
 
-    expect(getPlayerProfile()).toEqual({
+    expect(getPlayerProfile(playerOneId)).toEqual({
       displayName: "scriptalert(1)/script",
       dominantHand: "prefer_not_to_say",
       experienceLevel: "prefer_not_to_say",
@@ -73,14 +77,51 @@ describe("player profile storage", () => {
   it("persists a safe profile photo data URL", () => {
     const profileImageDataUrl = "data:image/png;base64,AQID";
 
-    const saved = savePlayerProfile({
+    const saved = savePlayerProfile(playerOneId, {
       ...emptyPlayerProfile,
       displayName: "Alexis",
       profileImageDataUrl,
     });
 
     expect(saved.profileImageDataUrl).toBe(profileImageDataUrl);
-    expect(getPlayerProfile().profileImageDataUrl).toBe(profileImageDataUrl);
+    expect(getPlayerProfile(playerOneId).profileImageDataUrl).toBe(profileImageDataUrl);
+  });
+
+  it("keeps profile details and photos isolated between accounts", () => {
+    savePlayerProfile(playerOneId, {
+      ...emptyPlayerProfile,
+      displayName: "Alexis",
+      profileImageDataUrl: "data:image/png;base64,AQID",
+    });
+
+    expect(getPlayerProfile(playerTwoId)).toEqual(emptyPlayerProfile);
+
+    savePlayerProfile(playerTwoId, {
+      ...emptyPlayerProfile,
+      displayName: "Mimi",
+    });
+
+    expect(getPlayerProfile(playerOneId)).toMatchObject({
+      displayName: "Alexis",
+      profileImageDataUrl: "data:image/png;base64,AQID",
+    });
+    expect(getPlayerProfile(playerTwoId)).toMatchObject({
+      displayName: "Mimi",
+      profileImageDataUrl: "",
+    });
+  });
+
+  it("does not expose the legacy unscoped profile to an account", () => {
+    window.localStorage.setItem(
+      LEGACY_PLAYER_PROFILE_STORAGE_KEY,
+      JSON.stringify({
+        ...emptyPlayerProfile,
+        displayName: "Previous browser user",
+        profileImageDataUrl: "data:image/png;base64,AQID",
+      }),
+    );
+
+    expect(getPlayerProfile(playerOneId)).toEqual(emptyPlayerProfile);
   });
 
   it("rejects unsupported or oversized profile photo files", () => {

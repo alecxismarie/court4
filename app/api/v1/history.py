@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
+from app.auth import CurrentUser
 from app.config import get_settings
 from app.config.settings import Settings
 from app.schemas.history import PlayHistoryResponse
@@ -13,10 +14,13 @@ router = APIRouter(prefix="/play-history", tags=["play-history"])
 SettingsDependency = Annotated[Settings, Depends(get_settings)]
 
 
-def get_history_service(settings: SettingsDependency) -> HistoryProjectionService:
+def get_history_service(
+    settings: SettingsDependency, user: CurrentUser
+) -> HistoryProjectionService:
     repository = AnalysisJobRepository(
         output_dir=settings.analysis_output_dir,
         api_base_path=settings.api_base_path,
+        owner_user_id=user.id,
     )
     return HistoryProjectionService(repository=repository)
 

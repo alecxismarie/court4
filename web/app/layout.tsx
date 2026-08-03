@@ -6,8 +6,9 @@ import { Providers } from "@/app/providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Court 4",
-  description: "Know your game",
+  title: "Court4 | Know Your Game",
+  description:
+    "Court4 turns pickleball match video into clear performance insights so players can track progress and improve every match.",
   icons: {
     icon: [
       {

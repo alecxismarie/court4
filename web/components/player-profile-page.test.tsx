@@ -1,10 +1,16 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { PlayerProfilePage } from "@/components/player-profile-page";
-import { PLAYER_PROFILE_STORAGE_KEY } from "@/lib/player-profile";
+import { playerProfileStorageKey } from "@/lib/player-profile";
 import { renderWithQueryClient } from "@/test/render";
+
+const authUserId = vi.hoisted(() => "56ae6283-69ee-44b6-9f19-6bf9dc1d7092");
+
+vi.mock("@/lib/auth-context", () => ({
+  useOptionalAuth: () => ({ user: { id: authUserId } }),
+}));
 
 describe("player profile page", () => {
   it("uses concise profile copy without repetitive headings", () => {
@@ -38,7 +44,9 @@ describe("player profile page", () => {
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     expect(await screen.findByText("Profile saved.")).toBeInTheDocument();
-    const stored = JSON.parse(window.localStorage.getItem(PLAYER_PROFILE_STORAGE_KEY) ?? "{}");
+    const stored = JSON.parse(
+      window.localStorage.getItem(playerProfileStorageKey(authUserId)) ?? "{}",
+    );
     expect(stored).toMatchObject({
       displayName: "Ava Smith",
       dominantHand: "left",
@@ -63,7 +71,9 @@ describe("player profile page", () => {
     expect(screen.getByText("Change photo")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /save changes/i }));
     await waitFor(() => {
-      const stored = JSON.parse(window.localStorage.getItem(PLAYER_PROFILE_STORAGE_KEY) ?? "{}");
+      const stored = JSON.parse(
+        window.localStorage.getItem(playerProfileStorageKey(authUserId)) ?? "{}",
+      );
       expect(stored.profileImageDataUrl).toBe("data:image/png;base64,AQID");
     });
 
@@ -95,7 +105,7 @@ describe("player profile page", () => {
     expect(
       await screen.findByText("Display name must be 36 characters or fewer."),
     ).toBeInTheDocument();
-    expect(window.localStorage.getItem(PLAYER_PROFILE_STORAGE_KEY)).toBeNull();
+    expect(window.localStorage.getItem(playerProfileStorageKey(authUserId))).toBeNull();
   });
 
   it("allows optional player fields to be cleared", async () => {
@@ -111,7 +121,9 @@ describe("player profile page", () => {
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => {
-      const stored = JSON.parse(window.localStorage.getItem(PLAYER_PROFILE_STORAGE_KEY) ?? "{}");
+      const stored = JSON.parse(
+        window.localStorage.getItem(playerProfileStorageKey(authUserId)) ?? "{}",
+      );
       expect(stored.homeClub).toBe("");
     });
     expect(homeClubInput).toHaveValue("");

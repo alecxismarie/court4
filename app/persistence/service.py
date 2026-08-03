@@ -119,11 +119,12 @@ class PersistenceService:
                 session.add(
                     User(
                         id=identity.user_id,
-                        identity_label=identity.identity_label,
-                        account_status="active",
+                        email=identity.identity_label.lower(),
+                        password_hash="!development-bootstrap-user-cannot-login",
+                        account_status="disabled",
                     )
                 )
-            elif user.identity_label != identity.identity_label:
+            elif user.email != identity.identity_label.lower():
                 raise IdempotencyConflictError(
                     "Bootstrap UUID is already associated with another identity."
                 )

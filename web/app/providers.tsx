@@ -1,7 +1,10 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, Suspense, useState } from "react";
+
+import { AuthGate } from "@/components/auth-gate";
+import { AuthProvider } from "@/lib/auth-context";
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -16,5 +19,19 @@ export function Providers({ children }: { children: ReactNode }) {
       }),
   );
 
-  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+  return (
+    <QueryClientProvider client={queryClient}>
+      <AuthProvider>
+        <Suspense
+          fallback={
+            <main className="grid min-h-screen place-items-center text-court-muted">
+              Loading…
+            </main>
+          }
+        >
+          <AuthGate>{children}</AuthGate>
+        </Suspense>
+      </AuthProvider>
+    </QueryClientProvider>
+  );
 }

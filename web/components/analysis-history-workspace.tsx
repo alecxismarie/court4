@@ -7,6 +7,7 @@ import { AnalysisStatusBadge, ContributionBadge } from "@/components/history-bad
 import { ButtonLink } from "@/components/ui/button";
 import type { AnalysisHistoryItem } from "@/lib/api/types";
 import { toApiUrl } from "@/lib/api/client";
+import { AuthenticatedImage } from "@/components/authenticated-image";
 import { useAnalysisHistory } from "@/lib/use-history";
 import { formatDateTime } from "@/lib/utils";
 
@@ -89,8 +90,7 @@ function AnalysisRow({ item }: { item: AnalysisHistoryItem }) {
     <article className="grid gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
       <div className="grid min-w-0 gap-4 sm:grid-cols-[auto_minmax(0,1fr)]">
         {item.thumbnail_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+          <AuthenticatedImage
             src={toApiUrl(item.thumbnail_url)}
             alt={`Preview for ${item.title}`}
             className="h-24 w-full rounded-md border border-court-line object-cover sm:w-36"

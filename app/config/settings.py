@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlparse
 from uuid import UUID
 
 from pydantic import (
@@ -8,8 +9,10 @@ from pydantic import (
     Field,
     PositiveFloat,
     PositiveInt,
+    SecretStr,
     ValidationInfo,
     field_validator,
+    model_validator,
 )
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
@@ -100,6 +103,32 @@ class Settings(BaseSettings):
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     )
+    auth_access_token_secret: SecretStr = SecretStr(
+        "development-only-change-this-secret-before-production"
+    )
+    auth_access_token_minutes: PositiveInt = 10
+    auth_refresh_token_days: PositiveInt = 30
+    auth_token_issuer: str = "court4"
+    auth_token_audience: str = "court4-web"
+    auth_refresh_cookie_name: str = "court4_refresh"
+    auth_cookie_secure: bool | None = None
+    auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    auth_min_password_length: int = Field(default=12, ge=8, le=128)
+    auth_max_password_length: int = Field(default=256, ge=64, le=1024)
+    auth_rate_limit_window_seconds: PositiveInt = 60
+    auth_register_rate_limit: PositiveInt = 5
+    auth_login_rate_limit: PositiveInt = 10
+    auth_refresh_rate_limit: PositiveInt = 30
+    auth_frontend_base_url: str = "http://localhost:3000"
+    auth_email_backend: Literal["development", "provider"] = "development"
+    auth_development_email_sink_enabled: bool = True
+    auth_verification_token_hours: PositiveInt = 24
+    auth_password_reset_token_minutes: PositiveInt = 45
+    auth_resend_verification_rate_limit: PositiveInt = 3
+    auth_forgot_password_rate_limit: PositiveInt = 5
+    auth_reset_password_rate_limit: PositiveInt = 10
+    auth_change_password_rate_limit: PositiveInt = 5
+    auth_session_action_rate_limit: PositiveInt = 10
 
     @field_validator("supported_extensions", mode="before")
     @classmethod
@@ -171,6 +200,72 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return tuple(item.strip() for item in value.split(",") if item.strip())
         return value
+
+    @field_validator("frontend_allowed_origins")
+    @classmethod
+    def validate_frontend_allowed_origins(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(origin == "*" for origin in value):
+            raise ValueError("Credentialed CORS does not permit a wildcard origin.")
+        return tuple(dict.fromkeys(origin.rstrip("/") for origin in value))
+
+    @field_validator("auth_access_token_secret")
+    @classmethod
+    def validate_auth_secret(cls, value: SecretStr, info: ValidationInfo) -> SecretStr:
+        secret = value.get_secret_value()
+        if len(secret) < 32:
+            raise ValueError("Access-token secret must contain at least 32 characters.")
+        if (
+            info.data.get("environment") in {"staging", "production"}
+            and secret == "development-only-change-this-secret-before-production"
+        ):
+            raise ValueError("A deployment-specific access-token secret is required.")
+        return value
+
+    @field_validator("auth_frontend_base_url")
+    @classmethod
+    def validate_auth_frontend_base_url(cls, value: str) -> str:
+        cleaned = value.strip().rstrip("/")
+        parsed = urlparse(cleaned)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("Frontend base URL must be an absolute HTTP(S) URL.")
+        if parsed.query or parsed.fragment or parsed.username or parsed.password:
+            raise ValueError("Frontend base URL must not contain credentials, query, or fragment.")
+        return cleaned
+
+    @property
+    def refresh_cookie_secure(self) -> bool:
+        if self.auth_cookie_secure is not None:
+            return self.auth_cookie_secure
+        return self.environment in {"staging", "production"}
+
+    @model_validator(mode="after")
+    def validate_auth_deployment_security(self) -> "Settings":
+        if (
+            self.environment in {"staging", "production"}
+            and self.auth_access_token_secret.get_secret_value()
+            == "development-only-change-this-secret-before-production"
+        ):
+            raise ValueError("A deployment-specific access-token secret is required.")
+        if self.auth_cookie_samesite == "none" and not self.refresh_cookie_secure:
+            raise ValueError("SameSite=None requires a Secure refresh cookie.")
+        if self.environment in {"staging", "production"} and not self.refresh_cookie_secure:
+            raise ValueError("Staging and production require a Secure refresh cookie.")
+        if (
+            self.environment in {"staging", "production"}
+            and self.auth_email_backend == "development"
+        ):
+            raise ValueError("The development email sink cannot be used in a deployment.")
+        if (
+            self.environment in {"staging", "production"}
+            and self.auth_development_email_sink_enabled
+        ):
+            raise ValueError("The development email sink must be disabled in a deployment.")
+        if self.environment in {
+            "staging",
+            "production",
+        } and not self.auth_frontend_base_url.startswith("https://"):
+            raise ValueError("Deployment frontend links must use HTTPS.")
+        return self
 
     @field_validator("court_detection_low_confidence_threshold")
     @classmethod

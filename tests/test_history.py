@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -581,14 +582,23 @@ def test_history_api_uses_persisted_jobs_after_refresh(
     output_dir = tmp_path / "api-output"
     monkeypatch.setenv("PICKLEBALL_AI_ANALYSIS_OUTPUT_DIR", str(output_dir))
     get_settings.cache_clear()
-    repository = AnalysisJobRepository(output_dir=output_dir, api_base_path="/api/v1")
+    first_client = TestClient(create_app())
+    login = first_client.post(
+        "/api/v1/auth/register",
+        json={"email": "history@example.com", "password": "a sufficiently long password"},
+    )
+    first_client.headers["Authorization"] = f"Bearer {login.json()['access_token']}"
+    repository = AnalysisJobRepository(
+        output_dir=output_dir,
+        api_base_path="/api/v1",
+        owner_user_id=UUID(login.json()["user"]["id"]),
+    )
     job = _job("persisted", status=AnalysisStatus.completed, analytics_completed=True)
     repository.save_job(job)
     _write_analytics(repository, job.analysis_id, _analytics(job.analysis_id))
-
-    first_client = TestClient(create_app())
     first = first_client.get("/api/v1/analyses")
     refreshed_client = TestClient(create_app())
+    refreshed_client.headers["Authorization"] = first_client.headers["Authorization"]
     refreshed = refreshed_client.get("/api/v1/play-history")
 
     assert first.status_code == 200

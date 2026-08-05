@@ -1,5 +1,34 @@
 # Docker disk runbook
 
+## Phase 1.8D0 measurement (2026-08-05)
+
+Free space was 6,700,752,896 bytes before real-video validation, fell to
+3,894,087,680 bytes after its generated evidence, and was 2,044,063,744 bytes after
+the final frontend build and browser artifacts. Docker reported 29.78 GB of images,
+379.6 MB of containers (209.6 MB reclaimable), 914.2 MB of volumes (effectively none
+reclaimable), and 32.78 GB of build cache (8.922 GB reclaimable). The existing
+`court4:local` content size is 3,161,053,009 bytes and Docker Desktop displays about
+9.26 GB; it runs as root and has no image healthcheck.
+
+Two explicitly identified D0 validation containers were removed and the isolated
+test/spike PostgreSQL containers were stopped; no volume, upload, analysis, artifact, user media, or unrelated image
+was deleted. Broad cache pruning and WSL VHD compaction were not performed because
+the cache ownership is mixed and host compaction is a separate manual maintenance
+window. The required 20 GiB build reserve was not reached. Accordingly, no image was
+built from the ambiguous working tree.
+
+Safe manual Docker Desktop/WSL maintenance: stop all workloads cleanly, verify and
+back up named volumes, fully quit Docker Desktop, run `wsl --shutdown`, compact only
+Docker Desktop's identified virtual disk using the vendor-supported host procedure,
+restart Docker, and verify every named volume/container before cleanup is considered
+complete. Never delete or recreate a PostgreSQL VHD/volume to reclaim space.
+
+## 2026-08-05 pre-deployment measurement
+
+Docker reported 29.78 GB of images, 257.5 MB of containers, 931.6 MB of volumes, and 32.78 GB of build cache, of which 8.922 GB was reclaimable. The host had only 8,061,038,592 bytes free. The existing `court4:local` image content size was 3,161,053,009 bytes (historical displayed Court4 image size about 9.26 GB), runs as root, and has no healthcheck. A source-current rebuild was intentionally not started because free space was below the 20 GB reserve. This is a release blocker, not permission to prune volumes or user data.
+
+For staging, budget the image and temporary build layers separately from at least 25 GiB of persistent Court4 data, PostgreSQL, logs, and backups. Require an exact inventory before pruning, never run broad volume cleanup, and verify that the selected host retains at least 20 GiB of build reserve after required persistent allocations.
+
 ## Incident and cause
 
 The host began with 11,830,042,624 bytes free. Docker reported 68.92 GB of build cache, dominated by repeated 8.87–8.95 GB Court4 dependency layers from detector/dev builds. Historical Court4 images were about 9.3 GB each. Court4 materially contributed most of the cache pressure because the optional detector installs PyTorch/CUDA libraries; database volumes (about 65 MB each), the 913 MB total volume set, and the roughly 0.91 GB workspace were not the cause. A test PostgreSQL container also needed slow crash recovery after the daemon interruption, but its data was intact.

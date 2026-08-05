@@ -271,7 +271,14 @@ class AuthenticationService:
         logger.info("auth_verification_resent", extra={"user_id": str(user.id)})
         return True
 
-    def verify_email(self, raw_token: str) -> User:
+    def verify_email(
+        self,
+        raw_token: str,
+        *,
+        user_agent: str | None,
+        current_user_id: UUID | None = None,
+        raw_refresh_token: str | None = None,
+    ) -> tuple[User, SessionTokens]:
         now = datetime.now(tz=UTC)
         with self._session_factory.begin() as session:
             account_token = self._lock_account_token(session, raw_token, "email_verification")
@@ -281,6 +288,29 @@ class AuthenticationService:
             )
             if user is None or user.account_status != "active":
                 self._invalid_account_token()
+            if current_user_id is not None and current_user_id != user.id:
+                logger.info(
+                    "auth_verification_account_mismatch",
+                    extra={"current_user_id": str(current_user_id)},
+                )
+                raise AuthenticationError(
+                    "verification_account_mismatch",
+                    "This verification link belongs to a different Court4 account. "
+                    "Log out before continuing.",
+                    status_code=409,
+                )
+            current_refresh = self._active_refresh_session(session, raw_refresh_token, now=now)
+            if current_refresh is not None and current_refresh.user_id != user.id:
+                logger.info(
+                    "auth_verification_account_mismatch",
+                    extra={"current_user_id": str(current_refresh.user_id)},
+                )
+                raise AuthenticationError(
+                    "verification_account_mismatch",
+                    "This verification link belongs to a different Court4 account. "
+                    "Log out before continuing.",
+                    status_code=409,
+                )
             account_token.consumed_at = now
             if user.email_verified_at is None:
                 user.email_verified_at = now
@@ -291,7 +321,48 @@ class AuthenticationService:
                 now,
                 exclude_id=account_token.id,
             )
+            if current_refresh is None:
+                tokens = self._create_session(session, user, user_agent=user_agent)
+            else:
+                current_refresh.revoked_at = now
+                current_refresh.last_used_at = now
+                current_refresh.revocation_reason = "rotated"
+                tokens, replacement_id = self._create_session_tokens(
+                    session,
+                    user,
+                    user_agent=user_agent,
+                    family_id=current_refresh.token_family_id,
+                )
+                current_refresh.replaced_by_session_id = replacement_id
         logger.info("auth_email_verified", extra={"user_id": str(user.id)})
+        logger.info("auth_verification_session_established", extra={"user_id": str(user.id)})
+        return user, tokens
+
+    def complete_onboarding(self, user_id: UUID, display_name: str) -> User:
+        normalized_name = " ".join(display_name.split())
+        if (
+            not normalized_name
+            or len(normalized_name) > 36
+            or any(ord(character) < 32 for character in normalized_name)
+        ):
+            raise AuthenticationError(
+                "invalid_display_name",
+                "Enter a display name containing 36 characters or fewer.",
+                status_code=422,
+            )
+        with self._session_factory.begin() as session:
+            self._lock_user_security(session, user_id)
+            user = session.scalar(select(User).where(User.id == user_id).with_for_update())
+            if user is None or user.account_status != "active":
+                raise AuthenticationError("unauthorized", "Authentication is required.")
+            if user.email_verified_at is None:
+                raise AuthenticationError(
+                    "email_verification_required",
+                    "Verify your email before completing onboarding.",
+                    status_code=403,
+                )
+            user.display_name = normalized_name
+        logger.info("auth_onboarding_completed", extra={"user_id": str(user.id)})
         return user
 
     def request_password_reset(self, email: str, *, user_agent: str | None) -> None:
@@ -806,6 +877,30 @@ class AuthenticationService:
             ):
                 return None
             return session_id
+
+    def _active_refresh_session(
+        self,
+        session: Session,
+        raw_token: str | None,
+        *,
+        now: datetime,
+    ) -> RefreshSession | None:
+        try:
+            session_id = self._parse_refresh_session_id(raw_token)
+        except AuthenticationError:
+            return None
+        refresh_session = session.scalar(
+            select(RefreshSession).where(RefreshSession.id == session_id).with_for_update()
+        )
+        if (
+            refresh_session is None
+            or raw_token is None
+            or refresh_session.revoked_at is not None
+            or refresh_session.expires_at <= now
+            or not compare_digest(refresh_session.token_hash, _token_hash(raw_token))
+        ):
+            return None
+        return refresh_session
 
     @staticmethod
     def _require_active_matching_session(

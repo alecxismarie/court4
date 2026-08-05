@@ -4,6 +4,7 @@ import { UserRound } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { normalizeApiError } from "@/lib/api/client";
 import {
   normalizePlayerProfile,
   validatePlayerProfile,
@@ -18,8 +19,9 @@ type FirstTimeProfileModalProps = {
   userId: string | null;
   profile: PlayerProfile;
   isProfileLoaded: boolean;
-  isNewAccount?: boolean;
+  onboardingRequired: boolean;
   saveProfile: (profile: PlayerProfile) => PlayerProfile;
+  completeOnboarding: (displayName: string) => Promise<void>;
   onComplete?: () => void;
 };
 
@@ -27,13 +29,15 @@ export function FirstTimeProfileModal({
   userId,
   profile,
   isProfileLoaded,
-  isNewAccount = false,
+  onboardingRequired,
   saveProfile,
+  completeOnboarding: completeOnboardingRequest,
   onComplete,
 }: FirstTimeProfileModalProps) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const normalizedPreview = useMemo(
     () => normalizePlayerProfile({ ...profile, displayName: name }).displayName,
     [name, profile],
@@ -43,15 +47,15 @@ export function FirstTimeProfileModal({
     if (
       userId &&
       isProfileLoaded &&
-      (isPlayerOnboardingPending(userId) || (isNewAccount && !profile.displayName))
+      ((isPlayerOnboardingPending(userId) && !profile.displayName) || onboardingRequired)
     ) {
       setName("");
       setError(null);
       setOpen(true);
     }
-  }, [isNewAccount, isProfileLoaded, profile.displayName, userId]);
+  }, [isProfileLoaded, onboardingRequired, profile.displayName, userId]);
 
-  function submit(event: FormEvent<HTMLFormElement>) {
+  async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!userId) return;
 
@@ -66,10 +70,18 @@ export function FirstTimeProfileModal({
       return;
     }
 
-    saveProfile(nextProfile);
-    completePlayerOnboarding(userId);
-    onComplete?.();
-    setOpen(false);
+    setSubmitting(true);
+    try {
+      await completeOnboardingRequest(nextProfile.displayName);
+      saveProfile(nextProfile);
+      completePlayerOnboarding(userId);
+      onComplete?.();
+      setOpen(false);
+    } catch (caught) {
+      setError(normalizeApiError(caught).message);
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   if (!open) return null;
@@ -104,7 +116,7 @@ export function FirstTimeProfileModal({
           progress organized.
         </p>
 
-        <form className="mt-6" onSubmit={submit}>
+        <form className="mt-6" onSubmit={(event) => void submit(event)}>
           <label htmlFor="player-onboarding-name" className="grid gap-2 text-sm font-semibold text-court-ink">
             What should we call you?
             <input
@@ -131,8 +143,8 @@ export function FirstTimeProfileModal({
             You can update this name, add a profile photo, and complete the rest of your
             details anytime in the Player section.
           </p>
-          <Button type="submit" className="mt-6 w-full" disabled={!name.trim()}>
-            Done
+          <Button type="submit" className="mt-6 w-full" disabled={!name.trim() || submitting}>
+            {submitting ? "Saving…" : "Done"}
           </Button>
         </form>
       </section>

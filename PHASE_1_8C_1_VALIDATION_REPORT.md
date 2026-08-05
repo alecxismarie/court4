@@ -7,9 +7,10 @@ Validation date: 2026-08-03. Verdict: **NOT READY FOR PRIVATE ALPHA**.
 | Area | Command | Result |
 |---|---|---|
 | Backend lint | `ruff check .` | Pass: `All checks passed!` |
-| Backend format | `ruff format --check .` | Pass: 160 files formatted |
-| Backend types | `mypy app tests` | Pass: no issues in 142 source files |
-| Backend suite | `python -m pytest -q` | Pass: 224 passed, 10 skipped; 230.7 s; one Starlette warning recommending `httpx2` |
+| Backend format | `ruff format --check .` | Pass: 162 files formatted |
+| Backend types | `mypy app tests` | Pass: no issues in 144 source files |
+| Backend suite | `python -m pytest -q` | Pass after Brevo adapter: 254 passed, 10 skipped; 240.4 s; one Starlette warning recommending `httpx2` |
+| Brevo/configuration suite | `python -m pytest tests/test_brevo_email.py tests/test_release_controls.py tests/persistence/test_configuration_and_storage.py tests/persistence/test_production_concurrency.py -q` | Pass: 50 tests; no external delivery attempted |
 | Migrations | `alembic upgrade head`; `alembic downgrade base`; `alembic upgrade head`; `alembic check` | Pass through revisions 0001–0005; no new upgrade operations |
 | Frontend unit | `npm.cmd test -- --run` | Pass: 35 files, 157 tests; Vite CJS API deprecation warning |
 | Frontend lint | `npm.cmd run lint` | Pass |
@@ -30,7 +31,7 @@ The app moved from unsupported Next 14.2.35/React 18 to stable Next 16.2.12/Reac
 
 ## Email evidence
 
-The Resend HTTP adapter preserves the provider-neutral interface. Mock transport tests cover accepted delivery IDs and 429 failure; configuration tests cover production fail-closed behavior. No real key or verified sender domain was available, so sandbox/test-domain delivery, delivered verification/reset links, password/security notifications, invalid live credentials and provider dashboard status were not proven. This is blocking.
+The Resend and Brevo HTTP adapters preserve the provider-neutral interface. Mock transports cover accepted delivery IDs and safe provider failures; configuration tests cover production fail-closed behavior. No real key or verified sender domain was supplied, so inbox delivery, delivered verification/reset links, password/security notifications, invalid live credentials and provider dashboard status were not proven. This remains blocking.
 
 ## Browser coverage boundary
 
@@ -64,7 +65,7 @@ Docker root cause, exact cleanup and final measurements are in `DOCKER_DISK_RUNB
 ## Release blockers
 
 1. Three high production dependency findings remain.
-2. Real Resend delivery is not validated.
+2. Real production-provider delivery is not validated.
 3. The entire required critical browser matrix is not real end-to-end; key analysis paths remain mocked.
 
 Therefore the repository must not be promoted or tagged complete.

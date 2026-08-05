@@ -22,9 +22,9 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
     setSubmitting(true);
     setError(null);
     try {
-      await auth[mode](email, password);
+      const user = await auth[mode](email, password);
       const requested = searchParams.get("next");
-      const destination = isRegister
+      const destination = isRegister || !user.email_verified_at
         ? "/verification-pending"
         : requested?.startsWith("/") && !requested.startsWith("//")
           ? requested

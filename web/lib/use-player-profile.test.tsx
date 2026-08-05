@@ -38,6 +38,15 @@ describe("account-scoped player profile hook", () => {
     expect(screen.queryByText("Alexis:photo")).not.toBeInTheDocument();
     expect(await screen.findByText("Mimi:no-photo")).toBeInTheDocument();
   });
+
+  it("hydrates the persisted onboarding name on a new browser", async () => {
+    authMock.mockReturnValue({ user: { id: playerOneId, display_name: "Alexis" } });
+
+    render(<ProfileProbe />);
+
+    expect(await screen.findByText("Alexis:no-photo")).toBeInTheDocument();
+    expect(window.localStorage).toHaveLength(0);
+  });
 });
 
 function ProfileProbe() {

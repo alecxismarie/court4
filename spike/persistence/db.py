@@ -30,6 +30,10 @@ def create_spike_engine(
             cursor.execute("SET lock_timeout = '5s'")
             cursor.execute("SET statement_timeout = '10s'")
             cursor.execute("SET idle_in_transaction_session_timeout = '15s'")
+            dbapi_connection.commit()  # type: ignore[attr-defined]
+        except Exception:
+            dbapi_connection.rollback()  # type: ignore[attr-defined]
+            raise
         finally:
             cursor.close()
 

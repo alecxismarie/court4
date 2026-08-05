@@ -17,7 +17,10 @@ type TestFixtures = {
 export const test = base.extend<TestFixtures, WorkerFixtures>({
   workerAuth: [
     async ({ playwright }, use, workerInfo) => {
-      const apiBase = process.env.COURT4_E2E_API_URL ?? "http://127.0.0.1:8000";
+      const apiBase = process.env.COURT4_E2E_API_URL;
+      if (!apiBase) {
+        throw new Error("E2E safety refusal: COURT4_E2E_API_URL is required.");
+      }
       const api = await playwright.request.newContext({ baseURL: apiBase });
       const suffix = `${Date.now()}-${workerInfo.workerIndex}-${Math.random().toString(16).slice(2)}`;
       const email = `playwright-${suffix}@example.com`;
@@ -44,6 +47,12 @@ export const test = base.extend<TestFixtures, WorkerFixtures>({
         data: { token: decodeURIComponent(tokenMatch![1]) },
       });
       expect(verified.status(), await verified.text()).toBe(200);
+      const verifiedPayload = await verified.json();
+      const onboarding = await api.post("/api/v1/auth/onboarding", {
+        data: { display_name: "Playwright Player" },
+        headers: { Authorization: `Bearer ${verifiedPayload.access_token as string}` },
+      });
+      expect(onboarding.status(), await onboarding.text()).toBe(200);
 
       await use({ user: { email, password, accessToken }, api, apiBase });
       await api.dispose();

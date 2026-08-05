@@ -12,6 +12,7 @@ build/
 *.egg-info/
 *.tsbuildinfo
 .env
+web/.env*.local
 data/input/*
 data/output/*
 models/*

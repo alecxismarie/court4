@@ -13,3 +13,9 @@ Development and test default to open registration for local workflows. Staging a
 Closed registration returns HTTP 403 with `REGISTRATION_CLOSED`. An address outside the active allowlist returns HTTP 403 with `PRIVATE_ALPHA_NOT_APPROVED`; the list is never returned. The frontend presents both as deliberate alpha states with an existing-user login path.
 
 Registration controls do not affect login, verification resend, forgot/reset password, or existing sessions. No invite entity, shared code, or cross-user access was introduced.
+
+## Verification and first-time onboarding
+
+Registration establishes the normal provisional Court4 session and sends a single-use verification token. First valid consumption of that token now establishes or rotates the normal authenticated session, including when the link opens in another browser. The frontend then opens Dashboard and the persisted first-time name dialog. See [VERIFICATION_SESSION_HANDOFF.md](VERIFICATION_SESSION_HANDOFF.md) for replay, mismatch, cookie, redirect, and onboarding rules.
+
+Legacy `/login` and `/register` URLs remain compatible redirect routes. They lead to the approved landing-page Log In or Sign Up tab and preserve only validated internal `next` destinations.

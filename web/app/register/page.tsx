@@ -1,5 +1,12 @@
-import { AuthForm } from "@/components/auth-form";
+import { redirect } from "next/navigation";
 
-export default function RegisterPage() {
-  return <AuthForm mode="register" />;
+import { landingAuthHref } from "@/lib/auth-redirect";
+
+export default async function RegisterPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string | string[] }>;
+}) {
+  const params = await searchParams;
+  redirect(landingAuthHref("signup", typeof params.next === "string" ? params.next : null));
 }

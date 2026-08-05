@@ -1,8 +1,10 @@
 import { z } from "zod";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   Court4ApiError,
+  EMAIL_VERIFICATION_REQUIRED_EVENT,
+  authenticatedFetch,
   apiErrorFromResponse,
   getArtifactUrl,
   normalizeApiError,
@@ -55,6 +57,24 @@ describe("API error normalization", () => {
       message: "Inspection is still running.",
       status: 409,
     });
+  });
+
+  it("globally signals the mandatory activation route for typed verification errors", async () => {
+    const listener = vi.fn();
+    window.addEventListener(EMAIL_VERIFICATION_REQUIRED_EVENT, listener);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(
+      JSON.stringify({
+        error: {
+          code: "email_verification_required",
+          message: "Verify your email to activate your Court4 account.",
+        },
+      }),
+      { headers: { "content-type": "application/json" }, status: 403 },
+    ));
+
+    await authenticatedFetch("http://localhost:8000/api/v1/analyses");
+    expect(listener).toHaveBeenCalledOnce();
+    window.removeEventListener(EMAIL_VERIFICATION_REQUIRED_EVENT, listener);
   });
 
   it("builds encoded artifact URLs from the configured API URL", () => {

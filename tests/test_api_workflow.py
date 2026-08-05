@@ -96,6 +96,23 @@ def test_upload_rejects_oversized_file(
 
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "upload_too_large"
+    assert not (_output_dir / "_uploads").exists()
+
+
+def test_upload_rejects_empty_file_without_leaving_staging_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, output_dir = _api_client(tmp_path, monkeypatch)
+
+    response = client.post(
+        "/api/v1/analyses",
+        files={"file": ("empty.mp4", b"", "video/mp4")},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "empty_upload"
+    assert not (output_dir / "_uploads").exists()
 
 
 def test_exact_duplicate_renamed_retry_and_analyze_again(
@@ -136,6 +153,7 @@ def test_exact_duplicate_renamed_retry_and_analyze_again(
     assert {
         path.name for path in output_dir.iterdir() if path.is_dir() and path.name != "_uploads"
     } == {first_analysis_id}
+    assert not (output_dir / "_uploads").exists()
 
     reanalyzed = _upload_video(
         client,

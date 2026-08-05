@@ -28,6 +28,11 @@ class JobTooLargeError(JobWorkflowError):
         super().__init__(code="upload_too_large", message=message, status_code=413)
 
 
+class JobStorageCapacityError(JobWorkflowError):
+    def __init__(self, code: str, message: str, *, status_code: int = 507) -> None:
+        super().__init__(code=code, message=message, status_code=status_code)
+
+
 class JobInternalError(JobWorkflowError):
     def __init__(self, message: str = "Unexpected analysis workflow failure.") -> None:
         super().__init__(code="internal_error", message=message, status_code=500)

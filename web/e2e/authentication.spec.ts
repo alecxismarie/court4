@@ -8,15 +8,15 @@ test("verified private-alpha session restores and can log out", async ({ page, a
   await page.goto("/settings");
   await expect(page.getByText(alphaUser.email)).toBeVisible();
   await page.getByRole("button", { name: /log out/i }).click();
-  await expect(page).toHaveURL(/\/login\?next=%2Fsettings$/);
+  await expect(page).toHaveURL(/\/?\?auth=login&next=%2Fsettings$/);
   await page.goto("/dashboard");
-  await expect(page).toHaveURL(/\/login\?next=%2Fdashboard$/);
+  await expect(page).toHaveURL(/\/?\?auth=login&next=%2Fdashboard$/);
 });
 
 test("unauthenticated protected navigation is rejected", async ({ browser }) => {
   const context = await browser.newContext();
   const page = await context.newPage();
   await page.goto("/dashboard");
-  await expect(page).toHaveURL(/\/login\?next=%2Fdashboard/);
+  await expect(page).toHaveURL(/\/?\?auth=login&next=%2Fdashboard/);
   await context.close();
 });

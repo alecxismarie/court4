@@ -7,6 +7,19 @@ const port = Number.parseInt(process.env.COURT4_E2E_PORT ?? "3002", 10);
 const url = `http://${host}:${port}`;
 const nextBin = "./node_modules/next/dist/bin/next";
 const playwrightBin = "./node_modules/@playwright/test/cli.js";
+const apiUrl = process.env.COURT4_E2E_API_URL;
+const expectedDatabaseName = process.env.COURT4_E2E_DATABASE_NAME;
+const isolationConfirmation = process.env.COURT4_E2E_ISOLATION_CONFIRMATION;
+
+if (!apiUrl || !expectedDatabaseName || isolationConfirmation !== "court4-e2e-isolated") {
+  throw new Error(
+    "E2E safety refusal: set COURT4_E2E_API_URL, COURT4_E2E_DATABASE_NAME, and " +
+      "COURT4_E2E_ISOLATION_CONFIRMATION=court4-e2e-isolated explicitly.",
+  );
+}
+if (!/^court4_(test|e2e|validation)(?:_|$)/.test(expectedDatabaseName)) {
+  throw new Error("E2E safety refusal: database name is not an approved disposable identity.");
+}
 
 const server = spawn(
   process.execPath,
@@ -15,8 +28,7 @@ const server = spawn(
     env: {
       ...process.env,
       COURT4_NEXT_DIST_DIR: process.env.COURT4_NEXT_DIST_DIR ?? ".next-e2e",
-      NEXT_PUBLIC_COURT4_API_URL:
-        process.env.NEXT_PUBLIC_COURT4_API_URL ?? "http://127.0.0.1:8000",
+      NEXT_PUBLIC_COURT4_API_URL: apiUrl,
       NEXT_PUBLIC_COURT4_MAX_UPLOAD_BYTES:
         process.env.NEXT_PUBLIC_COURT4_MAX_UPLOAD_BYTES ?? "1073741824",
       NEXT_PUBLIC_COURT4_SUPPORTED_VIDEO_EXTENSIONS:
@@ -64,8 +76,38 @@ function waitForServer(timeoutMs = 60_000) {
   });
 }
 
+function verifyApiIsolation(timeoutMs = 10_000) {
+  return new Promise((resolve, reject) => {
+    const request = http.get(
+      new URL("/api/v1/internal/test-database-identity", apiUrl),
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          body += chunk;
+        });
+        response.on("end", () => {
+          try {
+            const payload = JSON.parse(body);
+            if (response.statusCode !== 200 || payload.database_name !== expectedDatabaseName) {
+              reject(new Error("E2E safety refusal: API database identity does not match."));
+              return;
+            }
+            resolve();
+          } catch {
+            reject(new Error("E2E safety refusal: API identity response is invalid."));
+          }
+        });
+      },
+    );
+    request.on("error", () => reject(new Error("E2E safety refusal: isolated API unavailable.")));
+    request.setTimeout(timeoutMs, () => request.destroy(new Error("E2E API preflight timed out.")));
+  });
+}
+
 function runPlaywright() {
-  const child = spawn(process.execPath, [playwrightBin, "test"], {
+  const requestedTests = process.argv.slice(2);
+  const child = spawn(process.execPath, [playwrightBin, "test", ...requestedTests], {
     env: {
       ...process.env,
       COURT4_E2E_EXTERNAL_SERVER: "1",
@@ -99,6 +141,7 @@ async function main() {
   let exitCode = 1;
 
   try {
+    await verifyApiIsolation();
     await waitForServer();
     exitCode = await runPlaywright();
   } catch (error) {

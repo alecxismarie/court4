@@ -10,8 +10,12 @@ export function isPlayerOnboardingPending(userId: string): boolean {
   return safeLocalStorage()?.getItem(pendingStorageKey(userId)) === "true";
 }
 
-export function completePlayerOnboarding(userId: string): void {
+export function clearPlayerOnboardingPending(userId: string): void {
   safeLocalStorage()?.removeItem(pendingStorageKey(userId));
+}
+
+export function completePlayerOnboarding(userId: string): void {
+  clearPlayerOnboardingPending(userId);
   safeSessionStorage()?.setItem(firstWelcomeStorageKey(userId), "true");
 }
 

@@ -7,16 +7,25 @@ import { isPlayerOnboardingPending } from "@/lib/profile-onboarding";
 
 const registerRequest = vi.hoisted(() => vi.fn());
 const restoreSession = vi.hoisted(() => vi.fn());
+const verifyEmailRequest = vi.hoisted(() => vi.fn());
+const completeOnboardingRequest = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/api/auth", () => ({
   login: vi.fn(),
   logout: vi.fn(),
   register: registerRequest,
   restoreSession,
+  verifyEmail: verifyEmailRequest,
+  completeOnboarding: completeOnboardingRequest,
 }));
 
 vi.mock("@/lib/api/client", () => ({
+  EMAIL_VERIFICATION_REQUIRED_EVENT: "court4:email-verification-required",
   setAccessToken: vi.fn(),
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn() }),
 }));
 
 const newUser = {
@@ -28,6 +37,7 @@ const newUser = {
   last_login_at: null,
   email_verified_at: null,
   password_changed_at: null,
+  display_name: null,
 };
 
 describe("auth context registration", () => {
@@ -35,6 +45,29 @@ describe("auth context registration", () => {
     window.localStorage.clear();
     restoreSession.mockReset().mockRejectedValue(new Error("No session"));
     registerRequest.mockReset().mockResolvedValue({ user: newUser });
+    verifyEmailRequest.mockReset().mockResolvedValue({
+      user: { ...newUser, email_verified_at: "2026-08-01T00:10:00Z" },
+      message: "Your email has been verified.",
+    });
+    completeOnboardingRequest.mockReset().mockResolvedValue({
+      ...newUser,
+      email_verified_at: "2026-08-01T00:10:00Z",
+      display_name: "Alexis",
+    });
+  });
+
+  it("accepts verification session state and persists completed onboarding", async () => {
+    const user = userEvent.setup();
+    render(
+      <AuthProvider>
+        <VerificationProbe />
+      </AuthProvider>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Verify test player" }));
+    expect(await screen.findByText("Verified new@example.com")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Complete onboarding" }));
+    expect(await screen.findByText("Verified Alexis")).toBeInTheDocument();
   });
 
   it("marks a newly registered account for one-time player onboarding", async () => {
@@ -66,5 +99,20 @@ function RegistrationProbe() {
     >
       Register test player
     </button>
+  );
+}
+
+function VerificationProbe() {
+  const auth = useAuth();
+  return (
+    <div>
+      <p>{auth.user ? `Verified ${auth.user.display_name ?? auth.user.email}` : "Signed out"}</p>
+      <button type="button" onClick={() => void auth.verifyEmail("single-use-token")}>
+        Verify test player
+      </button>
+      <button type="button" onClick={() => void auth.completeOnboarding("Alexis")}>
+        Complete onboarding
+      </button>
+    </div>
   );
 }

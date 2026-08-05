@@ -10,6 +10,10 @@ pytest.importorskip("sqlalchemy")
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.persistence.database_safety import (
+    ExpectedDatabaseIdentity,
+    assert_destructive_database_operation,
+)
 from spike.persistence.db import create_session_factory, create_spike_engine
 from spike.persistence.service import PersistenceSpikeService
 
@@ -36,6 +40,22 @@ def spike_engine() -> Iterator[Engine]:
 @pytest.fixture
 def session_factory(spike_engine: Engine) -> Iterator[sessionmaker[Session]]:
     factory = create_session_factory(spike_engine)
+    database_url = os.environ["COURT4_SPIKE_DATABASE_URL"]
+    assert_destructive_database_operation(
+        spike_engine,
+        database_url=database_url,
+        environment=os.getenv("PICKLEBALL_AI_ENVIRONMENT"),
+        allow_destructive_operations=(
+            os.getenv("PICKLEBALL_AI_ALLOW_DESTRUCTIVE_DATABASE_OPERATIONS", "false").casefold()
+            == "true"
+        ),
+        expected=ExpectedDatabaseIdentity(
+            prefix="court4_spike",
+            host=os.getenv("COURT4_SPIKE_EXPECTED_DATABASE_HOST", "127.0.0.1"),
+            username="court4_spike",
+        ),
+        operation="spike fixture cleanup",
+    )
     with spike_engine.begin() as connection:
         connection.execute(text(f"TRUNCATE TABLE {', '.join(_TABLES)} RESTART IDENTITY CASCADE"))
     yield factory

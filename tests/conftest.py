@@ -7,14 +7,26 @@ import cv2
 import numpy as np
 import pytest
 
-os.environ.setdefault("PICKLEBALL_AI_ENVIRONMENT", "test")
+os.environ["PICKLEBALL_AI_ENVIRONMENT"] = "test"
+# Fail independently of a developer's root .env: automated tests use only the
+# isolated in-memory development sink unless a single test opts in explicitly.
+os.environ.setdefault("EMAIL_PROVIDER", "development")
+os.environ.setdefault("ALLOW_EXTERNAL_EMAIL_IN_TESTS", "false")
+os.environ.setdefault("PICKLEBALL_AI_AUTH_DEVELOPMENT_EMAIL_SINK_ENABLED", "true")
 os.environ.setdefault("PICKLEBALL_AI_PERSISTENCE_BACKEND", "postgresql")
-os.environ.setdefault(
-    "PICKLEBALL_AI_DATABASE_URL",
-    os.environ.get(
-        "COURT4_TEST_DATABASE_URL",
-        "postgresql+psycopg://court4_test:court4_test_local_only@127.0.0.1:55434/court4_test",
-    ),
+os.environ["PICKLEBALL_AI_DATABASE_URL"] = os.environ.get(
+    "COURT4_TEST_DATABASE_URL",
+    "postgresql+psycopg://court4_test:court4_test_local_only@127.0.0.1:55434/court4_test",
+)
+os.environ["PICKLEBALL_AI_ALLOW_DESTRUCTIVE_DATABASE_OPERATIONS"] = "true"
+os.environ["PICKLEBALL_AI_EXPECTED_TEST_DATABASE_PREFIX"] = os.environ.get(
+    "COURT4_TEST_EXPECTED_DATABASE_PREFIX", "court4_test"
+)
+os.environ["PICKLEBALL_AI_EXPECTED_TEST_DATABASE_HOST"] = os.environ.get(
+    "COURT4_TEST_EXPECTED_DATABASE_HOST", "127.0.0.1"
+)
+os.environ["PICKLEBALL_AI_EXPECTED_TEST_DATABASE_USER"] = os.environ.get(
+    "COURT4_TEST_EXPECTED_DATABASE_USER", "court4_test"
 )
 os.environ.setdefault("PICKLEBALL_AI_BOOTSTRAP_USER_ENABLED", "true")
 os.environ.setdefault("PICKLEBALL_AI_BOOTSTRAP_USER_ID", "00000000-0000-4000-8000-000000000002")
@@ -25,6 +37,23 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     del session
     from alembic import command
     from alembic.config import Config
+
+    from app.config import get_settings
+    from app.persistence.database_safety import (
+        ExpectedDatabaseIdentity,
+        assert_isolated_test_database_url,
+    )
+
+    settings = get_settings()
+    assert_isolated_test_database_url(
+        settings.database_url,
+        environment=settings.environment,
+        expected=ExpectedDatabaseIdentity(
+            prefix=settings.expected_test_database_prefix,
+            host=settings.expected_test_database_host,
+            username=settings.expected_test_database_user,
+        ),
+    )
 
     command.upgrade(Config("alembic.ini"), "head")
 
@@ -37,9 +66,26 @@ def clean_production_database() -> None:
     from app.config import get_settings
     from app.email.dependencies import get_development_email_sink
     from app.persistence.bootstrap import configured_bootstrap_identity
+    from app.persistence.database_safety import (
+        ExpectedDatabaseIdentity,
+        assert_destructive_database_operation,
+    )
     from app.persistence.runtime import get_persistence
 
     runtime = get_persistence()
+    settings = get_settings()
+    assert_destructive_database_operation(
+        runtime.engine,
+        database_url=settings.database_url,
+        environment=settings.environment,
+        allow_destructive_operations=settings.allow_destructive_database_operations,
+        expected=ExpectedDatabaseIdentity(
+            prefix=settings.expected_test_database_prefix,
+            host=settings.expected_test_database_host,
+            username=settings.expected_test_database_user,
+        ),
+        operation="pytest fixture cleanup",
+    )
     with runtime.engine.begin() as connection:
         connection.execute(
             text(
@@ -49,7 +95,7 @@ def clean_production_database() -> None:
                 "analyses, uploaded_videos, users RESTART IDENTITY CASCADE"
             )
         )
-    identity = configured_bootstrap_identity(get_settings())
+    identity = configured_bootstrap_identity(settings)
     runtime.service.ensure_bootstrap_user(identity)
     auth_rate_limiter.reset()
     get_development_email_sink().clear()

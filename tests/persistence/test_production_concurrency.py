@@ -248,9 +248,10 @@ def test_i_development_bootstrap_fail_closed_matrix() -> None:
                 "production-test-secret-value-at-least-32-characters"
             ),
             auth_frontend_base_url="https://court4.example",
+            frontend_allowed_origins=("https://court4.example",),
             auth_email_backend="resend",
             resend_api_key=SecretStr("re_test_configuration_only"),
-            email_from_address="alpha@court4.example",
+            email_from_address="no-reply@lexora.ltd",
             registration_enabled=False,
             auth_development_email_sink_enabled=False,
             auth_cookie_secure=True,

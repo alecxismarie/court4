@@ -34,11 +34,31 @@ def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
+def get_optional_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    auth: Annotated[AuthenticationService, Depends(get_authentication_service)],
+) -> User | None:
+    if credentials is None:
+        return None
+    if credentials.scheme.lower() != "bearer":
+        raise AuthenticationError("unauthorized", "Authentication is required.")
+    return auth.resolve_access_token(credentials.credentials)
+
+
+OptionalCurrentUser = Annotated[User | None, Depends(get_optional_current_user)]
+
+
 def require_verified_user(user: CurrentUser) -> User:
+    # get_current_user already enforces this for bearer-token requests. Keep the
+    # status check here as part of the verified-user contract so direct
+    # dependency overrides cannot accidentally turn a disabled account into a
+    # verified product user.
+    if user.account_status != "active":
+        raise AuthenticationError("unauthorized", "Authentication is required.")
     if user.email_verified_at is None:
         raise AuthenticationError(
             "email_verification_required",
-            "Verify your email before starting or re-running an analysis.",
+            "Verify your email to activate your Court4 account.",
             status_code=403,
         )
     return user

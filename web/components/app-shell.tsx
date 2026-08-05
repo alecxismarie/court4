@@ -51,6 +51,12 @@ export function AppShell({ children }: { children: ReactNode }) {
     return children;
   }
 
+  // AuthGate owns redirects, while AppShell ensures private navigation never
+  // appears during session restoration or for a provisional account.
+  if (!auth || auth.loading || !auth.user?.email_verified_at) {
+    return children;
+  }
+
   return (
     <div className="min-h-screen bg-[#eef4f0]">
       <header className="border-b border-court-line bg-white md:hidden">
@@ -96,8 +102,8 @@ export function AppShell({ children }: { children: ReactNode }) {
               <Image
                 src="/brand/court4-logo.png"
                 alt="Court4 - Know Your Game"
-                width={512}
-                height={512}
+                width={1080}
+                height={1350}
                 className="h-auto w-52 object-contain"
                 priority
               />

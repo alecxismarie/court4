@@ -1,15 +1,32 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import text
 
 from app.config import get_settings
 from app.config.settings import Settings
+from app.persistence.runtime import get_persistence
 from app.schemas.calibration_readiness import CalibrationReadinessSummary
+from app.schemas.health import TestDatabaseIdentityResponse
 from app.services.calibration_readiness import CalibrationReadinessService
 
 router = APIRouter(prefix="/internal", tags=["internal-development"])
 
 SettingsDependency = Annotated[Settings, Depends(get_settings)]
+
+
+@router.get(
+    "/test-database-identity",
+    response_model=TestDatabaseIdentityResponse,
+    include_in_schema=False,
+)
+def get_test_database_identity(settings: SettingsDependency) -> TestDatabaseIdentityResponse:
+    """Allow an E2E runner to prove its API is connected to the expected test database."""
+    if settings.environment != "test":
+        raise HTTPException(status_code=404, detail="Resource was not found.")
+    with get_persistence().engine.connect() as connection:
+        database_name = connection.execute(text("SELECT current_database()")).scalar_one()
+    return TestDatabaseIdentityResponse(database_name=database_name)
 
 
 def get_readiness_service(settings: SettingsDependency) -> CalibrationReadinessService:

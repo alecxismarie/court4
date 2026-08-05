@@ -48,6 +48,7 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    display_name: Mapped[str | None] = mapped_column(String(36))
 
 
 class RefreshSession(Base):

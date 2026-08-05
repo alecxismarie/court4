@@ -4,6 +4,7 @@ from app.services.jobs.exceptions import (
     JobConflictError,
     JobNotFoundError,
     JobRequestError,
+    JobStorageCapacityError,
     JobTooLargeError,
     JobWorkflowError,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "JobConflictError",
     "JobNotFoundError",
     "JobRequestError",
+    "JobStorageCapacityError",
     "JobTooLargeError",
     "JobWorkflowError",
 ]

@@ -3,7 +3,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile
 from fastapi.responses import FileResponse
 
-from app.auth import CurrentUser, VerifiedUser
+from app.auth import VerifiedUser
 from app.config import get_settings
 from app.config.settings import Settings
 from app.schemas.active_play import ActivePlayReport
@@ -42,6 +42,8 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     404: {"model": ApiErrorResponse, "description": "Analysis or artifact not found."},
     409: {"model": ApiErrorResponse, "description": "Workflow step is not ready."},
     413: {"model": ApiErrorResponse, "description": "Upload exceeds configured size limit."},
+    429: {"model": ApiErrorResponse, "description": "Upload capacity is currently busy."},
+    507: {"model": ApiErrorResponse, "description": "Storage capacity is unavailable."},
 }
 
 
@@ -50,7 +52,7 @@ VideoUploadFile = Annotated[UploadFile, File(description="Pickleball match video
 
 
 def get_workflow_service(
-    settings: SettingsDependency, user: CurrentUser
+    settings: SettingsDependency, user: VerifiedUser
 ) -> AnalysisWorkflowService:
     return AnalysisWorkflowService(settings=settings, owner_user_id=user.id)
 
@@ -94,7 +96,6 @@ async def upload_video(
     file: VideoUploadFile,
     workflow: WorkflowDependency,
     response: Response,
-    _verified_user: VerifiedUser,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     reanalyze: Annotated[bool, Form()] = False,
 ) -> UploadAnalysisResponse:

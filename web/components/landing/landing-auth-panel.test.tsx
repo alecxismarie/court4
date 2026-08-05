@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   LandingAuthPanel,
-  safeLandingDestination,
 } from "@/components/landing/landing-auth-panel";
+import { safeLandingDestination } from "@/lib/auth-redirect";
 
 const replace = vi.hoisted(() => vi.fn());
 const login = vi.hoisted(() => vi.fn());
@@ -24,9 +24,20 @@ vi.mock("@/lib/auth-context", () => ({
 describe("landing authentication panel", () => {
   beforeEach(() => {
     replace.mockReset();
-    login.mockReset().mockResolvedValue(undefined);
-    register.mockReset().mockResolvedValue(undefined);
+    login.mockReset().mockResolvedValue({ email_verified_at: "2026-08-04T00:00:00Z" });
+    register.mockReset().mockResolvedValue({ email_verified_at: null });
     searchParams.delete("next");
+    searchParams.delete("auth");
+  });
+
+  it("routes an existing unverified login only to account activation", async () => {
+    login.mockResolvedValueOnce({ email_verified_at: null });
+    const user = userEvent.setup();
+    render(<LandingAuthPanel />);
+    await user.type(screen.getByLabelText(/^email$/i), "pending@example.com");
+    await user.type(screen.getByLabelText(/^password$/i), "correct horse battery");
+    await user.click(screen.getByRole("button", { name: /^log in$/i }));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/verification-pending"));
   });
 
   it("logs in with the existing auth context and routes to the dashboard", async () => {
@@ -58,7 +69,18 @@ describe("landing authentication panel", () => {
     });
   });
 
-  it("supports keyboard tab switching and labels planned social providers honestly", async () => {
+  it("opens the requested Sign Up tab from the consolidated auth route", () => {
+    searchParams.set("auth", "signup");
+    render(<LandingAuthPanel />);
+
+    expect(screen.getByRole("tab", { name: /sign up/i })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.getByRole("heading", { name: /create your account/i })).toBeVisible();
+  });
+
+  it("supports keyboard tab switching and renders crisp social provider controls", async () => {
     const user = userEvent.setup();
     render(<LandingAuthPanel />);
 
@@ -71,8 +93,11 @@ describe("landing authentication panel", () => {
 
     await user.click(screen.getByRole("button", { name: /continue with google/i }));
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Google sign-in is coming soon",
+      "Google sign-in is not available",
     );
+    expect(screen.getByRole("button", { name: "Continue with Google" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Continue with Apple" })).toBeVisible();
+    expect(screen.queryByText(/coming soon/i)).not.toBeInTheDocument();
     expect(login).not.toHaveBeenCalled();
   });
 });

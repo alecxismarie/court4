@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { PublicLandingPage } from "@/components/landing/public-landing-page";
 import {
   journeySteps,
-  landingStatistics,
+  landingBenefits,
 } from "@/lib/landing-content";
 
 vi.mock("@/components/landing/landing-auth-panel", () => ({
@@ -36,12 +36,13 @@ describe("public Court4 landing page", () => {
     ]);
   });
 
-  it("uses truthful alpha status and current upload-first journey copy", () => {
+  it("uses truthful player benefits and current upload-first journey copy", () => {
     render(<PublicLandingPage />);
 
-    for (const statistic of landingStatistics) {
-      expect(screen.getByText(statistic.value)).toBeInTheDocument();
-      expect(screen.getByText(statistic.label)).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Why players use Court4" })).toBeInTheDocument();
+    for (const benefit of landingBenefits) {
+      expect(screen.getByRole("heading", { name: benefit.title })).toBeInTheDocument();
+      expect(screen.getByText(benefit.description)).toBeInTheDocument();
     }
     for (const step of journeySteps) {
       expect(screen.getByRole("heading", { name: `${step.number}. ${step.title}` })).toBeInTheDocument();

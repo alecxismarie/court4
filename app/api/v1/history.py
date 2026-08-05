@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from app.auth import CurrentUser
+from app.auth import VerifiedUser
 from app.config import get_settings
 from app.config.settings import Settings
 from app.schemas.history import PlayHistoryResponse
@@ -15,7 +15,7 @@ SettingsDependency = Annotated[Settings, Depends(get_settings)]
 
 
 def get_history_service(
-    settings: SettingsDependency, user: CurrentUser
+    settings: SettingsDependency, user: VerifiedUser
 ) -> HistoryProjectionService:
     repository = AnalysisJobRepository(
         output_dir=settings.analysis_output_dir,

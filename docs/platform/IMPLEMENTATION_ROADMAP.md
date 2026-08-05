@@ -137,6 +137,8 @@ production; production object metadata remains authoritative.
 
 ## Phase 1.8E — Deployment and Operations
 
+Pre-deployment checkpoint (2026-08-05): **blocked**. Automated backend/frontend gates, PostgreSQL migration/restore, exact-origin controls, secure cookies, private route isolation, and database/storage readiness probes pass. Remaining entry gates are real Brevo delivery/link evidence, a reviewed clean Git checkpoint, a source-current hardened Docker build with adequate disk reserve, local-storage reconciliation/capacity controls, and a real sample-video CV workflow. No deployment or Phase 1.8D object-storage work was started. See `PRE_DEPLOYMENT_READINESS_AUDIT.md` at the repository root.
+
 Dependencies: 1.8B–D; patched dependencies; hosting and incident owners.
 
 Scope:
@@ -159,6 +161,16 @@ approved.
 
 Migrations: operational indexes/config only where measured. Rollback: previous
 compatible image, forward-compatible schema, documented secret/config rollback.
+
+### Phase 1.8D0 closeout status (2026-08-05)
+
+Database isolation, guarded restore/migration, storage capacity/quarantine controls,
+and one unmocked real-video browser workflow are **CLOSED**. Deployment is **NOT
+READY**: Brevo inbox/link proof, a reviewed release checkpoint, disposition of
+unregistered local files, 20 GiB build reserve and a source-current hardened image,
+plus provisioned HTTPS infrastructure/secrets/monitoring are **OPEN**. The full Phase
+1.8D object-storage lifecycle remains **DEFERRED**. See
+`PHASE_1_8D0_DEPLOYMENT_BLOCKER_CLOSEOUT.md`.
 
 ## Private Alpha
 

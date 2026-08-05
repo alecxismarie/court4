@@ -3,6 +3,7 @@ import json
 import logging
 import re
 import shutil
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from starlette.datastructures import UploadFile
 
 from app.config.settings import Settings
 from app.persistence.errors import IdempotencyConflictError, OperationInProgressError
+from app.persistence.storage import StorageCapacityError
 from app.schemas.active_play import ActivePlayReport
 from app.schemas.analytics import AnalyticsReport
 from app.schemas.calibration import CourtCalibrationReport
@@ -76,6 +78,7 @@ from app.services.jobs.exceptions import (
     JobConflictError,
     JobNotFoundError,
     JobRequestError,
+    JobStorageCapacityError,
     JobTooLargeError,
 )
 from app.services.jobs.repository import AnalysisJobRepository
@@ -131,6 +134,49 @@ class AnalysisWorkflowService:
         )
 
     async def create_analysis(
+        self,
+        upload: UploadFile,
+        *,
+        idempotency_key: str | None = None,
+        reanalyze: bool = False,
+    ) -> UploadAnalysisResponse:
+        reservation_bytes = int(
+            self.settings.max_upload_size_bytes
+            * self.settings.storage_upload_reservation_multiplier
+        )
+        try:
+            reservation, capacity = self.repository.storage.reserve_capacity(
+                requested_bytes=reservation_bytes,
+                warning_free_bytes=self.settings.storage_warning_free_bytes,
+                hard_stop_free_bytes=self.settings.storage_hard_stop_free_bytes,
+                max_active_uploads=self.settings.storage_max_active_uploads,
+            )
+        except StorageCapacityError as exc:
+            if exc.reason == "active_limit":
+                raise JobStorageCapacityError(
+                    "upload_capacity_busy",
+                    "Another upload is already active. Try again after it completes.",
+                    status_code=429,
+                ) from exc
+            raise JobStorageCapacityError(
+                "storage_capacity_unavailable",
+                "The upload cannot be accepted because storage capacity is below the safe limit.",
+            ) from exc
+        if capacity.state == "warning":
+            logger.warning(
+                "api_upload_storage_capacity_warning",
+                extra={"free_bytes": capacity.free_bytes},
+            )
+        try:
+            return await self._create_analysis_with_reservation(
+                upload,
+                idempotency_key=idempotency_key,
+                reanalyze=reanalyze,
+            )
+        finally:
+            reservation.release()
+
+    async def _create_analysis_with_reservation(
         self,
         upload: UploadFile,
         *,
@@ -897,12 +943,12 @@ class AnalysisWorkflowService:
                         raise JobTooLargeError("Uploaded video exceeds the configured size limit.")
                     digest.update(chunk)
                     output.write(chunk)
-        except JobTooLargeError:
-            if staging_path.exists():
-                staging_path.unlink()
+        except Exception:
+            self._cleanup_staging_dir(analysis_id)
             raise
 
         if bytes_written == 0:
+            self._cleanup_staging_dir(analysis_id)
             raise JobRequestError("empty_upload", "Uploaded video cannot be empty.")
         return staging_path, digest.hexdigest(), bytes_written
 
@@ -940,10 +986,16 @@ class AnalysisWorkflowService:
         if not staging_dir.exists():
             return
         try:
-            staging_dir.rmdir()
-            staging_dir.parent.rmdir()
+            shutil.rmtree(staging_dir)
         except OSError:
-            logger.debug("api_upload_staging_cleanup_skipped", extra={"analysis_id": analysis_id})
+            logger.warning(
+                "api_upload_staging_cleanup_failed",
+                extra={"analysis_id": analysis_id},
+                exc_info=True,
+            )
+            return
+        with suppress(OSError):
+            staging_dir.parent.rmdir()
 
     def _build_tracking_backend(
         self, analysis_id: str, request: TrackingRequest

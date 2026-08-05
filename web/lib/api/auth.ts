@@ -18,6 +18,7 @@ export const userSchema = z.object({
   last_login_at: z.string().nullable(),
   email_verified_at: z.string().nullable(),
   password_changed_at: z.string().nullable(),
+  display_name: z.string().nullable(),
 });
 
 export const authResponseSchema = z.object({
@@ -34,6 +35,10 @@ const messageResponseSchema = z.object({ message: z.string() });
 const verificationResponseSchema = messageResponseSchema.extend({
   verified: z.boolean(),
   user: userSchema.nullable().optional(),
+});
+const verificationAuthResponseSchema = authResponseSchema.extend({
+  verified: z.literal(true),
+  message: z.string(),
 });
 const sessionSchema = z.object({
   id: z.string().uuid(),
@@ -52,6 +57,7 @@ const sessionMutationSchema = z.object({
 
 export type AuthSession = z.infer<typeof sessionSchema>;
 export type VerificationResponse = z.infer<typeof verificationResponseSchema>;
+export type VerificationAuthResponse = z.infer<typeof verificationAuthResponseSchema>;
 
 export async function register(email: string, password: string): Promise<AuthResponse> {
   return credentialsRequest("/api/v1/auth/register", email, password);
@@ -73,9 +79,20 @@ export async function resendVerification(): Promise<VerificationResponse> {
   );
 }
 
-export async function verifyEmail(token: string): Promise<VerificationResponse> {
-  return publicJson("/api/v1/auth/verify-email", verificationResponseSchema, {
-    token,
+export async function verifyEmail(token: string): Promise<VerificationAuthResponse> {
+  const result = await authenticatedJson(
+    "/api/v1/auth/verify-email",
+    verificationAuthResponseSchema,
+    { method: "POST", body: JSON.stringify({ token }) },
+  );
+  setAccessToken(result.access_token);
+  return result;
+}
+
+export async function completeOnboarding(displayName: string): Promise<AuthUser> {
+  return authenticatedJson("/api/v1/auth/onboarding", userSchema, {
+    method: "POST",
+    body: JSON.stringify({ display_name: displayName }),
   });
 }
 

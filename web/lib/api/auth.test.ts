@@ -28,6 +28,7 @@ const user = {
   last_login_at: null,
   email_verified_at: null,
   password_changed_at: null,
+  display_name: null,
 };
 
 const authPayload = {
@@ -42,6 +43,7 @@ describe("authentication API client", () => {
     vi.restoreAllMocks();
     setAccessToken(null);
     window.localStorage.clear();
+    window.sessionStorage.clear();
   });
 
   it("registers with credentialed cookies and stores access only in memory", async () => {
@@ -150,7 +152,11 @@ describe("authentication API client", () => {
   it("supports verification and generic password recovery without persisting tokens", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(
-        jsonResponse({ verified: true, message: "Your email has been verified.", user }),
+        jsonResponse({
+          ...authPayload,
+          verified: true,
+          message: "Your email has been verified.",
+        }),
       )
       .mockResolvedValueOnce(
         jsonResponse({
@@ -164,6 +170,7 @@ describe("authentication API client", () => {
       );
 
     await expect(verifyEmail("opaque-token")).resolves.toMatchObject({ verified: true });
+    expect(getAccessToken()).toBe("memory-only-token");
     await expect(forgotPassword("player@example.com")).resolves.toContain(
       "If an active account exists",
     );
@@ -172,6 +179,7 @@ describe("authentication API client", () => {
     );
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "POST" });
     expect(window.localStorage).toHaveLength(0);
+    expect(window.sessionStorage).toHaveLength(0);
   });
 
   it("changes password, lists sessions, and preserves the current session", async () => {

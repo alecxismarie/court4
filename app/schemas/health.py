@@ -10,3 +10,8 @@ class HealthResponse(BaseModel):
 class ReadinessResponse(BaseModel):
     status: Literal["ready", "not_ready"]
     database: Literal["ok", "unavailable"]
+    storage: Literal["ok", "unavailable"]
+
+
+class TestDatabaseIdentityResponse(BaseModel):
+    database_name: str

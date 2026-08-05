@@ -1,6 +1,7 @@
 from functools import lru_cache
 
 from app.config import get_settings
+from app.email.brevo import BrevoEmailSender
 from app.email.development import DevelopmentEmailSink
 from app.email.models import EmailSender
 from app.email.resend import ResendEmailSender
@@ -22,6 +23,8 @@ def get_email_sender() -> EmailSender:
         return get_development_email_sink()
     if settings.auth_email_backend == "resend" and settings.resend_api_key is not None:
         return ResendEmailSender(settings)
+    if settings.auth_email_backend == "brevo" and settings.brevo_api_key is not None:
+        return BrevoEmailSender(settings)
     raise RuntimeError("A valid production email provider configuration is required.")
 
 

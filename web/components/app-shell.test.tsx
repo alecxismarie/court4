@@ -7,22 +7,37 @@ import { renderWithQueryClient } from "@/test/render";
 
 const pathnameMock = vi.hoisted(() => vi.fn(() => "/dashboard"));
 const authUserId = vi.hoisted(() => "56ae6283-69ee-44b6-9f19-6bf9dc1d7092");
+const authState = vi.hoisted(() => ({
+  loading: false,
+  user: {
+    id: "56ae6283-69ee-44b6-9f19-6bf9dc1d7092",
+    email: "player@example.com",
+    email_verified_at: "2026-08-04T00:00:00Z" as string | null,
+  },
+  logout: vi.fn(),
+}));
 
 vi.mock("next/navigation", () => ({
   usePathname: pathnameMock,
 }));
 
 vi.mock("@/lib/auth-context", () => ({
-  useOptionalAuth: () => ({
-    user: { id: authUserId, email: "player@example.com" },
-    logout: vi.fn(),
-  }),
+  useOptionalAuth: () => authState,
 }));
 
 describe("app shell navigation", () => {
   beforeEach(() => {
     window.localStorage.clear();
     pathnameMock.mockReturnValue("/dashboard");
+    authState.loading = false;
+    authState.user.email_verified_at = "2026-08-04T00:00:00Z";
+  });
+
+  it("does not expose private navigation to an unverified account", () => {
+    authState.user.email_verified_at = null;
+    renderWithQueryClient(<AppShell>Activation redirect</AppShell>);
+    expect(screen.queryByRole("navigation", { name: "Primary navigation" })).not.toBeInTheDocument();
+    expect(screen.getByText("Activation redirect")).toBeVisible();
   });
 
   it("renders the six player-facing navigation items with expected routes", () => {

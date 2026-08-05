@@ -45,8 +45,12 @@ export function DashboardWorkspace() {
         userId={auth?.user?.id ?? null}
         profile={profile}
         isProfileLoaded={isLoaded}
-        isNewAccount={auth?.user?.last_login_at === null}
+        onboardingRequired={auth?.user?.display_name === null}
         saveProfile={save}
+        completeOnboarding={async (displayName) => {
+          if (!auth) throw new Error("A signed-in account is required to complete onboarding.");
+          await auth.completeOnboarding(displayName);
+        }}
         onComplete={() => setFirstWelcome(true)}
       />
       <section className="rounded-md border border-court-line bg-white p-6 shadow-panel">

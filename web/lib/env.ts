@@ -19,9 +19,24 @@ export function getPublicEnv(): PublicEnv {
   } catch {
     throw new Error("NEXT_PUBLIC_COURT4_API_URL must be a valid URL.");
   }
+  if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+    throw new Error("NEXT_PUBLIC_COURT4_API_URL must use HTTP or HTTPS.");
+  }
+  if (
+    parsedUrl.username ||
+    parsedUrl.password ||
+    parsedUrl.pathname !== "/" ||
+    parsedUrl.search ||
+    parsedUrl.hash
+  ) {
+    throw new Error("NEXT_PUBLIC_COURT4_API_URL must be an origin without a path or credentials.");
+  }
+  if (process.env.NODE_ENV === "production" && parsedUrl.protocol !== "https:") {
+    throw new Error("NEXT_PUBLIC_COURT4_API_URL must use HTTPS in production.");
+  }
 
   return {
-    apiUrl: parsedUrl.toString().replace(/\/$/, ""),
+    apiUrl: parsedUrl.origin,
     maxUploadBytes: parsePositiveInteger(
       process.env.NEXT_PUBLIC_COURT4_MAX_UPLOAD_BYTES,
       DEFAULT_MAX_UPLOAD_BYTES,

@@ -1,26 +1,31 @@
 import {
   BarChart3,
-  ClipboardList,
   CloudUpload,
-  Crosshair,
   LineChart,
   MapPin,
+  ScanSearch,
   Share2,
-  Target,
+  TrendingUp,
   UsersRound,
   Video,
 } from "lucide-react";
 
-export const landingStatistics = [
-  { value: "Private alpha", label: "Controlled access", icon: UsersRound },
-  { value: "Upload-first", label: "Player-provided match video", icon: ClipboardList },
-  { value: "Evidence-led", label: "Movement and positioning insights", icon: Target },
-] as const;
-
-export const heroFeatures = [
-  { label: "Performance Insights", icon: LineChart },
-  { label: "Track Your Progress", icon: Crosshair },
-  { label: "Share & Improve", icon: Share2 },
+export const landingBenefits = [
+  {
+    title: "Understand Your Game",
+    description: "Movement and positioning insights",
+    icon: ScanSearch,
+  },
+  {
+    title: "Track Real Progress",
+    description: "See how your performance changes over time",
+    icon: TrendingUp,
+  },
+  {
+    title: "Share & Learn",
+    description: "Bring match insights into conversations with coaches, partners, and teammates",
+    icon: Share2,
+  },
 ] as const;
 
 export const journeySteps = [

@@ -1,20 +1,25 @@
 # Private-alpha release gate
 
-Status: **NOT READY** as of 2026-08-03.
+Status: **NOT READY** as of 2026-08-05.
 
-| Gate | Result | Release impact |
+| Gate | State | Evidence / required action |
 |---|---|---|
-| Repository checkpoint and generated-file exclusions | Pass | Baseline `bd14ea1`; remediation source/test checkpoint `b8ae24e` |
-| Docker incident understood and safe cleanup complete | Pass with operational follow-up | Internal cache reclaimed; WSL VHD compaction still pending |
-| Production internal/debug route absence | Pass | Calibration, development email, and Active Play debug routes absent and undiscoverable |
-| Registration controlled and fail-closed | Pass | Explicit production choice plus allowlist requirement |
-| Supported frontend framework | Pass | Stable Next.js 16.2.12 and React 19.2.8 |
-| No high production dependency findings | **Fail** | `npm audit --omit=dev` reports 3 high transitive findings |
-| Production email adapter exists | Pass | Resend adapter is provider-neutral and fails safely |
-| Real provider delivery evidence | **Fail** | No approved API key/test domain was available |
-| Backend/static/migration gates | Pass | Ruff, format, Mypy, 224-test suite and Alembic cycle pass |
-| Frontend/build/browser covered suite | Pass | 157 unit tests, build, lint, typecheck and 23 Playwright tests pass |
-| Entire required real browser workflow matrix | **Fail** | Analysis workflow tests still mock analysis APIs; cross-owner, recovery and several account workflows are verified below browser level, not as real E2E |
-| Public claims and legal routes | Pass with counsel follow-up | Claims corrected; draft Privacy and Terms routes work |
+| Database isolation guard | CLOSED | Environment, opt-in, expected host/user/prefix, live identity, E2E handshake |
+| Backup/restore | CLOSED | Checksummed dump, distinct guarded restore, revision/counts/readiness pass |
+| Real browser-to-CV flow | CLOSED | Real 61.2-second sample completed; persistence/histories/cross-user denial pass |
+| Storage capacity guard | CLOSED | 10 GiB warning, 5 GiB hard stop, reservation, typed 429/507 |
+| Storage cleanup command | ACCEPTED FOR STAGING | Dry-run and quarantine-only; completed analyses never auto-deleted |
+| Storage reconciliation | OPEN | Registered rows match; 9,131 unregistered files need owner disposition |
+| Real Brevo delivery/link consumption | NOT TESTED | Approved inbox/HTTPS URLs and manual evidence session required |
+| Repository release checkpoint | OPEN | Mixed intended/unknown work remains; historically tracked `web/.env.local` must be untracked |
+| Current-source backend image | OPEN | 20 GiB reserve not met; existing image stale/root/no healthcheck |
+| Backend engineering gates | CLOSED | 292 tests, Ruff, format, Mypy, migration cycle/check |
+| Frontend engineering gates | CLOSED | 184 tests, lint, typecheck, 22-page production build, production audit 0 |
+| Standard browser suite | CLOSED | 29 pass; real scenario is separately gated and evidenced |
+| Staging infrastructure/secrets/HTTPS | OPEN | Specification/template exist; nothing provisioned and provenance placeholders remain |
+| Full object-storage lifecycle | DEFERRED | Explicitly outside Phase 1.8D0 |
+| Legal-policy approval | DEFERRED | Product/legal owner approval remains outside engineering validation |
 
-Promotion requires: a stable dependency tree with zero high production findings; real Resend verification/reset/security delivery proof from the configured sender domain; and real PostgreSQL/filesystem browser coverage for the outstanding critical workflow matrix with console-error assertions.
+Promotion is prohibited until Brevo evidence, repository review/checkpoint, storage
+disposition, adequate host/build space, a source-current hardened image, and actual
+staging infrastructure/secrets/HTTPS/monitoring are all closed.

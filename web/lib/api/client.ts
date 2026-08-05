@@ -5,6 +5,7 @@ import { apiErrorResponseSchema } from "@/lib/api/types";
 
 let accessToken: string | null = null;
 let refreshPromise: Promise<string> | null = null;
+export const EMAIL_VERIFICATION_REQUIRED_EVENT = "court4:email-verification-required";
 
 export function setAccessToken(token: string | null): void {
   accessToken = token;
@@ -90,6 +91,7 @@ export async function authenticatedFetch(
 ): Promise<Response> {
   const response = await fetch(input, withAuthentication(init));
   if (response.status !== 401 || isAuthEndpoint(input)) {
+    await notifyIfEmailVerificationRequired(response);
     return response;
   }
   try {
@@ -98,7 +100,9 @@ export async function authenticatedFetch(
     accessToken = null;
     return response;
   }
-  return fetch(input, withAuthentication(init));
+  const retried = await fetch(input, withAuthentication(init));
+  await notifyIfEmailVerificationRequired(retried);
+  return retried;
 }
 
 export async function refreshAccessToken(): Promise<string> {
@@ -177,6 +181,19 @@ export async function apiErrorFromResponse(response: Response): Promise<Court4Ap
     });
   } catch {
     return fallback;
+  }
+}
+
+async function notifyIfEmailVerificationRequired(response: Response): Promise<void> {
+  if (response.status !== 403 || typeof window === "undefined") return;
+  try {
+    const payload: unknown = await response.clone().json();
+    const parsed = apiErrorResponseSchema.safeParse(payload);
+    if (parsed.success && parsed.data.error.code.toLowerCase() === "email_verification_required") {
+      window.dispatchEvent(new Event(EMAIL_VERIFICATION_REQUIRED_EVENT));
+    }
+  } catch {
+    // A non-JSON 403 is not Court4's typed verification response.
   }
 }
 

@@ -27,6 +27,7 @@ class UserResponse(BaseModel):
     last_login_at: datetime | None
     email_verified_at: datetime | None
     password_changed_at: datetime | None
+    display_name: str | None
 
 
 class AuthResponse(BaseModel):
@@ -68,6 +69,15 @@ class MessageResponse(BaseModel):
 class VerificationResponse(MessageResponse):
     verified: bool
     user: UserResponse | None = None
+
+
+class VerificationAuthResponse(AuthResponse):
+    verified: bool = True
+    message: str
+
+
+class CompleteOnboardingRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=36)
 
 
 class SessionResponse(BaseModel):

@@ -14,6 +14,7 @@ import {
 export function usePlayerProfile() {
   const auth = useOptionalAuth();
   const userId = auth?.user?.id ?? null;
+  const serverDisplayName = auth?.user?.display_name ?? "";
   const [state, setState] = useState<{
     userId: string | null;
     profile: PlayerProfile;
@@ -24,9 +25,13 @@ export function usePlayerProfile() {
 
   useEffect(() => {
     const loadProfile = () => {
+      const storedProfile = userId ? getPlayerProfile(userId) : emptyPlayerProfile;
       setState({
         userId,
-        profile: userId ? getPlayerProfile(userId) : emptyPlayerProfile,
+        profile:
+          userId && !storedProfile.displayName && serverDisplayName
+            ? { ...storedProfile, displayName: serverDisplayName }
+            : storedProfile,
         isLoaded: true,
       });
     };
@@ -38,7 +43,7 @@ export function usePlayerProfile() {
       window.removeEventListener(PLAYER_PROFILE_UPDATED_EVENT, loadProfile);
       window.removeEventListener("storage", loadProfile);
     };
-  }, [userId]);
+  }, [serverDisplayName, userId]);
 
   const save = (nextProfile: PlayerProfile) => {
     if (!userId) {

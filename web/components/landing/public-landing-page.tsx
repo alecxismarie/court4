@@ -10,9 +10,8 @@ import Image from "next/image";
 
 import {
   footerGroups,
-  heroFeatures,
   journeySteps,
-  landingStatistics,
+  landingBenefits,
   mapPins,
 } from "@/lib/landing-content";
 import { LandingAuthPanel } from "@/components/landing/landing-auth-panel";
@@ -77,15 +76,6 @@ export function PublicLandingPage() {
                 Court4 analyzes your pickleball matches so you can track progress,
                 unlock insights, and become the player you aim to be.
               </p>
-
-              <div className="landing-hero-features" aria-label="Court4 benefits">
-                {heroFeatures.map((feature) => (
-                  <div key={feature.label}>
-                    <feature.icon aria-hidden="true" />
-                    <span>{feature.label}</span>
-                  </div>
-                ))}
-              </div>
             </div>
 
             <div className="landing-auth-placement">
@@ -95,14 +85,14 @@ export function PublicLandingPage() {
         </section>
 
         <div className="landing-content">
-          <section className="landing-statistics" aria-label="Court4 statistics">
-            {landingStatistics.map((statistic) => (
-              <div key={statistic.label}>
-                <statistic.icon aria-hidden="true" />
-                <p>
-                  <strong>{statistic.value}</strong>
-                  <span>{statistic.label}</span>
-                </p>
+          <section className="landing-benefits" aria-label="Why players use Court4">
+            {landingBenefits.map((benefit) => (
+              <div key={benefit.title}>
+                <benefit.icon aria-hidden="true" />
+                <div>
+                  <h2>{benefit.title}</h2>
+                  <p>{benefit.description}</p>
+                </div>
               </div>
             ))}
           </section>
@@ -136,8 +126,8 @@ export function PublicLandingPage() {
             aria-labelledby="insights-heading"
           >
             <Image
-              src="/landing/court4-insights.png"
-              alt="Court4 Match IQ score beside an analyzed pickleball court"
+              src="/landing/court4-insights-rally-v3.png"
+              alt="Court4 Match IQ score beside two players rallying on a marked pickleball court"
               fill
               sizes="(max-width: 767px) 100vw, 70vw"
             />
@@ -163,8 +153,8 @@ export function PublicLandingPage() {
             aria-labelledby="store-heading"
           >
             <Image
-              src="/landing/court4-store.png"
-              alt="Court4 cap, performance shirt, paddle, backpack, and pickleball"
+              src="/landing/apparel-store-navy.png"
+              alt="Court4 performance shirt, cap, paddle, backpack, and pickleball"
               fill
               sizes="(max-width: 767px) 100vw, 70vw"
             />
@@ -173,7 +163,6 @@ export function PublicLandingPage() {
               <h2 id="store-heading">
                 <strong>Court4</strong> apparel &amp; paddle store
               </h2>
-              <p><strong>Coming soon.</strong> Concept preview only; no products are for sale.</p>
               <PlannedFeatureAction message="The Court4 store is planned and is not accepting orders yet.">
                 Shop now
               </PlannedFeatureAction>
@@ -272,8 +261,8 @@ function Court4Brand() {
       <Image
         src="/brand/court4-logo.png"
         alt="Court4"
-        width={1025}
-        height={1367}
+        width={1080}
+        height={1350}
         priority
       />
     </a>

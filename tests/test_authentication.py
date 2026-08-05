@@ -3,16 +3,23 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Lock
 from typing import cast
 from urllib.parse import parse_qs, urlparse
 from uuid import UUID
 
 import pytest
+from fastapi.dependencies.models import Dependant
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from httpx import Response
 from sqlalchemy import func, select
 
+from app.api.v1.analyses import development_router as analyses_development_router
+from app.api.v1.analyses import router as analyses_router
+from app.api.v1.auth import router as auth_router
+from app.api.v1.history import router as history_router
+from app.auth.dependencies import require_verified_user
 from app.auth.errors import AuthenticationError
 from app.auth.rate_limit import auth_rate_limiter
 from app.auth.service import AuthenticationService
@@ -167,6 +174,8 @@ def test_cross_owner_analysis_artifact_and_histories_are_hidden(tmp_path: Path) 
     owner_b = TestClient(create_app())
     a = _register(owner_a, "a@example.com").json()
     b = _register(owner_b, "b@example.com").json()
+    _mark_verified(UUID(a["user"]["id"]))
+    _mark_verified(UUID(b["user"]["id"]))
     owner_a.headers["Authorization"] = f"Bearer {a['access_token']}"
     owner_b.headers["Authorization"] = f"Bearer {b['access_token']}"
     settings = get_settings()
@@ -266,6 +275,7 @@ def test_registration_verification_is_hashed_single_use_and_unlocks_upload(
     verified = client.post("/api/v1/auth/verify-email", json={"token": raw_token})
     assert verified.status_code == 200
     assert verified.json()["verified"] is True
+    assert verified.json()["access_token"]
     assert verified.json()["user"]["email_verified_at"] is not None
     reused = client.post("/api/v1/auth/verify-email", json={"token": raw_token})
     assert reused.status_code == 400
@@ -279,6 +289,208 @@ def test_registration_verification_is_hashed_single_use_and_unlocks_upload(
         files={"file": ("match.mp4", b"not-a-real-video", "video/mp4")},
     )
     assert allowed.status_code != 403
+
+
+def test_unverified_account_is_limited_to_activation_and_recovery_routes(
+    client: TestClient,
+) -> None:
+    registration = _register(client)
+    headers = {"Authorization": f"Bearer {registration.json()['access_token']}"}
+
+    assert client.get("/api/v1/auth/me", headers=headers).status_code == 200
+    assert client.post("/api/v1/auth/resend-verification", headers=headers).status_code == 200
+    assert (
+        client.post("/api/v1/auth/forgot-password", json={"email": "owner@example.com"}).status_code
+        == 200
+    )
+    assert client.post("/api/v1/auth/refresh", headers={"Origin": ORIGIN}).status_code == 200
+
+    private_gets = [
+        "/api/v1/analyses",
+        "/api/v1/analyses/missing-analysis",
+        "/api/v1/analyses/missing-analysis/frames",
+        "/api/v1/analyses/missing-analysis/artifacts/private.json",
+        "/api/v1/analyses/missing-analysis/player-candidates",
+        "/api/v1/analyses/missing-analysis/players",
+        "/api/v1/analyses/missing-analysis/analytics",
+        "/api/v1/play-history",
+        "/api/v1/auth/sessions",
+    ]
+    for path in private_gets:
+        blocked = client.get(path, headers=headers)
+        assert blocked.status_code == 403, path
+        assert blocked.json()["error"]["code"] == "email_verification_required", path
+
+    onboarding = client.post(
+        "/api/v1/auth/onboarding",
+        headers=headers,
+        json={"display_name": "Pending Player"},
+    )
+    assert onboarding.status_code == 403
+    assert onboarding.json()["error"]["code"] == "email_verification_required"
+
+    password = client.post(
+        "/api/v1/auth/change-password",
+        headers={**headers, "Origin": ORIGIN},
+        json={"current_password": PASSWORD, "new_password": f"{PASSWORD} updated"},
+    )
+    assert password.status_code == 403
+    assert password.json()["error"]["code"] == "email_verification_required"
+
+    assert client.post("/api/v1/auth/logout", headers={"Origin": ORIGIN}).status_code == 200
+
+
+def test_private_route_policy_matrix_requires_the_central_verified_dependency() -> None:
+    verified_auth_paths = {
+        "/auth/onboarding",
+        "/auth/change-password",
+        "/auth/sessions",
+        "/auth/sessions/{session_id}",
+        "/auth/sessions/revoke-all",
+    }
+    private_routes = [
+        route
+        for router in (
+            analyses_router,
+            analyses_development_router,
+            history_router,
+            auth_router,
+        )
+        for route in router.routes
+        if isinstance(route, APIRoute)
+        and (
+            route.path.startswith("/analyses")
+            or route.path.startswith("/play-history")
+            or route.path in verified_auth_paths
+        )
+    ]
+
+    assert private_routes
+    for route in private_routes:
+        assert _dependency_tree_contains(route.dependant, require_verified_user), (
+            route.path,
+            route.methods,
+        )
+
+
+def test_verification_rotates_existing_session_and_sets_normal_refresh_cookie(
+    client: TestClient,
+) -> None:
+    registration = _register(client)
+    user_id = UUID(registration.json()["user"]["id"])
+    headers = {"Authorization": f"Bearer {registration.json()['access_token']}"}
+    raw_token = _email_token(client, headers, "email_verification")
+    original_cookie = client.cookies.get("court4_refresh")
+
+    verified = client.post("/api/v1/auth/verify-email", json={"token": raw_token})
+
+    assert verified.status_code == 200
+    assert verified.json()["token_type"] == "bearer"
+    assert verified.json()["expires_in"] == get_settings().auth_access_token_minutes * 60
+    assert client.cookies.get("court4_refresh") != original_cookie
+    assert "HttpOnly" in verified.headers["set-cookie"]
+    assert "SameSite=lax" in verified.headers["set-cookie"]
+    with get_persistence().session_factory() as session:
+        active_sessions = session.scalar(
+            select(func.count())
+            .select_from(RefreshSession)
+            .where(
+                RefreshSession.user_id == user_id,
+                RefreshSession.revoked_at.is_(None),
+            )
+        )
+    assert active_sessions == 1
+
+
+def test_verification_on_another_browser_creates_one_session_and_replay_creates_none(
+    client: TestClient,
+) -> None:
+    registration = _register(client)
+    user_id = UUID(registration.json()["user"]["id"])
+    headers = {"Authorization": f"Bearer {registration.json()['access_token']}"}
+    raw_token = _email_token(client, headers, "email_verification")
+    other_browser = TestClient(create_app())
+
+    verified = other_browser.post("/api/v1/auth/verify-email", json={"token": raw_token})
+    assert verified.status_code == 200
+    assert other_browser.cookies.get("court4_refresh")
+    refreshed = other_browser.post("/api/v1/auth/refresh", headers={"Origin": ORIGIN})
+    assert refreshed.status_code == 200
+    assert refreshed.json()["user"]["id"] == str(user_id)
+
+    replay_browser = TestClient(create_app())
+    replay = replay_browser.post("/api/v1/auth/verify-email", json={"token": raw_token})
+    assert replay.status_code == 400
+    assert replay.json()["error"]["code"] == "invalid_or_used_token"
+    assert replay_browser.cookies.get("court4_refresh") is None
+
+
+def test_verification_refuses_to_replace_a_different_authenticated_user(
+    client: TestClient,
+) -> None:
+    user_a = _register(client, "user-a@example.com")
+    user_a_headers = {"Authorization": f"Bearer {user_a.json()['access_token']}"}
+    user_b_browser = TestClient(create_app())
+    user_b = _register(user_b_browser, "user-b@example.com")
+    user_b_headers = {"Authorization": f"Bearer {user_b.json()['access_token']}"}
+    raw_token = _email_token(user_b_browser, user_b_headers, "email_verification")
+
+    mismatch = client.post(
+        "/api/v1/auth/verify-email",
+        json={"token": raw_token},
+        headers=user_a_headers,
+    )
+    assert mismatch.status_code == 409
+    assert mismatch.json()["error"]["code"] == "verification_account_mismatch"
+
+    verified = user_b_browser.post(
+        "/api/v1/auth/verify-email",
+        json={"token": raw_token},
+        headers=user_b_headers,
+    )
+    assert verified.status_code == 200
+    assert verified.json()["user"]["email"] == "user-b@example.com"
+
+
+def test_disabled_account_cannot_verify_or_create_a_session(client: TestClient) -> None:
+    registration = _register(client)
+    user_id = UUID(registration.json()["user"]["id"])
+    headers = {"Authorization": f"Bearer {registration.json()['access_token']}"}
+    raw_token = _email_token(client, headers, "email_verification")
+    with get_persistence().session_factory.begin() as session:
+        user = session.get(User, user_id)
+        assert user is not None
+        user.account_status = "disabled"
+    browser = TestClient(create_app())
+
+    response = browser.post("/api/v1/auth/verify-email", json={"token": raw_token})
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_or_used_token"
+    assert browser.cookies.get("court4_refresh") is None
+
+
+def test_completed_onboarding_name_persists_across_login_contexts(client: TestClient) -> None:
+    registration = _register(client)
+    headers = {"Authorization": f"Bearer {registration.json()['access_token']}"}
+    raw_token = _email_token(client, headers, "email_verification")
+    verified = client.post("/api/v1/auth/verify-email", json={"token": raw_token})
+    verified_headers = {"Authorization": f"Bearer {verified.json()['access_token']}"}
+
+    completed = client.post(
+        "/api/v1/auth/onboarding",
+        json={"display_name": "  Alexis   Marie  "},
+        headers=verified_headers,
+    )
+    assert completed.status_code == 200
+    assert completed.json()["display_name"] == "Alexis Marie"
+
+    next_browser = TestClient(create_app())
+    logged_in = next_browser.post(
+        "/api/v1/auth/login",
+        json={"email": "owner@example.com", "password": PASSWORD},
+    )
+    assert logged_in.status_code == 200
+    assert logged_in.json()["user"]["display_name"] == "Alexis Marie"
 
 
 def test_resend_invalidates_previous_verification_link(client: TestClient) -> None:
@@ -366,6 +578,7 @@ def test_change_password_rotates_current_and_revokes_other_sessions(
     client: TestClient,
 ) -> None:
     registration = _register(client)
+    _mark_verified(UUID(registration.json()["user"]["id"]))
     client.headers["Authorization"] = f"Bearer {registration.json()['access_token']}"
     other = TestClient(create_app())
     other_login = other.post(
@@ -391,6 +604,7 @@ def test_change_password_rotates_current_and_revokes_other_sessions(
 
 def test_session_listing_and_owner_scoped_revocation(client: TestClient) -> None:
     registration = _register(client)
+    _mark_verified(UUID(registration.json()["user"]["id"]))
     client.headers["Authorization"] = f"Bearer {registration.json()['access_token']}"
     other = TestClient(create_app())
     other_login = other.post(
@@ -415,6 +629,7 @@ def test_session_listing_and_owner_scoped_revocation(client: TestClient) -> None
 
     unrelated = TestClient(create_app())
     unrelated_registration = _register(unrelated, "unrelated@example.com")
+    _mark_verified(UUID(unrelated_registration.json()["user"]["id"]))
     unrelated.headers["Authorization"] = f"Bearer {unrelated_registration.json()['access_token']}"
     hidden = unrelated.delete(
         f"/api/v1/auth/sessions/{sessions[0]['id']}",
@@ -439,17 +654,29 @@ def test_expired_verification_link_has_typed_failure(client: TestClient) -> None
     assert response.json()["error"]["code"] == "token_expired"
 
 
-def test_concurrent_verification_consumes_token_once(client: TestClient) -> None:
+def test_concurrent_verification_consumes_token_once(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     registration = _register(client)
+    user_id = UUID(registration.json()["user"]["id"])
     headers = {"Authorization": f"Bearer {registration.json()['access_token']}"}
     raw_token = _email_token(client, headers, "email_verification")
     auth = AuthenticationService(get_persistence().session_factory, get_settings())
     barrier = Barrier(2)
+    event_lock = Lock()
+    events: list[str] = []
+
+    def capture_event(message: str, *args: object, **kwargs: object) -> None:
+        del args, kwargs
+        with event_lock:
+            events.append(message)
+
+    monkeypatch.setattr("app.auth.service.logger.info", capture_event)
 
     def verify() -> str:
         barrier.wait()
         try:
-            auth.verify_email(raw_token)
+            auth.verify_email(raw_token, user_agent="verification-race")
             return "verified"
         except AuthenticationError as exc:
             return exc.code
@@ -457,6 +684,19 @@ def test_concurrent_verification_consumes_token_once(client: TestClient) -> None
     with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(lambda _: verify(), range(2)))
     assert sorted(results) == ["invalid_or_used_token", "verified"]
+    with get_persistence().session_factory() as session:
+        race_sessions = session.scalar(
+            select(func.count())
+            .select_from(RefreshSession)
+            .where(
+                RefreshSession.user_id == user_id,
+                RefreshSession.user_agent == "verification-race",
+            )
+        )
+    assert race_sessions == 1
+    assert events.count("auth_email_verified") == 1
+    assert events.count("auth_verification_session_established") == 1
+    assert all(raw_token not in event for event in events)
 
 
 def test_resend_is_rate_limited_and_already_verified_is_safe(
@@ -641,6 +881,19 @@ def _register(client: TestClient, email: str = "owner@example.com") -> Response:
             json={"email": email, "password": PASSWORD},
         ),
     )
+
+
+def _dependency_tree_contains(dependant: Dependant, dependency: object) -> bool:
+    if dependant.call is dependency:
+        return True
+    return any(_dependency_tree_contains(child, dependency) for child in dependant.dependencies)
+
+
+def _mark_verified(user_id: UUID) -> None:
+    with get_persistence().session_factory.begin() as session:
+        user = session.get(User, user_id)
+        assert user is not None
+        user.email_verified_at = datetime.now(tz=UTC)
 
 
 def _email_token(

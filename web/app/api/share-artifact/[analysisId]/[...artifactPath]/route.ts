@@ -27,6 +27,15 @@ export async function GET(
   });
 
   if (!response.ok) {
+    if (response.status === 401 || response.status === 403) {
+      return new Response(response.body, {
+        status: response.status,
+        headers: {
+          "Cache-Control": "no-store",
+          "Content-Type": response.headers.get("content-type") ?? "application/json",
+        },
+      });
+    }
     return new Response("Share artifact not found.", {
       status: response.status === 404 ? 404 : 502,
     });

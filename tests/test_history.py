@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from app.main import create_app
+from app.persistence.models import User
+from app.persistence.runtime import get_persistence
 from app.schemas.analytics import (
     AnalyticsArtifacts,
     AnalyticsReport,
@@ -587,6 +589,10 @@ def test_history_api_uses_persisted_jobs_after_refresh(
         "/api/v1/auth/register",
         json={"email": "history@example.com", "password": "a sufficiently long password"},
     )
+    with get_persistence().session_factory.begin() as session:
+        user = session.get(User, UUID(login.json()["user"]["id"]))
+        assert user is not None
+        user.email_verified_at = datetime.now(tz=UTC)
     first_client.headers["Authorization"] = f"Bearer {login.json()['access_token']}"
     repository = AnalysisJobRepository(
         output_dir=output_dir,

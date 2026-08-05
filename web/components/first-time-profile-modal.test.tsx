@@ -20,6 +20,7 @@ describe("first-time player profile modal", () => {
   it("collects and saves a display name for a newly registered player", async () => {
     const user = userEvent.setup();
     const saveProfile = vi.fn((profile) => profile);
+    const completeOnboarding = vi.fn().mockResolvedValue(undefined);
     const onComplete = vi.fn();
     markPlayerOnboardingPending(userId);
 
@@ -28,7 +29,9 @@ describe("first-time player profile modal", () => {
         userId={userId}
         profile={emptyPlayerProfile}
         isProfileLoaded
+        onboardingRequired
         saveProfile={saveProfile}
+        completeOnboarding={completeOnboarding}
         onComplete={onComplete}
       />,
     );
@@ -49,6 +52,7 @@ describe("first-time player profile modal", () => {
       ...emptyPlayerProfile,
       displayName: "Alexis",
     });
+    expect(completeOnboarding).toHaveBeenCalledWith("Alexis");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(isPlayerOnboardingPending(userId)).toBe(false);
     expect(onComplete).toHaveBeenCalledOnce();
@@ -60,7 +64,25 @@ describe("first-time player profile modal", () => {
         userId={userId}
         profile={emptyPlayerProfile}
         isProfileLoaded
+        onboardingRequired={false}
         saveProfile={vi.fn()}
+        completeOnboarding={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("does not reopen from a stale local marker after another browser completed onboarding", () => {
+    markPlayerOnboardingPending(userId);
+    render(
+      <FirstTimeProfileModal
+        userId={userId}
+        profile={{ ...emptyPlayerProfile, displayName: "Alexis" }}
+        isProfileLoaded
+        onboardingRequired={false}
+        saveProfile={vi.fn()}
+        completeOnboarding={vi.fn().mockResolvedValue(undefined)}
       />,
     );
 
@@ -73,8 +95,9 @@ describe("first-time player profile modal", () => {
         userId={userId}
         profile={emptyPlayerProfile}
         isProfileLoaded
-        isNewAccount
+        onboardingRequired
         saveProfile={vi.fn()}
+        completeOnboarding={vi.fn().mockResolvedValue(undefined)}
       />,
     );
 

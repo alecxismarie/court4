@@ -5,7 +5,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
 
-from app.auth.dependencies import CurrentUser, get_authentication_service
+from app.auth.dependencies import (
+    CurrentUser,
+    OptionalCurrentUser,
+    VerifiedUser,
+    get_authentication_service,
+)
 from app.auth.errors import AuthenticationError
 from app.auth.rate_limit import auth_rate_limiter
 from app.auth.service import (
@@ -19,6 +24,7 @@ from app.email.dependencies import get_development_email_sink
 from app.schemas.auth import (
     AuthResponse,
     ChangePasswordRequest,
+    CompleteOnboardingRequest,
     CredentialsRequest,
     DevelopmentEmailListResponse,
     DevelopmentEmailResponse,
@@ -32,6 +38,7 @@ from app.schemas.auth import (
     SessionResponse,
     TokenRequest,
     UserResponse,
+    VerificationAuthResponse,
     VerificationResponse,
 )
 
@@ -168,14 +175,39 @@ def resend_verification(
     )
 
 
-@router.post("/verify-email", response_model=VerificationResponse)
-def verify_email(payload: TokenRequest, auth: AuthDependency) -> VerificationResponse:
-    user = auth.verify_email(payload.token)
-    return VerificationResponse(
+@router.post("/verify-email", response_model=VerificationAuthResponse)
+def verify_email(
+    payload: TokenRequest,
+    request: Request,
+    response: Response,
+    current_user: OptionalCurrentUser,
+    auth: AuthDependency,
+    settings: SettingsDependency,
+) -> VerificationAuthResponse:
+    user, tokens = auth.verify_email(
+        payload.token,
+        user_agent=request.headers.get("user-agent"),
+        current_user_id=current_user.id if current_user is not None else None,
+        raw_refresh_token=request.cookies.get(settings.auth_refresh_cookie_name),
+    )
+    _set_refresh_cookie(response, tokens.refresh_token, settings)
+    return VerificationAuthResponse(
         verified=True,
         message="Your email has been verified.",
+        access_token=tokens.access_token,
+        expires_in=tokens.access_expires_in,
         user=UserResponse.model_validate(user),
     )
+
+
+@router.post("/onboarding", response_model=UserResponse)
+def complete_onboarding(
+    payload: CompleteOnboardingRequest,
+    user: VerifiedUser,
+    auth: AuthDependency,
+) -> UserResponse:
+    completed_user = auth.complete_onboarding(user.id, payload.display_name)
+    return UserResponse.model_validate(completed_user)
 
 
 @router.post("/forgot-password", response_model=MessageResponse)
@@ -217,7 +249,7 @@ def change_password(
     payload: ChangePasswordRequest,
     request: Request,
     response: Response,
-    user: CurrentUser,
+    user: VerifiedUser,
     auth: AuthDependency,
     settings: SettingsDependency,
 ) -> AuthResponse:
@@ -246,7 +278,7 @@ def change_password(
 @router.get("/sessions", response_model=SessionListResponse)
 def list_sessions(
     request: Request,
-    user: CurrentUser,
+    user: VerifiedUser,
     auth: AuthDependency,
     settings: SettingsDependency,
 ) -> SessionListResponse:
@@ -264,7 +296,7 @@ def revoke_session(
     session_id: UUID,
     request: Request,
     response: Response,
-    user: CurrentUser,
+    user: VerifiedUser,
     auth: AuthDependency,
     settings: SettingsDependency,
 ) -> SessionMutationResponse:
@@ -290,7 +322,7 @@ def revoke_all_sessions(
     payload: RevokeAllSessionsRequest,
     request: Request,
     response: Response,
-    user: CurrentUser,
+    user: VerifiedUser,
     auth: AuthDependency,
     settings: SettingsDependency,
 ) -> SessionMutationResponse:

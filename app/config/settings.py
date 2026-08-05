@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     database_statement_timeout_ms: PositiveInt = 10_000
     database_lock_timeout_ms: PositiveInt = 5_000
     database_idle_transaction_timeout_ms: PositiveInt = 15_000
+    allow_destructive_database_operations: bool = False
+    expected_test_database_prefix: str = "court4_test"
+    expected_test_database_host: str = "127.0.0.1"
+    expected_test_database_user: str = "court4_test"
     local_storage_root: Path = Path("data/output")
     bootstrap_user_enabled: bool = False
     bootstrap_user_id: UUID | None = None
@@ -50,6 +54,10 @@ class Settings(BaseSettings):
     deployment_build_identifier: str = "local"
     default_sample_interval_seconds: PositiveFloat = Field(default=30)
     max_upload_size_bytes: PositiveInt = Field(default=1_073_741_824)
+    storage_warning_free_bytes: PositiveInt = 10_737_418_240
+    storage_hard_stop_free_bytes: PositiveInt = 5_368_709_120
+    storage_upload_reservation_multiplier: PositiveFloat = 2.0
+    storage_max_active_uploads: PositiveInt = 1
     supported_extensions: Annotated[tuple[str, ...], NoDecode] = (
         ".mp4",
         ".mov",
@@ -140,9 +148,16 @@ class Settings(BaseSettings):
             "PICKLEBALL_AI_PRIVATE_ALPHA_ALLOWED_EMAILS",
         ),
     )
-    auth_email_backend: Literal["development", "resend"] = Field(
+    auth_email_backend: Literal["development", "resend", "brevo"] = Field(
         default="development",
         validation_alias=AliasChoices("EMAIL_PROVIDER", "PICKLEBALL_AI_AUTH_EMAIL_BACKEND"),
+    )
+    allow_external_email_in_tests: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "ALLOW_EXTERNAL_EMAIL_IN_TESTS",
+            "PICKLEBALL_AI_ALLOW_EXTERNAL_EMAIL_IN_TESTS",
+        ),
     )
     auth_development_email_sink_enabled: bool = True
     email_from_address: str = Field(
@@ -156,6 +171,10 @@ class Settings(BaseSettings):
     resend_api_key: SecretStr | None = Field(
         default=None,
         validation_alias=AliasChoices("RESEND_API_KEY", "PICKLEBALL_AI_RESEND_API_KEY"),
+    )
+    brevo_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BREVO_API_KEY", "PICKLEBALL_AI_BREVO_API_KEY"),
     )
     email_request_timeout_seconds: PositiveInt = 10
     auth_verification_token_hours: PositiveInt = 24
@@ -242,7 +261,22 @@ class Settings(BaseSettings):
     def validate_frontend_allowed_origins(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         if any(origin == "*" for origin in value):
             raise ValueError("Credentialed CORS does not permit a wildcard origin.")
-        return tuple(dict.fromkeys(origin.rstrip("/") for origin in value))
+        normalized: list[str] = []
+        for origin in value:
+            cleaned = origin.strip().rstrip("/")
+            parsed = urlparse(cleaned)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise ValueError("Frontend allowed origins must be absolute HTTP(S) origins.")
+            if (
+                parsed.path not in {"", "/"}
+                or parsed.query
+                or parsed.fragment
+                or parsed.username
+                or parsed.password
+            ):
+                raise ValueError("Frontend allowed origins must not contain paths or credentials.")
+            normalized.append(cleaned)
+        return tuple(dict.fromkeys(normalized))
 
     @field_validator("private_alpha_allowed_emails", mode="before")
     @classmethod
@@ -279,8 +313,36 @@ class Settings(BaseSettings):
         parsed = urlparse(cleaned)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("Frontend base URL must be an absolute HTTP(S) URL.")
-        if parsed.query or parsed.fragment or parsed.username or parsed.password:
-            raise ValueError("Frontend base URL must not contain credentials, query, or fragment.")
+        if (
+            parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+        ):
+            raise ValueError("Frontend base URL must be an origin without a path or credentials.")
+        return cleaned
+
+    @field_validator("email_from_address")
+    @classmethod
+    def validate_email_from_address(cls, value: str) -> str:
+        cleaned = value.strip()
+        local, separator, domain = cleaned.rpartition("@")
+        if (
+            not separator
+            or not local
+            or not domain
+            or any(character.isspace() for character in cleaned)
+        ):
+            raise ValueError("EMAIL_FROM_ADDRESS must be a valid email address.")
+        return cleaned
+
+    @field_validator("email_from_name")
+    @classmethod
+    def validate_email_from_name(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("EMAIL_FROM_NAME must not be empty.")
         return cleaned
 
     @property
@@ -297,6 +359,38 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_auth_deployment_security(self) -> "Settings":
+        if self.storage_warning_free_bytes <= self.storage_hard_stop_free_bytes:
+            raise ValueError("Storage warning threshold must exceed the hard-stop threshold.")
+        if self.environment == "test":
+            from app.persistence.database_safety import (
+                ExpectedDatabaseIdentity,
+                assert_isolated_test_database_url,
+            )
+
+            assert_isolated_test_database_url(
+                self.database_url,
+                environment=self.environment,
+                expected=ExpectedDatabaseIdentity(
+                    prefix=self.expected_test_database_prefix,
+                    host=self.expected_test_database_host,
+                    username=self.expected_test_database_user,
+                ),
+            )
+        if (
+            self.environment == "test"
+            and self.auth_email_backend != "development"
+            and not self.allow_external_email_in_tests
+        ):
+            raise ValueError(
+                "Tests require EMAIL_PROVIDER=development unless "
+                "ALLOW_EXTERNAL_EMAIL_IN_TESTS=true is explicitly set."
+            )
+        if (
+            self.environment == "test"
+            and self.auth_email_backend == "development"
+            and not self.auth_development_email_sink_enabled
+        ):
+            raise ValueError("The development email sink must be enabled for normal tests.")
         if (
             self.environment in {"staging", "production"}
             and self.auth_access_token_secret.get_secret_value()
@@ -327,12 +421,20 @@ class Settings(BaseSettings):
             raise ValueError(
                 "Open deployment registration requires a non-empty private-alpha allowlist."
             )
-        if self.auth_email_backend == "resend" and self.resend_api_key is None:
+        if self.auth_email_backend == "resend" and not _secret_has_value(self.resend_api_key):
             raise ValueError("RESEND_API_KEY is required when EMAIL_PROVIDER=resend.")
-        if self.environment in {"staging", "production"} and self.auth_email_backend != "resend":
+        if self.auth_email_backend == "brevo" and not _secret_has_value(self.brevo_api_key):
+            raise ValueError("BREVO_API_KEY is required when EMAIL_PROVIDER=brevo.")
+        if self.environment in {"staging", "production"} and self.auth_email_backend not in {
+            "resend",
+            "brevo",
+        }:
             raise ValueError("A real production email provider is required in a deployment.")
-        if self.environment in {"staging", "production"} and self.email_from_address.endswith(
-            ".invalid"
+        sender_domain = self.email_from_address.rpartition("@")[2].casefold()
+        if self.environment in {"staging", "production"} and (
+            sender_domain.endswith(".invalid")
+            or sender_domain.endswith(".example")
+            or sender_domain in {"example.com", "example.net", "example.org", "localhost"}
         ):
             raise ValueError("A verified EMAIL_FROM_ADDRESS is required in a deployment.")
         if self.environment in {
@@ -340,6 +442,13 @@ class Settings(BaseSettings):
             "production",
         } and not self.auth_frontend_base_url.startswith("https://"):
             raise ValueError("Deployment frontend links must use HTTPS.")
+        if self.environment in {"staging", "production"}:
+            expected_origin = self.auth_frontend_base_url
+            if self.frontend_allowed_origins != (expected_origin,):
+                raise ValueError(
+                    "Deployment CORS/CSRF configuration must contain only the exact "
+                    "frontend origin."
+                )
         return self
 
     @field_validator("court_detection_low_confidence_threshold")
@@ -356,3 +465,7 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def _secret_has_value(value: SecretStr | None) -> bool:
+    return value is not None and bool(value.get_secret_value().strip())

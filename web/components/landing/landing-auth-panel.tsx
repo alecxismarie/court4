@@ -3,10 +3,11 @@
 import { Eye, EyeOff, LockKeyhole, Mail } from "lucide-react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { type FormEvent, type KeyboardEvent, useId, useRef, useState } from "react";
+import { type FormEvent, type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 
 import { normalizeApiError } from "@/lib/api/client";
 import { useAuth } from "@/lib/auth-context";
+import { safeLandingDestination } from "@/lib/auth-redirect";
 
 type AuthMode = "login" | "register";
 
@@ -14,7 +15,8 @@ export function LandingAuthPanel() {
   const auth = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [mode, setMode] = useState<AuthMode>("login");
+  const requestedMode = searchParams.get("auth") === "signup" ? "register" : "login";
+  const [mode, setMode] = useState<AuthMode>(requestedMode);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -24,14 +26,22 @@ export function LandingAuthPanel() {
   const registerTab = useRef<HTMLButtonElement>(null);
   const descriptionId = useId();
 
+  useEffect(() => {
+    setMode(requestedMode);
+  }, [requestedMode]);
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSubmitting(true);
     setMessage(null);
     try {
       if (mode === "login") {
-        await auth.login(email, password);
-        router.replace(safeLandingDestination(searchParams.get("next")));
+        const user = await auth.login(email, password);
+        router.replace(
+          user.email_verified_at
+            ? safeLandingDestination(searchParams.get("next"))
+            : "/verification-pending",
+        );
       } else {
         await auth.register(email, password);
         router.replace("/verification-pending");
@@ -57,8 +67,8 @@ export function LandingAuthPanel() {
     (nextMode === "login" ? loginTab : registerTab).current?.focus();
   }
 
-  function plannedProvider(provider: "Google" | "Apple") {
-    setMessage(`${provider} sign-in is coming soon. Use email and password for now.`);
+  function unavailableProvider(provider: "Google" | "Apple") {
+    setMessage(`${provider} sign-in is not available. Use email and password instead.`);
   }
 
   return (
@@ -173,22 +183,20 @@ export function LandingAuthPanel() {
         <button
           type="button"
           className="landing-social-button"
-          onClick={() => plannedProvider("Google")}
-          aria-label="Continue with Google, coming soon"
+          onClick={() => unavailableProvider("Google")}
+          aria-label="Continue with Google"
         >
           <span className="landing-google" aria-hidden="true">G</span>
           Continue with Google
-          <small>Coming soon</small>
         </button>
         <button
           type="button"
           className="landing-social-button"
-          onClick={() => plannedProvider("Apple")}
-          aria-label="Continue with Apple, coming soon"
+          onClick={() => unavailableProvider("Apple")}
+          aria-label="Continue with Apple"
         >
           <span className="landing-apple" aria-hidden="true">●</span>
           Continue with Apple
-          <small>Coming soon</small>
         </button>
 
         <p className="landing-legal">
@@ -198,19 +206,4 @@ export function LandingAuthPanel() {
       </div>
     </section>
   );
-}
-
-export function safeLandingDestination(value: string | null): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
-    return "/dashboard";
-  }
-  try {
-    const decoded = decodeURIComponent(value);
-    if (decoded.startsWith("//") || /^[a-z][a-z0-9+.-]*:/i.test(decoded.slice(1))) {
-      return "/dashboard";
-    }
-  } catch {
-    return "/dashboard";
-  }
-  return value;
 }

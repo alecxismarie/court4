@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import SecretStr, ValidationError
 
 from app.config.settings import Settings
 
@@ -32,3 +33,21 @@ def test_court4_detector_model_path_alias_takes_precedence(
     settings = Settings()
 
     assert settings.detector_model_path == Path("models/canonical.pt")
+
+
+def test_external_email_providers_fail_closed_in_tests() -> None:
+    with pytest.raises(ValidationError, match="Tests require EMAIL_PROVIDER=development"):
+        Settings(
+            environment="test",
+            auth_email_backend="brevo",
+            brevo_api_key=SecretStr("test-key-that-must-never-be-used"),
+        )
+
+
+def test_test_email_provider_requires_the_development_sink() -> None:
+    with pytest.raises(ValidationError, match="development email sink"):
+        Settings(
+            environment="test",
+            auth_email_backend="development",
+            auth_development_email_sink_enabled=False,
+        )

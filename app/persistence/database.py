@@ -29,6 +29,10 @@ def create_database_engine(settings: Settings) -> Engine:
                 "SET idle_in_transaction_session_timeout = "
                 f"'{settings.database_idle_transaction_timeout_ms}ms'"
             )
+            dbapi_connection.commit()  # type: ignore[attr-defined]
+        except Exception:
+            dbapi_connection.rollback()  # type: ignore[attr-defined]
+            raise
         finally:
             cursor.close()
 

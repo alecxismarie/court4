@@ -90,6 +90,7 @@ from app.services.match_iq import (
 )
 from app.services.recording_quality import assess_analysis_readiness
 from app.services.tracking import (
+    DetectorModelInvalidError,
     DetectorModelMissingError,
     DetectorRuntimeUnavailableError,
     DetectorUnavailableError,
@@ -502,6 +503,12 @@ class AnalysisWorkflowService:
                 raise JobRequestError(
                     "detector_model_missing",
                     "Player detection is not available because the detector model is missing.",
+                ) from exc
+            except DetectorModelInvalidError as exc:
+                raise JobRequestError(
+                    "detector_model_invalid",
+                    "Player detection is not available because the detector model failed "
+                    "integrity verification.",
                 ) from exc
             except DetectorRuntimeUnavailableError as exc:
                 raise JobRequestError(
@@ -1016,6 +1023,7 @@ class AnalysisWorkflowService:
         model_path = self._resolve_model_path(request.model_path)
         return UltralyticsByteTrackBackend(
             model_path=model_path,
+            expected_model_sha256=self.settings.detector_model_sha256,
             confidence_threshold=(
                 request.confidence_threshold
                 if request.confidence_threshold is not None

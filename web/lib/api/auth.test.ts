@@ -7,6 +7,7 @@ import {
   login,
   logout,
   register,
+  resendVerification,
   resetPassword,
   restoreSession,
   revokeAllSessions,
@@ -103,16 +104,86 @@ describe("authentication API client", () => {
     );
   });
 
-  it("clears memory when refresh fails", async () => {
+  it("clears memory and preserves the typed error when refresh is invalid", async () => {
     setAccessToken("expired");
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response(null, { status: 401 }))
       .mockResolvedValueOnce(
         jsonResponse({ error: { code: "invalid_session", message: "Session is invalid." } }, 401),
       );
-    const response = await authenticatedFetch("http://localhost:8000/api/v1/analyses");
-    expect(response.status).toBe(401);
+    await expect(
+      authenticatedFetch("http://localhost:8000/api/v1/analyses"),
+    ).rejects.toMatchObject({ code: "invalid_session", status: 401 });
     expect(getAccessToken()).toBeNull();
+  });
+
+  it("refreshes once and retries resend verification exactly once", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        jsonResponse(
+          { error: { code: "unauthorized", message: "Authentication is required." } },
+          401,
+        ),
+      )
+      .mockResolvedValueOnce(jsonResponse(authPayload))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          verified: false,
+          message: "A new verification message was captured in the local development inbox.",
+          delivery_mode: "development",
+        }),
+      );
+
+    await expect(resendVerification()).resolves.toMatchObject({
+      verified: false,
+      delivery_mode: "development",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      "http://localhost:8000/api/v1/auth/resend-verification",
+      "http://localhost:8000/api/v1/auth/refresh",
+      "http://localhost:8000/api/v1/auth/resend-verification",
+    ]);
+  });
+
+  it("does not recurse or retry resend after an invalid refresh session", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { code: "invalid_session", message: "Session is invalid." } }, 401),
+      );
+
+    await expect(resendVerification()).rejects.toMatchObject({
+      code: "invalid_session",
+      status: 401,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps memory state for a temporary refresh network failure", async () => {
+    setAccessToken("expired-but-not-invalidated");
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"));
+
+    await expect(
+      authenticatedFetch("http://localhost:8000/api/v1/analyses"),
+    ).rejects.toBeInstanceOf(TypeError);
+    expect(getAccessToken()).toBe("expired-but-not-invalidated");
+  });
+
+  it("keeps memory state when the refresh server is temporarily unavailable", async () => {
+    setAccessToken("expired-but-not-invalidated");
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { code: "internal_error", message: "Try again later." } }, 503),
+      );
+
+    await expect(
+      authenticatedFetch("http://localhost:8000/api/v1/analyses"),
+    ).rejects.toMatchObject({ code: "internal_error", status: 503 });
+    expect(getAccessToken()).toBe("expired-but-not-invalidated");
   });
 
   it("logs out with credentials and clears session state", async () => {

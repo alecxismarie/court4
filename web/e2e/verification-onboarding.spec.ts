@@ -17,6 +17,110 @@ type ApiPlaywright = {
 
 test.describe.configure({ timeout: 60_000 });
 
+test("invalidated refresh session clears pending identity", async ({ browser }) => {
+  const account = uniqueAccount("invalid-session");
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await registerFromLanding(page, account.email, account.password);
+  await expect(page.getByText(account.email)).toBeVisible();
+
+  const logoutStatus = await page.evaluate(async (apiBase) => {
+    const response = await fetch(`${apiBase}/api/v1/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+      headers: { Accept: "application/json" },
+    });
+    return response.status;
+  }, API_BASE);
+  expect(logoutStatus).toBe(200);
+
+  await page.getByRole("button", { name: "Check verification status" }).click();
+
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByText(account.email)).toHaveCount(0);
+  await context.close();
+});
+
+test("expired access on resend refreshes once and records one message", async ({
+  browser,
+  playwright,
+}) => {
+  const account = uniqueAccount("resend-recovery");
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await registerFromLanding(page, account.email, account.password);
+  await expect(page.getByText(/captured in the local development inbox/i)).toBeVisible();
+
+  const api = await playwright.request.newContext({ baseURL: API_BASE });
+  const login = await api.post("/api/v1/auth/login", {
+    data: { email: account.email, password: account.password },
+  });
+  expect(login.status(), await login.text()).toBe(200);
+  const { access_token: accessToken } = await login.json();
+  const before = await verificationMessageCount(api, accessToken as string);
+
+  let intercepted = false;
+  let refreshCount = 0;
+  let resendCount = 0;
+  page.on("request", (request) => {
+    if (request.url().endsWith("/api/v1/auth/refresh")) refreshCount += 1;
+    if (request.url().endsWith("/api/v1/auth/resend-verification")) resendCount += 1;
+  });
+  await page.route("**/api/v1/auth/resend-verification", async (route) => {
+    if (!intercepted) {
+      intercepted = true;
+      await route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "unauthorized", message: "Authentication is required." },
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.getByRole("button", { name: "Resend verification email" }).click();
+  await expect(page.getByText(/new verification message was captured/i)).toBeVisible();
+
+  expect(refreshCount).toBe(1);
+  expect(resendCount).toBe(2);
+  await expect.poll(() => verificationMessageCount(api, accessToken as string)).toBe(before + 1);
+  await api.dispose();
+  await context.close();
+});
+
+test("canonical localhost origin restores the refresh cookie without console errors", async ({
+  browser,
+}) => {
+  const account = uniqueAccount("canonical-origin");
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const consoleErrors: string[] = [];
+  const refreshStatuses: number[] = [];
+  page.on("console", (message) => {
+    if (message.type() === "error") consoleErrors.push(message.text());
+  });
+  page.on("response", (response) => {
+    if (response.url().endsWith("/api/v1/auth/refresh")) {
+      refreshStatuses.push(response.status());
+    }
+  });
+  await registerFromLanding(page, account.email, account.password);
+  expect(new URL(page.url()).hostname).toBe("localhost");
+  // The signed-out landing boot performs one expected failed restore before signup.
+  consoleErrors.length = 0;
+
+  await page.reload();
+
+  await expect(page).toHaveURL(/\/verification-pending$/);
+  await expect(page.getByText(account.email)).toBeVisible();
+  expect(refreshStatuses).toContain(200);
+  expect(consoleErrors).toEqual([]);
+  await context.close();
+});
+
 test("same-browser signup verifies into Dashboard and completes onboarding once", async ({
   page,
   playwright,
@@ -80,7 +184,7 @@ test("different browser receives the session and replay creates no session", asy
   ).toBeVisible();
 
   await pageA.bringToFront();
-  await pageA.getByRole("button", { name: /i’ve verified my email/i }).click();
+  await pageA.getByRole("button", { name: "Check verification status" }).click();
   await expect(pageA).toHaveURL(/\/dashboard$/);
   await expect(
     pageA.getByRole("dialog", { name: /what should we call you/i }),
@@ -162,6 +266,29 @@ test("verification pending stays within a mobile viewport", async ({ browser, pl
   await context.close();
 });
 
+test("login omits persistence claims and fits desktop and mobile viewports", async ({ browser }) => {
+  for (const viewport of [
+    { width: 1280, height: 800 },
+    { width: 375, height: 812 },
+  ]) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    await page.goto("/?auth=login");
+
+    await expect(page.getByRole("checkbox")).toHaveCount(0);
+    await expect(page.getByText(/remember me|keep me signed in/i)).toHaveCount(0);
+    await expect(page.getByRole("link", { name: /forgot password/i })).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth),
+    ).toBeLessThanOrEqual(0);
+    const card = await page.locator(".landing-auth-card").boundingBox();
+    expect(card).not.toBeNull();
+    expect(card!.x).toBeGreaterThanOrEqual(0);
+    expect(card!.x + card!.width).toBeLessThanOrEqual(viewport.width + 1);
+    await context.close();
+  }
+});
+
 test("legacy auth routes consolidate into the requested landing tab safely", async ({ page }) => {
   await page.goto("/login?next=/upload-match");
   await expect(page).toHaveURL(/\/?\?auth=login&next=%2Fupload-match$/);
@@ -208,6 +335,17 @@ async function verificationPathFromApi(api: APIRequestContext, accessToken: stri
   expect(verification).toBeTruthy();
   const url = new URL((verification.text_body as string).match(/https?:\/\/[^\s]+/)![0]);
   return `${url.pathname}${url.search}`;
+}
+
+async function verificationMessageCount(api: APIRequestContext, accessToken: string) {
+  const sink = await api.get("/api/v1/auth/development/emails", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  expect(sink.status(), await sink.text()).toBe(200);
+  const payload = await sink.json();
+  return payload.emails.filter(
+    (message: { category: string }) => message.category === "email_verification",
+  ).length;
 }
 
 async function registerApi(playwright: ApiPlaywright, email: string, password: string) {

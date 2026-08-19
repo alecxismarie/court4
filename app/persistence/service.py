@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -7,7 +8,7 @@ from hashlib import sha256
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -25,13 +26,16 @@ from app.persistence.models import (
     Analysis,
     AnalysisArtifact,
     AnalysisRun,
+    AnalysisStageExecution,
     AnalysisStateEvent,
+    CalibrationVerification,
     IdempotencyRecord,
     PlayerSelection,
     UploadedVideo,
     User,
     utc_now,
 )
+from app.schemas.stage_execution import ArtifactReference, StageProvenance
 
 
 @dataclass(frozen=True)
@@ -41,6 +45,7 @@ class ArtifactInput:
     size_bytes: int
     checksum_sha256: str
     artifact_kind: str
+    schema_version: int | None = None
 
 
 @dataclass(frozen=True)
@@ -90,8 +95,18 @@ class TransitionResult:
     backend_pid: int = 0
 
 
+@dataclass(frozen=True)
+class StageExecutionResult:
+    stage_execution_id: UUID
+    attempt_number: int
+    state: str
+    row_version: int
+    created: bool
+
+
 SynchronizationHook = Callable[[int], None]
 TransitionObservationHook = Callable[[int, str, int], None]
+_STAGE_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class PersistenceService:
@@ -620,6 +635,291 @@ class PersistenceService:
                 )
             )
 
+    def start_stage_execution(
+        self,
+        *,
+        owner_user_id: UUID,
+        analysis_id: str,
+        analysis_run_id: UUID,
+        stage_type: str,
+        configuration_fingerprint: str,
+        provenance_payload: dict[str, Any],
+        input_artifact_references: list[dict[str, Any]],
+        state: str = "processing",
+        is_optional: bool = True,
+        shadow_mode: bool = True,
+    ) -> StageExecutionResult:
+        """Start one optional stage attempt without changing the parent analysis state."""
+        if state not in {"queued", "processing"}:
+            raise ValueError("A stage execution must start queued or processing.")
+        _validate_stage_type(stage_type)
+        _validate_sha256(configuration_fingerprint, "configuration fingerprint")
+        provenance = StageProvenance.model_validate(provenance_payload)
+        if provenance.stage_name != stage_type:
+            raise ValueError("Stage provenance name must match the stage execution type.")
+        if provenance.configuration_fingerprint != configuration_fingerprint:
+            raise ValueError("Stage provenance fingerprint must match the execution fingerprint.")
+        input_references = [
+            ArtifactReference.model_validate(reference).model_dump(mode="json")
+            for reference in input_artifact_references
+        ]
+        try:
+            with self._session_factory.begin() as session:
+                analysis = self._owned_analysis(session.get(Analysis, analysis_id), owner_user_id)
+                run = session.scalar(
+                    select(AnalysisRun).where(
+                        AnalysisRun.id == analysis_run_id,
+                        AnalysisRun.analysis_id == analysis.id,
+                    )
+                )
+                if run is None:
+                    raise ResourceNotFoundError("Analysis run was not found.")
+                active = session.scalar(
+                    select(AnalysisStageExecution).where(
+                        AnalysisStageExecution.analysis_id == analysis_id,
+                        AnalysisStageExecution.stage_type == stage_type,
+                        AnalysisStageExecution.state.in_(("queued", "processing")),
+                    )
+                )
+                if active is not None:
+                    return _stage_result(active, created=False)
+                latest = session.scalar(
+                    select(AnalysisStageExecution)
+                    .where(
+                        AnalysisStageExecution.analysis_id == analysis_id,
+                        AnalysisStageExecution.stage_type == stage_type,
+                    )
+                    .order_by(AnalysisStageExecution.attempt_number.desc())
+                    .limit(1)
+                    .with_for_update()
+                )
+                execution = AnalysisStageExecution(
+                    owner_user_id=owner_user_id,
+                    analysis_id=analysis_id,
+                    analysis_run_id=analysis_run_id,
+                    stage_type=stage_type,
+                    attempt_number=(latest.attempt_number + 1) if latest else 1,
+                    state=state,
+                    is_optional=is_optional,
+                    shadow_mode=shadow_mode,
+                    configuration_fingerprint=configuration_fingerprint,
+                    provenance_payload=provenance.model_dump(mode="json"),
+                    input_artifact_references=input_references,
+                    output_artifact_references=[],
+                    started_at=utc_now() if state == "processing" else None,
+                )
+                session.add(execution)
+                session.flush()
+                return _stage_result(execution, created=True)
+        except IntegrityError:
+            with self._session_factory() as session:
+                active = session.scalar(
+                    select(AnalysisStageExecution)
+                    .join(Analysis, Analysis.id == AnalysisStageExecution.analysis_id)
+                    .where(
+                        Analysis.owner_user_id == owner_user_id,
+                        AnalysisStageExecution.analysis_id == analysis_id,
+                        AnalysisStageExecution.stage_type == stage_type,
+                        AnalysisStageExecution.state.in_(("queued", "processing")),
+                    )
+                )
+                if active is not None:
+                    return _stage_result(active, created=False)
+            raise
+
+    def transition_stage_execution(
+        self,
+        *,
+        owner_user_id: UUID,
+        stage_execution_id: UUID,
+        expected_row_version: int,
+        new_state: str,
+        failure_category: str | None = None,
+    ) -> StageExecutionResult:
+        allowed = {
+            "queued": {"processing", "cancelled", "unavailable"},
+            "processing": {"completed", "failed", "cancelled", "stale", "unavailable"},
+        }
+        if new_state == "failed" and not (failure_category or "").strip():
+            raise ValueError("A failed stage execution requires a safe failure category.")
+        now = utc_now()
+        with self._session_factory.begin() as session:
+            current = session.scalar(
+                select(AnalysisStageExecution)
+                .join(Analysis, Analysis.id == AnalysisStageExecution.analysis_id)
+                .where(
+                    AnalysisStageExecution.id == stage_execution_id,
+                    Analysis.owner_user_id == owner_user_id,
+                )
+            )
+            if current is None:
+                raise ResourceNotFoundError("Stage execution was not found.")
+            if current.state == new_state:
+                return _stage_result(current, created=False)
+            if new_state not in allowed.get(current.state, set()):
+                raise InvalidStateTransitionError(
+                    f"Stage execution cannot transition from {current.state} to {new_state}."
+                )
+            values: dict[str, Any] = {
+                "state": new_state,
+                "row_version": expected_row_version + 1,
+                "updated_at": now,
+            }
+            timestamp_column = {
+                "processing": "started_at",
+                "completed": "completed_at",
+                "failed": "failed_at",
+                "cancelled": "cancelled_at",
+                "stale": "stale_at",
+                "unavailable": "unavailable_at",
+            }[new_state]
+            values[timestamp_column] = now
+            if new_state == "failed":
+                values["failure_category"] = (failure_category or "").strip()[:64]
+            transitioned = session.execute(
+                update(AnalysisStageExecution)
+                .where(
+                    AnalysisStageExecution.id == stage_execution_id,
+                    AnalysisStageExecution.row_version == expected_row_version,
+                    AnalysisStageExecution.state == current.state,
+                )
+                .values(**values)
+                .returning(AnalysisStageExecution)
+            ).scalar_one_or_none()
+            if transitioned is None:
+                raise OptimisticConcurrencyError("Stage execution changed concurrently.")
+            if new_state == "completed":
+                historical_execution_ids = select(AnalysisStageExecution.id).where(
+                    AnalysisStageExecution.analysis_id == transitioned.analysis_id,
+                    AnalysisStageExecution.stage_type == transitioned.stage_type,
+                    AnalysisStageExecution.id != transitioned.id,
+                )
+                session.execute(
+                    update(AnalysisArtifact)
+                    .where(
+                        AnalysisArtifact.stage_execution_id.in_(historical_execution_ids),
+                        AnalysisArtifact.is_current.is_(True),
+                    )
+                    .values(is_current=False, updated_at=now)
+                )
+            return _stage_result(transitioned, created=False)
+
+    def list_stage_executions(
+        self,
+        *,
+        owner_user_id: UUID,
+        analysis_id: str,
+        stage_type: str | None = None,
+    ) -> list[AnalysisStageExecution]:
+        with self._session_factory() as session:
+            self._assert_owner(session.get(Analysis, analysis_id), owner_user_id)
+            statement = select(AnalysisStageExecution).where(
+                AnalysisStageExecution.analysis_id == analysis_id,
+                AnalysisStageExecution.owner_user_id == owner_user_id,
+            )
+            if stage_type is not None:
+                statement = statement.where(AnalysisStageExecution.stage_type == stage_type)
+            return list(
+                session.scalars(
+                    statement.order_by(
+                        AnalysisStageExecution.stage_type,
+                        AnalysisStageExecution.attempt_number,
+                    )
+                )
+            )
+
+    def register_stage_artifacts(
+        self,
+        *,
+        owner_user_id: UUID,
+        stage_execution_id: UUID,
+        artifacts: list[ArtifactInput],
+    ) -> list[AnalysisArtifact]:
+        with self._session_factory.begin() as session:
+            execution = session.scalar(
+                select(AnalysisStageExecution)
+                .join(Analysis, Analysis.id == AnalysisStageExecution.analysis_id)
+                .where(
+                    AnalysisStageExecution.id == stage_execution_id,
+                    Analysis.owner_user_id == owner_user_id,
+                )
+            )
+            if execution is None:
+                raise ResourceNotFoundError("Stage execution was not found.")
+            if execution.state not in {"queued", "processing"}:
+                raise InvalidStateTransitionError(
+                    "Artifacts cannot be added to a terminal stage execution."
+                )
+            expected_prefix = stage_artifact_prefix(execution.stage_type, execution.attempt_number)
+            if any(not artifact.storage_key.startswith(expected_prefix) for artifact in artifacts):
+                raise ValueError(
+                    "Stage artifact storage keys must be namespaced by stage and attempt."
+                )
+            analysis = self._owned_analysis(
+                session.get(Analysis, execution.analysis_id), owner_user_id
+            )
+            registered = self._register_artifacts(
+                session,
+                owner_user_id=owner_user_id,
+                analysis=analysis,
+                run=session.get(AnalysisRun, execution.analysis_run_id),
+                artifacts=artifacts,
+                stage_execution=execution,
+            )
+            execution.output_artifact_references = [
+                {
+                    "artifact_id": str(artifact.id),
+                    "storage_key": artifact.storage_key,
+                    "checksum_sha256": artifact.checksum_sha256,
+                    "schema_version": artifact.schema_version,
+                }
+                for artifact in registered
+            ]
+            execution.updated_at = utc_now()
+            return registered
+
+    def record_calibration_verification(
+        self,
+        *,
+        owner_user_id: UUID,
+        analysis_id: str,
+        calibration_id: str,
+        calibration_checksum_sha256: str,
+        verification_state: str,
+        verification_method: str,
+        reviewer_context: str | None = None,
+        verified_at: datetime | None = None,
+    ) -> CalibrationVerification:
+        if verification_state not in {"verified", "rejected"}:
+            raise ValueError("Calibration review must be verified or rejected.")
+        _validate_sha256(calibration_checksum_sha256, "calibration checksum")
+        with self._session_factory.begin() as session:
+            self._assert_owner(session.get(Analysis, analysis_id), owner_user_id)
+            existing = session.scalar(
+                select(CalibrationVerification).where(
+                    CalibrationVerification.analysis_id == analysis_id,
+                    CalibrationVerification.calibration_id == calibration_id,
+                    CalibrationVerification.calibration_checksum_sha256
+                    == calibration_checksum_sha256,
+                )
+            )
+            if existing is not None:
+                return existing
+            verification = CalibrationVerification(
+                owner_user_id=owner_user_id,
+                analysis_id=analysis_id,
+                calibration_id=calibration_id,
+                calibration_checksum_sha256=calibration_checksum_sha256,
+                verification_state=verification_state,
+                verification_method=verification_method.strip()[:64],
+                reviewer_context=(reviewer_context or "").strip()[:256] or None,
+                schema_version=1,
+                verified_at=verified_at or utc_now(),
+            )
+            session.add(verification)
+            session.flush()
+            return verification
+
     def load_job(self, *, owner_user_id: UUID, analysis_id: str) -> dict[str, Any]:
         with self._session_factory() as session:
             analysis = self._owned_analysis(session.get(Analysis, analysis_id), owner_user_id)
@@ -731,7 +1031,7 @@ class PersistenceService:
                     run.error_detail = str(payload.get("error") or "")[:4000] or None
                 self._add_run_event(session, run, previous_run_state, new_state, f"run_{new_state}")
 
-            self._replace_artifacts(
+            self._register_artifacts(
                 session,
                 owner_user_id=owner_user_id,
                 analysis=analysis,
@@ -757,6 +1057,7 @@ class PersistenceService:
                         AnalysisArtifact.analysis_id == analysis_id,
                         AnalysisArtifact.owner_user_id == owner_user_id,
                         AnalysisArtifact.state == "available",
+                        AnalysisArtifact.is_current.is_(True),
                     )
                     .order_by(AnalysisArtifact.storage_key)
                 )
@@ -772,6 +1073,7 @@ class PersistenceService:
                     AnalysisArtifact.analysis_id == analysis_id,
                     AnalysisArtifact.storage_key == storage_key,
                     AnalysisArtifact.state == "available",
+                    AnalysisArtifact.is_current.is_(True),
                 )
             )
             if artifact is None:
@@ -796,7 +1098,23 @@ class PersistenceService:
             raise OperationInProgressError("The original run request is still in progress.")
         return RunResult(UUID(record.resource_id), False)
 
-    def _replace_artifacts(
+    def list_artifact_history(
+        self, *, owner_user_id: UUID, analysis_id: str
+    ) -> list[AnalysisArtifact]:
+        with self._session_factory() as session:
+            self._assert_owner(session.get(Analysis, analysis_id), owner_user_id)
+            return list(
+                session.scalars(
+                    select(AnalysisArtifact)
+                    .where(
+                        AnalysisArtifact.owner_user_id == owner_user_id,
+                        AnalysisArtifact.analysis_id == analysis_id,
+                    )
+                    .order_by(AnalysisArtifact.storage_key, AnalysisArtifact.created_at)
+                )
+            )
+
+    def _register_artifacts(
         self,
         session: Session,
         *,
@@ -804,23 +1122,47 @@ class PersistenceService:
         analysis: Analysis,
         run: AnalysisRun | None,
         artifacts: list[ArtifactInput],
-    ) -> None:
-        session.execute(delete(AnalysisArtifact).where(AnalysisArtifact.analysis_id == analysis.id))
+        stage_execution: AnalysisStageExecution | None = None,
+    ) -> list[AnalysisArtifact]:
+        registered: list[AnalysisArtifact] = []
         for artifact in artifacts:
-            session.add(
-                AnalysisArtifact(
-                    owner_user_id=owner_user_id,
-                    analysis_id=analysis.id,
-                    analysis_run_id=run.id if run else None,
-                    artifact_kind=artifact.artifact_kind,
-                    storage_provider="local",
-                    storage_key=artifact.storage_key,
-                    content_type=artifact.content_type,
-                    size_bytes=artifact.size_bytes,
-                    checksum_sha256=artifact.checksum_sha256,
-                    state="available",
+            current = session.scalar(
+                select(AnalysisArtifact).where(
+                    AnalysisArtifact.analysis_id == analysis.id,
+                    AnalysisArtifact.storage_provider == "local",
+                    AnalysisArtifact.storage_key == artifact.storage_key,
+                    AnalysisArtifact.is_current.is_(True),
                 )
             )
+            if (
+                current is not None
+                and current.checksum_sha256 == artifact.checksum_sha256
+                and current.size_bytes == artifact.size_bytes
+            ):
+                registered.append(current)
+                continue
+            if current is not None:
+                current.is_current = False
+                current.updated_at = utc_now()
+            created = AnalysisArtifact(
+                owner_user_id=owner_user_id,
+                analysis_id=analysis.id,
+                analysis_run_id=run.id if run else None,
+                stage_execution_id=stage_execution.id if stage_execution else None,
+                artifact_kind=artifact.artifact_kind,
+                storage_provider="local",
+                storage_key=artifact.storage_key,
+                content_type=artifact.content_type,
+                size_bytes=artifact.size_bytes,
+                checksum_sha256=artifact.checksum_sha256,
+                schema_version=artifact.schema_version,
+                state="available",
+                is_current=True,
+            )
+            session.add(created)
+            session.flush()
+            registered.append(created)
+        return registered
 
     @staticmethod
     def _persist_player_selection(
@@ -989,3 +1331,33 @@ def _as_datetime(value: object, fallback: datetime) -> datetime:
 def _source_checksum(session: Session, analysis: Analysis) -> str | None:
     video = session.get(UploadedVideo, analysis.uploaded_video_id)
     return video.source_checksum if video else None
+
+
+def stage_artifact_prefix(stage_type: str, attempt_number: int) -> str:
+    _validate_stage_type(stage_type)
+    if attempt_number < 1:
+        raise ValueError("Stage attempt number must be positive.")
+    root = "ball" if stage_type == "ball_tracking" else f"stages/{stage_type}"
+    return f"{root}/attempt-{attempt_number:04d}/"
+
+
+def _validate_stage_type(stage_type: str) -> str:
+    if not _STAGE_TYPE_PATTERN.fullmatch(stage_type):
+        raise ValueError("Stage type must be a lowercase stable identifier.")
+    return stage_type
+
+
+def _validate_sha256(value: str, label: str) -> str:
+    if not re.fullmatch(r"[a-f0-9]{64}", value):
+        raise ValueError(f"{label.capitalize()} must be a lowercase SHA-256 digest.")
+    return value
+
+
+def _stage_result(execution: AnalysisStageExecution, *, created: bool) -> StageExecutionResult:
+    return StageExecutionResult(
+        stage_execution_id=execution.id,
+        attempt_number=execution.attempt_number,
+        state=execution.state,
+        row_version=execution.row_version,
+        created=created,
+    )

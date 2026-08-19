@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -21,6 +21,7 @@ from app.auth.service import (
 from app.config import get_settings
 from app.config.settings import Settings
 from app.email.dependencies import get_development_email_sink
+from app.email.models import DeliveryResult
 from app.schemas.auth import (
     AuthResponse,
     ChangePasswordRequest,
@@ -73,7 +74,7 @@ def register(
             "This email is not approved for the Court4 private alpha.",
             status_code=403,
         )
-    user, tokens = auth.register(
+    user, tokens, delivery = auth.register(
         normalized_email,
         credentials.password,
         user_agent=request.headers.get("user-agent"),
@@ -82,7 +83,7 @@ def register(
     return AuthResponse(
         access_token=tokens.access_token,
         expires_in=tokens.access_expires_in,
-        user=UserResponse.model_validate(user),
+        user=_user_response(user, settings, delivery),
     )
 
 
@@ -104,7 +105,7 @@ def login(
     return AuthResponse(
         access_token=tokens.access_token,
         expires_in=tokens.access_expires_in,
-        user=UserResponse.model_validate(user),
+        user=_user_response(user, settings),
     )
 
 
@@ -124,7 +125,7 @@ def refresh(
     return AuthResponse(
         access_token=tokens.access_token,
         expires_in=tokens.access_expires_in,
-        user=UserResponse.model_validate(user),
+        user=_user_response(user, settings),
     )
 
 
@@ -148,8 +149,8 @@ def logout(
 
 
 @router.get("/me", response_model=UserResponse)
-def me(user: CurrentUser) -> UserResponse:
-    return UserResponse.model_validate(user)
+def me(user: CurrentUser, settings: SettingsDependency) -> UserResponse:
+    return _user_response(user, settings)
 
 
 @router.post("/resend-verification", response_model=VerificationResponse)
@@ -165,13 +166,18 @@ def resend_verification(
         settings.auth_resend_verification_rate_limit,
         settings,
     )
-    sent = auth.resend_verification(user.id, user_agent=request.headers.get("user-agent"))
+    sent, delivery = auth.resend_verification(user.id, user_agent=request.headers.get("user-agent"))
+    if sent:
+        delivery_mode = _delivery_mode(settings, delivery)
+        message = _delivery_success_message(delivery_mode)
+    else:
+        delivery_mode = None
+        message = "Your email is already verified."
     return VerificationResponse(
         verified=not sent,
-        message=(
-            "A new verification link has been sent." if sent else "Your email is already verified."
-        ),
-        user=UserResponse.model_validate(user) if not sent else None,
+        message=message,
+        user=_user_response(user, settings) if not sent else None,
+        delivery_mode=delivery_mode,
     )
 
 
@@ -196,7 +202,7 @@ def verify_email(
         message="Your email has been verified.",
         access_token=tokens.access_token,
         expires_in=tokens.access_expires_in,
-        user=UserResponse.model_validate(user),
+        user=_user_response(user, settings),
     )
 
 
@@ -205,9 +211,10 @@ def complete_onboarding(
     payload: CompleteOnboardingRequest,
     user: VerifiedUser,
     auth: AuthDependency,
+    settings: SettingsDependency,
 ) -> UserResponse:
     completed_user = auth.complete_onboarding(user.id, payload.display_name)
-    return UserResponse.model_validate(completed_user)
+    return _user_response(completed_user, settings)
 
 
 @router.post("/forgot-password", response_model=MessageResponse)
@@ -271,7 +278,7 @@ def change_password(
     return AuthResponse(
         access_token=tokens.access_token,
         expires_in=tokens.access_expires_in,
-        user=UserResponse.model_validate(changed_user),
+        user=_user_response(changed_user, settings),
     )
 
 
@@ -403,6 +410,50 @@ def _validate_cookie_origin(request: Request, settings: Settings) -> None:
         raise AuthenticationError(
             "invalid_origin", "Request origin is not allowed.", status_code=403
         )
+
+
+def _user_response(
+    user: object,
+    settings: Settings,
+    delivery: DeliveryResult | None = None,
+) -> UserResponse:
+    response = UserResponse.model_validate(user)
+    return response.model_copy(
+        update={"verification_delivery_mode": _delivery_mode(settings, delivery)}
+    )
+
+
+def _delivery_mode(
+    settings: Settings,
+    delivery: DeliveryResult | None = None,
+) -> Literal["external", "development", "unavailable"]:
+    if delivery is not None:
+        if delivery.status == "recorded":
+            return "development"
+        if delivery.status == "sent":
+            return "external"
+        return "unavailable"
+    if (
+        settings.environment in {"development", "test"}
+        and settings.auth_email_backend == "development"
+        and settings.auth_development_email_sink_enabled
+    ):
+        return "development"
+    return "external"
+
+
+def _delivery_success_message(
+    delivery_mode: Literal["external", "development", "unavailable"],
+) -> str:
+    if delivery_mode == "development":
+        return "A new verification message was captured in the local development inbox."
+    if delivery_mode == "external":
+        return "A new verification link has been sent."
+    raise AuthenticationError(
+        "EMAIL_DELIVERY_UNAVAILABLE",
+        "Court4 could not deliver the verification email. Try again later.",
+        status_code=503,
+    )
 
 
 def _limit(request: Request, operation: str, limit: int, settings: Settings) -> None:

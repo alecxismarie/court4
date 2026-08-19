@@ -1,7 +1,7 @@
 import { chromium, request } from "@playwright/test";
 
-const webBase = process.env.COURT4_SMOKE_WEB_URL ?? "http://127.0.0.1:3000";
-const apiBase = process.env.COURT4_SMOKE_API_URL ?? "http://127.0.0.1:8000";
+const webBase = process.env.COURT4_SMOKE_WEB_URL ?? "http://localhost:3000";
+const apiBase = process.env.COURT4_SMOKE_API_URL ?? "http://localhost:8000";
 const email = process.env.COURT4_SMOKE_EMAIL ?? "phase18cb-live-smoke@court4.invalid";
 const originalPassword = "Court4 smoke password one";
 const resetPassword = "Court4 smoke password two";
@@ -44,7 +44,7 @@ try {
     "email_verification",
   );
   await page.getByRole("button", { name: "Resend verification email" }).click();
-  await page.getByText("A new verification link has been sent.").waitFor();
+  await page.getByText(/new verification message was captured/i).waitFor();
   const verificationLink = await latestEmailLink(
     page,
     accessToken,

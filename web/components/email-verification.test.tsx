@@ -14,7 +14,12 @@ const authState = {
   user: {
     email: "player@example.com",
     email_verified_at: null as string | null,
-  } as { email: string; email_verified_at: string | null } | null,
+    verification_delivery_mode: "development" as "development" | "external" | "unavailable",
+  } as {
+    email: string;
+    email_verified_at: string | null;
+    verification_delivery_mode: "development" | "external" | "unavailable";
+  } | null,
   loading: false,
 };
 vi.mock("next/navigation", () => ({
@@ -35,7 +40,11 @@ vi.mock("@/lib/api/auth", () => ({
 describe("email verification UI", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    authState.user = { email: "player@example.com", email_verified_at: null };
+    authState.user = {
+      email: "player@example.com",
+      email_verified_at: null,
+      verification_delivery_mode: "development",
+    };
     window.history.replaceState(null, "", "/verify-email?token=secret");
   });
 
@@ -44,6 +53,7 @@ describe("email verification UI", () => {
       verified: false,
       message: "A new verification link has been sent.",
       user: null,
+      delivery_mode: "external",
     });
     render(<VerificationPending />);
     expect(screen.getByText("ACCOUNT ACTIVATION")).toBeVisible();
@@ -52,6 +62,7 @@ describe("email verification UI", () => {
     expect(screen.queryByText(/browse your account/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /continue to court4/i })).not.toBeInTheDocument();
     expect(screen.getByText(/player@example.com/)).toBeInTheDocument();
+    expect(screen.getByText(/captured in the local development inbox/i)).toBeVisible();
     await userEvent.click(
       screen.getByRole("button", { name: "Resend verification email" }),
     );
@@ -64,7 +75,7 @@ describe("email verification UI", () => {
       email_verified_at: null,
     });
     render(<VerificationPending />);
-    await userEvent.click(screen.getByRole("button", { name: "I’ve verified my email" }));
+    await userEvent.click(screen.getByRole("button", { name: "Check verification status" }));
     expect(refreshUser).toHaveBeenCalledOnce();
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "We haven’t confirmed your email yet",
@@ -78,8 +89,37 @@ describe("email verification UI", () => {
       email_verified_at: "2026-08-04T00:00:00Z",
     });
     render(<VerificationPending />);
-    await userEvent.click(screen.getByRole("button", { name: "I’ve verified my email" }));
+    await userEvent.click(screen.getByRole("button", { name: "Check verification status" }));
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/dashboard"));
+  });
+
+  it("uses sent-email wording only for external delivery", () => {
+    authState.user = {
+      email: "player@example.com",
+      email_verified_at: null,
+      verification_delivery_mode: "external",
+    };
+    render(<VerificationPending />);
+
+    expect(screen.getByText(/We sent a verification link to/i)).toHaveTextContent(
+      "player@example.com",
+    );
+    expect(screen.queryByText(/local development inbox/i)).not.toBeInTheDocument();
+  });
+
+  it("shows no success copy when resend delivery fails", async () => {
+    vi.mocked(resendVerification).mockRejectedValueOnce(
+      new Court4ApiError("Court4 could not deliver the verification email. Try again later.", {
+        code: "EMAIL_DELIVERY_UNAVAILABLE",
+        status: 503,
+      }),
+    );
+    render(<VerificationPending />);
+
+    await userEvent.click(screen.getByRole("button", { name: "Resend verification email" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("could not deliver");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("establishes the session, removes the token URL, and opens Dashboard", async () => {

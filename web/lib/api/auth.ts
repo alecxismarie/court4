@@ -19,6 +19,10 @@ export const userSchema = z.object({
   email_verified_at: z.string().nullable(),
   password_changed_at: z.string().nullable(),
   display_name: z.string().nullable(),
+  verification_delivery_mode: z
+    .enum(["external", "development", "unavailable"])
+    .nullable()
+    .optional(),
 });
 
 export const authResponseSchema = z.object({
@@ -35,6 +39,7 @@ const messageResponseSchema = z.object({ message: z.string() });
 const verificationResponseSchema = messageResponseSchema.extend({
   verified: z.boolean(),
   user: userSchema.nullable().optional(),
+  delivery_mode: z.enum(["external", "development", "unavailable"]).nullable().optional(),
 });
 const verificationAuthResponseSchema = authResponseSchema.extend({
   verified: z.literal(true),

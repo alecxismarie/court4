@@ -260,6 +260,89 @@ class AnalysisRun(Base):
     )
 
 
+class AnalysisStageExecution(Base):
+    """One immutable attempt to execute an independently retryable analysis stage."""
+
+    __tablename__ = "analysis_stage_executions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["analysis_run_id", "analysis_id"],
+            ["analysis_runs.id", "analysis_runs.analysis_id"],
+            name="fk_stage_execution_run_analysis",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["analysis_id", "owner_user_id"],
+            ["analyses.id", "analyses.owner_user_id"],
+            name="fk_stage_execution_analysis_owner",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("id", "analysis_id", name="uq_stage_execution_id_analysis"),
+        UniqueConstraint(
+            "analysis_id",
+            "stage_type",
+            "attempt_number",
+            name="uq_stage_execution_attempt",
+        ),
+        CheckConstraint(
+            "state in "
+            "('queued','processing','completed','failed','cancelled','stale','unavailable')",
+            name="ck_stage_execution_state",
+        ),
+        CheckConstraint("attempt_number > 0", name="ck_stage_execution_attempt"),
+        CheckConstraint("row_version > 0", name="ck_stage_execution_row_version"),
+        CheckConstraint(
+            "configuration_fingerprint ~ '^[a-f0-9]{64}$'",
+            name="ck_stage_execution_configuration_fingerprint",
+        ),
+        Index(
+            "uq_stage_execution_one_active",
+            "analysis_id",
+            "stage_type",
+            unique=True,
+            postgresql_where=text("state in ('queued','processing')"),
+        ),
+        Index(
+            "ix_stage_execution_owner_analysis",
+            "owner_user_id",
+            "analysis_id",
+            "stage_type",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    analysis_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    analysis_run_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    stage_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    row_version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    is_optional: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    shadow_mode: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    configuration_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    provenance_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    input_artifact_references: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+    output_artifact_references: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+    failure_category: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stale_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    unavailable_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
 class AnalysisStateEvent(Base):
     __tablename__ = "analysis_state_events"
     __table_args__ = (
@@ -340,8 +423,11 @@ class AnalysisArtifact(Base):
             name="fk_artifact_analysis_owner",
             ondelete="RESTRICT",
         ),
-        UniqueConstraint(
-            "analysis_id", "storage_provider", "storage_key", name="uq_artifact_storage_key"
+        ForeignKeyConstraint(
+            ["stage_execution_id", "analysis_id"],
+            ["analysis_stage_executions.id", "analysis_stage_executions.analysis_id"],
+            name="fk_artifact_stage_execution_analysis",
+            ondelete="RESTRICT",
         ),
         CheckConstraint("size_bytes >= 0", name="ck_artifact_size"),
         CheckConstraint("checksum_sha256 ~ '^[a-f0-9]{64}$'", name="ck_artifact_checksum"),
@@ -350,6 +436,15 @@ class AnalysisArtifact(Base):
             name="ck_artifact_state",
         ),
         Index("ix_artifact_owner_analysis", "owner_user_id", "analysis_id"),
+        Index(
+            "uq_artifact_current_storage",
+            "analysis_id",
+            "storage_provider",
+            "storage_key",
+            unique=True,
+            postgresql_where=text("is_current"),
+        ),
+        Index("ix_artifact_stage_execution", "stage_execution_id", "created_at"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -358,6 +453,7 @@ class AnalysisArtifact(Base):
     )
     analysis_id: Mapped[str] = mapped_column(String(64), nullable=False)
     analysis_run_id: Mapped[UUID | None] = mapped_column(Uuid)
+    stage_execution_id: Mapped[UUID | None] = mapped_column(Uuid)
     artifact_kind: Mapped[str] = mapped_column(String(64), nullable=False)
     storage_provider: Mapped[str] = mapped_column(String(32), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(1024), nullable=False)
@@ -366,10 +462,59 @@ class AnalysisArtifact(Base):
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     schema_version: Mapped[int | None] = mapped_column(Integer)
     state: Mapped[str] = mapped_column(String(24), nullable=False, default="available")
+    is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
+
+
+class CalibrationVerification(Base):
+    """Purpose-built human review record; generation never implies verification."""
+
+    __tablename__ = "calibration_verifications"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["analysis_id", "owner_user_id"],
+            ["analyses.id", "analyses.owner_user_id"],
+            name="fk_calibration_verification_analysis_owner",
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "analysis_id",
+            "calibration_id",
+            "calibration_checksum_sha256",
+            name="uq_calibration_verification_evidence",
+        ),
+        CheckConstraint(
+            "verification_state in ('verified','rejected')",
+            name="ck_calibration_verification_state",
+        ),
+        CheckConstraint(
+            "calibration_checksum_sha256 ~ '^[a-f0-9]{64}$'",
+            name="ck_calibration_verification_checksum",
+        ),
+        CheckConstraint("schema_version > 0", name="ck_calibration_verification_schema"),
+        Index(
+            "ix_calibration_verification_owner_analysis",
+            "owner_user_id",
+            "analysis_id",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    analysis_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    calibration_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    calibration_checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    verification_state: Mapped[str] = mapped_column(String(24), nullable=False)
+    verification_method: Mapped[str] = mapped_column(String(64), nullable=False)
+    reviewer_context: Mapped[str | None] = mapped_column(String(256))
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
 class PlayerSelection(Base):

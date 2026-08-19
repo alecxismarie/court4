@@ -63,7 +63,7 @@
   height: 98px;
   transform: translateX(-50%);
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
 }
 
 .landing-brand {
@@ -310,20 +310,6 @@
 .landing-auth-options a {
   color: var(--landing-lime);
   font-weight: 700;
-}
-
-.landing-remember {
-  display: inline-flex;
-  color: #aeb9bd;
-  align-items: center;
-  gap: 0.45rem;
-}
-
-.landing-remember input {
-  width: 1rem;
-  height: 1rem;
-  margin: 0;
-  accent-color: var(--landing-lime);
 }
 
 .landing-password-guidance {

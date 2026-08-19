@@ -5,10 +5,14 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - .env.example
+      - path: .env
+        required: true
     environment:
       COURT4_DETECTOR_MODEL_PATH: /app/models/yolo11n.pt
+      COURT4_DETECTOR_MODEL_SHA256: 0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1
       PICKLEBALL_AI_DATABASE_URL: postgresql+psycopg://court4:court4_local_only@postgres:5432/court4
+      PICKLEBALL_AI_FRONTEND_ALLOWED_ORIGINS: ${PICKLEBALL_AI_FRONTEND_ALLOWED_ORIGINS:-http://localhost:3000}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL:-http://localhost:3000}
     command:
       - sh
       - -c
@@ -71,6 +75,53 @@ services:
       retries: 20
     volumes:
       - court4-test-postgres:/var/lib/postgresql/data
+
+  api-test:
+    build:
+      context: .
+      target: test
+    image: court4:test-local
+    profiles:
+      - test
+    ports:
+      - "8001:8000"
+    environment:
+      PICKLEBALL_AI_ENVIRONMENT: test
+      PICKLEBALL_AI_PERSISTENCE_BACKEND: postgresql
+      PICKLEBALL_AI_DATABASE_URL: postgresql+psycopg://court4_test:court4_test_local_only@postgres-test:5432/court4_test
+      COURT4_TEST_DATABASE_URL: postgresql+psycopg://court4_test:court4_test_local_only@postgres-test:5432/court4_test
+      PICKLEBALL_AI_ALLOW_DESTRUCTIVE_DATABASE_OPERATIONS: "true"
+      PICKLEBALL_AI_EXPECTED_TEST_DATABASE_PREFIX: court4_test
+      PICKLEBALL_AI_EXPECTED_TEST_DATABASE_HOST: postgres-test
+      PICKLEBALL_AI_EXPECTED_TEST_DATABASE_USER: court4_test
+      COURT4_TEST_EXPECTED_DATABASE_PREFIX: court4_test
+      COURT4_TEST_EXPECTED_DATABASE_HOST: postgres-test
+      COURT4_TEST_EXPECTED_DATABASE_USER: court4_test
+      PICKLEBALL_AI_AUTH_ACCESS_TOKEN_SECRET: isolated-test-secret-that-is-never-used-outside-tests
+      PICKLEBALL_AI_FRONTEND_ALLOWED_ORIGINS: ${COURT4_TEST_FRONTEND_ORIGIN:-http://localhost:3000}
+      FRONTEND_BASE_URL: ${COURT4_TEST_FRONTEND_ORIGIN:-http://localhost:3000}
+      PICKLEBALL_AI_AUTH_COOKIE_SECURE: "false"
+      PICKLEBALL_AI_AUTH_COOKIE_SAMESITE: lax
+      PICKLEBALL_AI_AUTH_REGISTER_RATE_LIMIT: ${COURT4_TEST_AUTH_REGISTER_RATE_LIMIT:-5}
+      COURT4_DETECTOR_MODEL_SHA256: 0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1
+      PICKLEBALL_AI_AUTH_DEVELOPMENT_EMAIL_SINK_ENABLED: "true"
+      EMAIL_PROVIDER: development
+      ALLOW_EXTERNAL_EMAIL_IN_TESTS: "false"
+      BREVO_API_KEY: ""
+      RESEND_API_KEY: ""
+      EMAIL_FROM_ADDRESS: court4@localhost.invalid
+      REGISTRATION_ENABLED: "true"
+    command:
+      - sh
+      - -c
+      - alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models:ro
+      - ./app:/app/app:ro
 
 volumes:
   court4-postgres:

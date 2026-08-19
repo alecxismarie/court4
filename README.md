@@ -325,24 +325,29 @@ dependency:
 python -m pip install -e ".[detector]"
 ```
 
-Court4 does not commit YOLO weights. Place a local model file under `models/`
-or set `COURT4_DETECTOR_MODEL_PATH` to another path:
+Court4 does not commit YOLO weights. Provision the checksum-pinned model under the
+ignored `models/` directory:
 
 ```powershell
-New-Item -ItemType Directory -Force models | Out-Null
-$env:COURT4_DETECTOR_MODEL_PATH = "models/yolo11n.pt"
+python -m scripts.provision_detector_model --destination models/yolo11n.pt
 ```
+
+See `DETECTOR_MODEL_PROVISIONING.md` for the versioned source, checksum, staging
+volume procedure, and fail-closed runtime behavior.
 
 Frontend setup:
 
 ```powershell
 cd web
-copy .env.example .env.local
+# Create the ignored .env.local with NEXT_PUBLIC_COURT4_API_URL=http://localhost:8000
 npm.cmd install
 npm.cmd run dev
 ```
 
-The default frontend expects the API at `http://127.0.0.1:8000`. On Windows/WSL setups, this avoids `localhost` resolving to the wrong loopback listener.
+The canonical local pair is `http://localhost:3000` and
+`http://localhost:8000`. Do not mix `localhost` with `127.0.0.1`; the refresh
+cookie is host-only and CORS/CSRF accept only the configured frontend origin. See
+`LOCAL_AUTH_EMAIL_CONFIGURATION.md` for the complete local and staging contract.
 
 ## Configuration
 
@@ -354,6 +359,8 @@ precedence over the legacy `PICKLEBALL_AI_DETECTOR_MODEL_PATH`.
 | --- | --- |
 | `PICKLEBALL_AI_INPUT_DIR` | `data/input` |
 | `PICKLEBALL_AI_OUTPUT_DIR` | `data/output` |
+| `COURT4_DETECTOR_MODEL_PATH` | `models/yolo11n.pt` |
+| `COURT4_DETECTOR_MODEL_SHA256` | `0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1` |
 | `PICKLEBALL_AI_DEFAULT_SAMPLE_INTERVAL_SECONDS` | `30` |
 | `PICKLEBALL_AI_MAX_UPLOAD_SIZE_BYTES` | `1073741824` |
 | `PICKLEBALL_AI_SUPPORTED_EXTENSIONS` | `.mp4,.mov,.avi,.mkv` |
@@ -388,13 +395,13 @@ precedence over the legacy `PICKLEBALL_AI_DETECTOR_MODEL_PATH`.
 | `PICKLEBALL_AI_ANALYSIS_OUTPUT_DIR` | `data/output` |
 | `PICKLEBALL_AI_UPLOAD_CHUNK_SIZE_BYTES` | `1048576` |
 | `PICKLEBALL_AI_DEFAULT_TRACKING_BACKEND` | `controlled-json` |
-| `PICKLEBALL_AI_FRONTEND_ALLOWED_ORIGINS` | `http://localhost:3000,http://127.0.0.1:3000` |
+| `PICKLEBALL_AI_FRONTEND_ALLOWED_ORIGINS` | `http://localhost:3000` |
 
 Frontend variables live in `web/.env.local`:
 
 | Variable | Default |
 | --- | --- |
-| `NEXT_PUBLIC_COURT4_API_URL` | `http://127.0.0.1:8000` |
+| `NEXT_PUBLIC_COURT4_API_URL` | `http://localhost:8000` |
 | `NEXT_PUBLIC_COURT4_MAX_UPLOAD_BYTES` | `1073741824` |
 | `NEXT_PUBLIC_COURT4_SUPPORTED_VIDEO_EXTENSIONS` | `.mp4,.mov,.avi,.mkv` |
 
@@ -961,6 +968,13 @@ npm.cmd run dev
 
 ## Docker
 
+Create the ignored runtime file first. `.env.example` is a documentation template
+and is never loaded by Compose:
+
+```powershell
+Copy-Item .env.example .env
+```
+
 ```bash
 docker compose up --build
 docker compose run --rm api python -m scripts.inspect_video --input data/input/match.mp4
@@ -971,11 +985,12 @@ docker compose run --rm api python -m scripts.analyze_match --analysis-id ...
 ```
 
 The Docker image installs the optional detector dependencies, including Ultralytics
-and ByteTrack's `lap` dependency, but it does not include model weights. The
-Compose service mounts `./models:/app/models:ro` and sets
-`COURT4_DETECTOR_MODEL_PATH=/app/models/yolo11n.pt`, so real tracking requires a
-local untracked `models/yolo11n.pt` file on the host. Controlled JSONL detections
-remain available for deterministic offline tests that do not require weights.
+and ByteTrack's `lap` dependency, but it does not include model weights. Provision
+the exact pinned artifact first, then mount it read-only. The Compose service mounts
+`./models:/app/models:ro` and sets the model path and expected checksum. Controlled
+JSONL detections remain available for deterministic offline tests that do not
+require weights. Staging uses the same provisioning command against a persistent
+model volume; an Ultralytics-default API refuses to start without verified bytes.
 
 Run the API with Docker:
 
@@ -991,11 +1006,11 @@ docker run --rm -p 8000:8000 \
 Run backend validation through Docker without a local Python environment:
 
 ```powershell
-docker compose build api
-docker compose run --rm api python -m pytest
-docker compose run --rm api python -m ruff check .
-docker compose run --rm api python -m ruff format --check .
-docker compose run --rm api python -m mypy app scripts tests
+docker compose --profile test build api-test
+docker compose --profile test run --rm api-test python -m pytest
+docker compose --profile test run --rm --no-deps api-test python -m ruff check .
+docker compose --profile test run --rm --no-deps api-test python -m ruff format --check .
+docker compose --profile test run --rm --no-deps api-test python -m mypy app scripts tests
 ```
 
 ## Real-Video Evidence Calibration
@@ -1060,15 +1075,15 @@ python -m mypy app scripts tests
 docker build -t court4:local .
 
 # In another shell while the API is running:
-curl.exe http://127.0.0.1:8000/health
-curl.exe http://127.0.0.1:8000/docs
+curl.exe http://localhost:8000/health
+curl.exe http://localhost:8000/docs
 
 cd web
 npm.cmd run lint
 npm.cmd run typecheck
 npm.cmd run test
 npm.cmd run e2e
-$env:NEXT_PUBLIC_COURT4_API_URL="http://127.0.0.1:8000"
+$env:NEXT_PUBLIC_COURT4_API_URL="http://localhost:8000"
 npm.cmd run build
 ```
 

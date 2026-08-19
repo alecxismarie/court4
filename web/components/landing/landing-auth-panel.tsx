@@ -148,17 +148,7 @@ export function LandingAuthPanel() {
 
           {mode === "login" ? (
             <div className="landing-auth-options">
-              <label
-                className="landing-remember"
-                title="Court4 currently uses the configured secure session lifetime."
-              >
-                <input type="checkbox" disabled aria-describedby="remember-policy" />
-                Remember Me
-              </label>
               <Link href="/forgot-password">Forgot password?</Link>
-              <span id="remember-policy" className="sr-only">
-                Session duration currently follows Court4 security settings.
-              </span>
             </div>
           ) : (
             <p className="landing-password-guidance">

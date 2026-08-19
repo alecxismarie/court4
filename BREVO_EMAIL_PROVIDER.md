@@ -17,6 +17,8 @@ AuthenticationService
 ## Local configuration
 
 Create or update the ignored root `.env` on the development computer. Do not put provider credentials in `web/.env.local` and never commit `.env`.
+`.env.example` is documentation only; Docker Compose loads the ignored `.env` and
+fails when that file is absent.
 
 ```dotenv
 EMAIL_PROVIDER=brevo
@@ -54,7 +56,7 @@ Real delivery is not proven by mocked tests. With the local backend and frontend
 
 1. Register a new address on the private-alpha allowlist and receive the verification message.
 2. Open its localhost verification link on the same computer and confirm verification.
-3. Register another address or repeat before verification, select resend, and confirm the old link is invalidated.
+3. Before verification, select resend, receive exactly one new message, and confirm the old link is invalidated.
 4. Request forgot password and confirm the response remains generic.
 5. Receive the reset message, open the localhost link, and complete reset.
 6. Change the password while signed in and receive the password-changed notice.

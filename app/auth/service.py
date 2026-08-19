@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.auth.errors import AuthenticationError
 from app.config.settings import Settings
+from app.email.models import DeliveryResult
 from app.email.service import AccountEmailService
 from app.persistence.models import AccountToken, RefreshSession, User
 
@@ -79,7 +80,7 @@ class AuthenticationService:
 
     def register(
         self, email: str, password: str, *, user_agent: str | None
-    ) -> tuple[User, SessionTokens]:
+    ) -> tuple[User, SessionTokens, DeliveryResult | None]:
         normalized = normalize_email(email)
         self._validate_new_password(password, code="invalid_registration")
         password_hash = self._passwords.hash(password)
@@ -99,7 +100,7 @@ class AuthenticationService:
                 )
                 tokens = self._create_session(session, user, user_agent=user_agent)
                 delivery = self._send_verification(user, raw_verification_token, token_id)
-                if delivery == "failed":
+                if delivery is not None and delivery.status == "failed":
                     raise AuthenticationError(
                         "EMAIL_DELIVERY_UNAVAILABLE",
                         "Court4 could not deliver the verification email. Try again later.",
@@ -113,7 +114,7 @@ class AuthenticationService:
                 status_code=409,
             ) from None
         logger.info("auth_registration_succeeded", extra={"user_id": str(user.id)})
-        return user, tokens
+        return user, tokens, delivery
 
     def login(
         self, email: str, password: str, *, user_agent: str | None
@@ -247,7 +248,9 @@ class AuthenticationService:
                 refresh_session.revocation_reason = "logout"
                 logger.info("auth_logout", extra={"user_id": str(refresh_session.user_id)})
 
-    def resend_verification(self, user_id: UUID, *, user_agent: str | None) -> bool:
+    def resend_verification(
+        self, user_id: UUID, *, user_agent: str | None
+    ) -> tuple[bool, DeliveryResult | None]:
         raw_token: str | None = None
         token_id: UUID | None = None
         with self._session_factory.begin() as session:
@@ -256,7 +259,7 @@ class AuthenticationService:
             if user is None or user.account_status != "active":
                 raise AuthenticationError("unauthorized", "Authentication is required.")
             if user.email_verified_at is not None:
-                return False
+                return False, None
             self._invalidate_active_tokens(
                 session, user.id, "email_verification", datetime.now(tz=UTC)
             )
@@ -267,9 +270,15 @@ class AuthenticationService:
                 lifetime=timedelta(hours=self._settings.auth_verification_token_hours),
                 user_agent=user_agent,
             )
-        self._send_verification(user, raw_token, token_id)
+        delivery = self._send_verification(user, raw_token, token_id)
+        if delivery is not None and delivery.status == "failed":
+            raise AuthenticationError(
+                "EMAIL_DELIVERY_UNAVAILABLE",
+                "Court4 could not deliver the verification email. Try again later.",
+                status_code=503,
+            )
         logger.info("auth_verification_resent", extra={"user_id": str(user.id)})
-        return True
+        return True, delivery
 
     def verify_email(
         self,
@@ -840,11 +849,11 @@ class AuthenticationService:
 
     def _send_verification(
         self, user: User, raw_token: str | None, token_id: UUID | None
-    ) -> str | None:
+    ) -> DeliveryResult | None:
         if self._email_service is not None and raw_token is not None and token_id is not None:
             return self._email_service.send_verification_email(
                 user.email, raw_token, correlation_id=str(token_id)
-            ).status
+            )
         return None
 
     @staticmethod

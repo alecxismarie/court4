@@ -5,10 +5,8 @@ import numpy as np
 
 from app.schemas.player_tracking import BoundingBox, TrackedPersonDetection
 from app.services.detection.interfaces import ImageArray, PersonDetectionBackend
-from app.services.tracking.exceptions import (
-    DetectorModelMissingError,
-    DetectorRuntimeUnavailableError,
-)
+from app.services.tracking.exceptions import DetectorRuntimeUnavailableError
+from app.services.tracking.model_provisioning import verify_detector_model
 
 
 class UltralyticsByteTrackBackend(PersonDetectionBackend):
@@ -23,16 +21,11 @@ class UltralyticsByteTrackBackend(PersonDetectionBackend):
         self,
         *,
         model_path: Path,
+        expected_model_sha256: str,
         confidence_threshold: float,
         image_size: int,
     ) -> None:
-        if not model_path.exists():
-            raise DetectorModelMissingError(
-                "Detector model file does not exist. Provide --model-path or set "
-                f"COURT4_DETECTOR_MODEL_PATH: {model_path}"
-            )
-        if not model_path.is_file():
-            raise DetectorModelMissingError(f"Detector model path is not a file: {model_path}")
+        verify_detector_model(model_path, expected_model_sha256)
 
         try:
             from ultralytics import YOLO

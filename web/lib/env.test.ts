@@ -5,6 +5,13 @@ import { getPublicEnv } from "@/lib/env";
 describe("public deployment environment", () => {
   afterEach(() => vi.unstubAllEnvs());
 
+  it("uses the canonical localhost API origin in development", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("NEXT_PUBLIC_COURT4_API_URL", "http://localhost:8000");
+
+    expect(getPublicEnv().apiUrl).toBe("http://localhost:8000");
+  });
+
   it("requires an HTTPS API origin in production", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("NEXT_PUBLIC_COURT4_API_URL", "http://api.court4.lexora.ltd");

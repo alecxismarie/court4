@@ -3,6 +3,7 @@
 from app.services.tracking.exceptions import (
     CalibrationReportNotFoundError,
     CalibrationReportReadError,
+    DetectorModelInvalidError,
     DetectorModelMissingError,
     DetectorRuntimeUnavailableError,
     DetectorUnavailableError,
@@ -21,6 +22,7 @@ from app.services.tracking.ultralytics_bytetrack_backend import UltralyticsByteT
 __all__ = [
     "CalibrationReportNotFoundError",
     "CalibrationReportReadError",
+    "DetectorModelInvalidError",
     "DetectorModelMissingError",
     "DetectorRuntimeUnavailableError",
     "DetectorUnavailableError",

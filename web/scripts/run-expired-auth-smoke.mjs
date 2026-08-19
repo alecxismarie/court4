@@ -1,7 +1,7 @@
 import { chromium, request } from "@playwright/test";
 
-const webBase = process.env.COURT4_SMOKE_WEB_URL ?? "http://127.0.0.1:3000";
-const apiBase = process.env.COURT4_SMOKE_API_URL ?? "http://127.0.0.1:8000";
+const webBase = process.env.COURT4_SMOKE_WEB_URL ?? "http://localhost:3000";
+const apiBase = process.env.COURT4_SMOKE_API_URL ?? "http://localhost:8000";
 const email = process.env.COURT4_SMOKE_EMAIL ?? "phase18cb-live-smoke@court4.invalid";
 const password = "Court4 smoke password three";
 const api = await request.newContext({ baseURL: apiBase });

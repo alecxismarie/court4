@@ -191,6 +191,7 @@ class AnalysisJobRepository:
                     size_bytes=path.stat().st_size,
                     checksum_sha256=_file_sha256(path),
                     artifact_kind=_artifact_kind(relative),
+                    schema_version=_artifact_schema_version(relative),
                 )
             )
         return artifacts
@@ -253,7 +254,14 @@ def _artifact_kind(storage_key: str) -> str:
         "tracking": "tracking",
         "analytics": "analytics",
         "active_play": "active_play",
+        "ball": "ball_tracking",
+        "stages": "stage_evidence",
     }.get(first, "metadata")
+
+
+def _artifact_schema_version(storage_key: str) -> int | None:
+    match = re.search(r"\.v([1-9][0-9]*)\.", PurePosixPath(storage_key).name)
+    return int(match.group(1)) if match is not None else None
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:

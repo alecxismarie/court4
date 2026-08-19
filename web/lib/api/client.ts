@@ -6,6 +6,16 @@ import { apiErrorResponseSchema } from "@/lib/api/types";
 let accessToken: string | null = null;
 let refreshPromise: Promise<string> | null = null;
 export const EMAIL_VERIFICATION_REQUIRED_EVENT = "court4:email-verification-required";
+export const AUTH_SESSION_INVALID_EVENT = "court4:auth-session-invalid";
+
+const SESSION_RECOVERY_EXCLUDED_PATHS = new Set([
+  "/api/v1/auth/register",
+  "/api/v1/auth/login",
+  "/api/v1/auth/refresh",
+  "/api/v1/auth/forgot-password",
+  "/api/v1/auth/reset-password",
+  "/api/v1/auth/verify-email",
+]);
 
 export function setAccessToken(token: string | null): void {
   accessToken = token;
@@ -90,17 +100,15 @@ export async function authenticatedFetch(
   init: RequestInit = {},
 ): Promise<Response> {
   const response = await fetch(input, withAuthentication(init));
-  if (response.status !== 401 || isAuthEndpoint(input)) {
+  if (response.status !== 401 || isSessionRecoveryExcluded(input)) {
     await notifyIfEmailVerificationRequired(response);
     return response;
   }
-  try {
-    await refreshAccessToken();
-  } catch {
-    accessToken = null;
-    return response;
-  }
+  await refreshAccessToken();
   const retried = await fetch(input, withAuthentication(init));
+  if (retried.status === 401) {
+    invalidateAuthenticatedSession();
+  }
   await notifyIfEmailVerificationRequired(retried);
   return retried;
 }
@@ -121,8 +129,11 @@ async function performRefresh(): Promise<string> {
     headers: { Accept: "application/json" },
   });
   if (!response.ok) {
-    accessToken = null;
-    throw await apiErrorFromResponse(response);
+    const error = await apiErrorFromResponse(response);
+    if (isDefinitiveAuthenticationFailure(error)) {
+      invalidateAuthenticatedSession();
+    }
+    throw error;
   }
   const payload: unknown = await response.json();
   const parsed = z.object({ access_token: z.string().min(1) }).parse(payload);
@@ -138,9 +149,24 @@ function withAuthentication(init: RequestInit): RequestInit {
   return { ...init, headers, credentials: "include" };
 }
 
-function isAuthEndpoint(input: RequestInfo | URL): boolean {
-  const value = typeof input === "string" ? input : input.toString();
-  return value.includes("/api/v1/auth/");
+function isSessionRecoveryExcluded(input: RequestInfo | URL): boolean {
+  const value = input instanceof Request ? input.url : input.toString();
+  try {
+    return SESSION_RECOVERY_EXCLUDED_PATHS.has(new URL(value, getPublicEnv().apiUrl).pathname);
+  } catch {
+    return false;
+  }
+}
+
+export function isDefinitiveAuthenticationFailure(error: unknown): boolean {
+  return error instanceof Court4ApiError && error.status === 401;
+}
+
+function invalidateAuthenticatedSession(): void {
+  accessToken = null;
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(AUTH_SESSION_INVALID_EVENT));
+  }
 }
 
 export function toApiUrl(path: string): string {

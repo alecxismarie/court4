@@ -1,6 +1,14 @@
 "use client";
 
-import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from "react";
+import {
+  createContext,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 
 import {
@@ -13,7 +21,9 @@ import {
   verifyEmail as verifyEmailRequest,
 } from "@/lib/api/auth";
 import {
+  AUTH_SESSION_INVALID_EVENT,
   EMAIL_VERIFICATION_REQUIRED_EVENT,
+  isDefinitiveAuthenticationFailure,
   setAccessToken,
 } from "@/lib/api/client";
 import {
@@ -40,6 +50,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
+  const resetAuthenticatedState = useCallback(() => {
+    setAccessToken(null);
+    setUser((currentUser) => {
+      if (currentUser) {
+        clearPlayerOnboardingPending(currentUser.id);
+        clearFirstPlayerWelcome(currentUser.id);
+      }
+      return null;
+    });
+  }, []);
+
   useEffect(() => {
     let active = true;
     restoreSession()
@@ -47,9 +68,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (currentUser.display_name) clearPlayerOnboardingPending(currentUser.id);
         if (active) setUser(currentUser);
       })
-      .catch(() => {
-        setAccessToken(null);
-        if (active) setUser(null);
+      .catch((error) => {
+        if (active && isDefinitiveAuthenticationFailure(error)) {
+          resetAuthenticatedState();
+        }
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -57,15 +79,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [resetAuthenticatedState]);
 
   useEffect(() => {
     const redirectToActivation = () => router.replace("/verification-pending");
+    const resetInvalidSession = () => resetAuthenticatedState();
     window.addEventListener(EMAIL_VERIFICATION_REQUIRED_EVENT, redirectToActivation);
+    window.addEventListener(AUTH_SESSION_INVALID_EVENT, resetInvalidSession);
     return () => {
       window.removeEventListener(EMAIL_VERIFICATION_REQUIRED_EVENT, redirectToActivation);
+      window.removeEventListener(AUTH_SESSION_INVALID_EVENT, resetInvalidSession);
     };
-  }, [router]);
+  }, [resetAuthenticatedState, router]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -85,9 +110,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return result.user;
       },
       refreshUser: async () => {
-        const currentUser = await restoreSession();
-        setUser(currentUser);
-        return currentUser;
+        try {
+          const currentUser = await restoreSession();
+          setUser(currentUser);
+          return currentUser;
+        } catch (error) {
+          if (isDefinitiveAuthenticationFailure(error)) {
+            resetAuthenticatedState();
+          }
+          throw error;
+        }
       },
       verifyEmail: async (token) => {
         const result = await verifyEmailRequest(token);
@@ -107,12 +139,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return completedUser;
       },
       logout: async () => {
-        await logoutRequest();
-        if (user) clearFirstPlayerWelcome(user.id);
-        setUser(null);
+        try {
+          await logoutRequest();
+        } finally {
+          resetAuthenticatedState();
+        }
       },
     }),
-    [loading, user],
+    [loading, resetAuthenticatedState, user],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -22,6 +22,11 @@ Optional purposes are distinct values, not one broad boolean:
 - model improvement/training;
 - anonymized/aggregated metrics.
 
+Product operation is not evaluation permission. Support/debug access is not product
+improvement permission. Product improvement is not model-training permission. A
+recording approved for one purpose must not be copied into another purpose's dataset
+without a separate, current acceptance for that purpose.
+
 A user can use the core service without optional model-improvement consent unless
 product/legal explicitly decides otherwise. Do not bundle optional permission into
 required terms.
@@ -71,3 +76,16 @@ Store the minimum proof needed. IP prefix and user-agent hash are optional and r
 approval. Never put agreement text only in application code; persist an immutable
 content hash and retrievable version. Never log raw consent tokens or entire legal
 documents on each request.
+
+## Ball feasibility boundary
+
+Court4 does not yet have the auditable database records described above. Therefore
+existing private-alpha, tester, or friend uploads are **not eligible by default** for
+ball-model evaluation or training. Phase 1.9A0 adds no training-data ingestion path.
+
+The offline ball-visibility feasibility validator accepts only a 2–3 clip manifest
+whose every clip identifies a purpose-specific `model_evaluation` acceptance and has
+no withdrawal timestamp. Those references must be reviewed against the external
+source of consent before the dataset is used; the manifest is evidence routing, not
+a substitute for the future consent ledger. Training remains a separate, ungranted
+purpose even when evaluation consent exists.

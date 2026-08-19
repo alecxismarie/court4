@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import http from "node:http";
 import process from "node:process";
 
-const host = "127.0.0.1";
+const host = "localhost";
 const port = Number.parseInt(process.env.COURT4_E2E_PORT ?? "3002", 10);
 const url = `http://${host}:${port}`;
 const nextBin = "./node_modules/next/dist/bin/next";

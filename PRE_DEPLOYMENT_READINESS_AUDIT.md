@@ -1,5 +1,9 @@
 # Court4 pre-deployment readiness audit
 
+> **HISTORICAL RESULT.** This audit remains unchanged evidence for its observation
+> window. See `PRIVATE_STAGING_RELEASE_CLOSEOUT.md` for the current 2026-08-19
+> source-checkpoint result. Real staging infrastructure and inbox proof remain Task 2.
+
 Audit date: 2026-08-05
 Scope: restricted staging only; no deployment, DNS, TLS, cloud resource, or object-storage work was performed.
 
@@ -40,6 +44,8 @@ Result: **BLOCKED** until intended source/migration/assets are reviewed and comm
 ### Brevo and account controls
 
 - The Brevo adapter and its unit tests pass, configuration is locally SET, and secrets were not printed.
+- Local runtime configuration now loads the ignored `.env`; `.env.example` is documentation-only. The canonical local frontend/API pair is `localhost:3000` / `localhost:8000`, with one exact CORS/CSRF origin.
+- Conclusive refresh-session failure clears complete frontend auth identity state. Authenticated resend may perform one cookie-backed refresh and one retry. Verification delivery responses expose only `external`, `development`, or `unavailable`, and the local sink is no longer described as inbox delivery.
 - No approved test inbox/inbox access was available. Real verification, resend, password reset, password-change, and session-security messages were not received or consumed. An HTTP response alone was not treated as delivery evidence.
 - Registration requires an explicit deployment choice, an enabled allowlist, normalized approved emails, and typed rejection for non-approved users. Existing login/recovery remains reachable. Central verified-user dependencies and the frontend gate block unverified users from product routes.
 

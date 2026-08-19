@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -28,6 +29,7 @@ class UserResponse(BaseModel):
     email_verified_at: datetime | None
     password_changed_at: datetime | None
     display_name: str | None
+    verification_delivery_mode: Literal["external", "development", "unavailable"] | None = None
 
 
 class AuthResponse(BaseModel):
@@ -69,6 +71,7 @@ class MessageResponse(BaseModel):
 class VerificationResponse(MessageResponse):
     verified: bool
     user: UserResponse | None = None
+    delivery_mode: Literal["external", "development", "unavailable"] | None = None
 
 
 class VerificationAuthResponse(AuthResponse):

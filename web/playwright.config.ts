@@ -15,7 +15,7 @@ export default defineConfig({
   workers: 1,
   reporter: [["list"]],
   use: {
-    baseURL: "http://127.0.0.1:3002",
+    baseURL: "http://localhost:3002",
     trace: "retain-on-failure",
   },
   projects: [
@@ -32,8 +32,8 @@ export default defineConfig({
       ? undefined
       : {
           command:
-            "node ./node_modules/next/dist/bin/next dev --hostname 127.0.0.1 --port 3002",
-          url: "http://127.0.0.1:3002",
+            "node ./node_modules/next/dist/bin/next dev --hostname localhost --port 3002",
+          url: "http://localhost:3002",
           reuseExistingServer: !process.env.CI,
           env: {
             COURT4_NEXT_DIST_DIR: ".next-e2e",

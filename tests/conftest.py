@@ -10,20 +10,24 @@ import pytest
 os.environ["PICKLEBALL_AI_ENVIRONMENT"] = "test"
 # Fail independently of a developer's root .env: automated tests use only the
 # isolated in-memory development sink unless a single test opts in explicitly.
-os.environ.setdefault("EMAIL_PROVIDER", "development")
-os.environ.setdefault("ALLOW_EXTERNAL_EMAIL_IN_TESTS", "false")
-os.environ.setdefault("PICKLEBALL_AI_AUTH_DEVELOPMENT_EMAIL_SINK_ENABLED", "true")
+os.environ["EMAIL_PROVIDER"] = "development"
+os.environ["ALLOW_EXTERNAL_EMAIL_IN_TESTS"] = "false"
+os.environ["PICKLEBALL_AI_AUTH_DEVELOPMENT_EMAIL_SINK_ENABLED"] = "true"
+# Override any shell/root values before Settings can read .env. Provider tests pass
+# isolated fake credentials directly and mock their transports.
+os.environ["BREVO_API_KEY"] = ""
+os.environ["RESEND_API_KEY"] = ""
 os.environ.setdefault("PICKLEBALL_AI_PERSISTENCE_BACKEND", "postgresql")
 os.environ["PICKLEBALL_AI_DATABASE_URL"] = os.environ.get(
     "COURT4_TEST_DATABASE_URL",
-    "postgresql+psycopg://court4_test:court4_test_local_only@127.0.0.1:55434/court4_test",
+    "postgresql+psycopg://court4_test:court4_test_local_only@localhost:55434/court4_test",
 )
 os.environ["PICKLEBALL_AI_ALLOW_DESTRUCTIVE_DATABASE_OPERATIONS"] = "true"
 os.environ["PICKLEBALL_AI_EXPECTED_TEST_DATABASE_PREFIX"] = os.environ.get(
     "COURT4_TEST_EXPECTED_DATABASE_PREFIX", "court4_test"
 )
 os.environ["PICKLEBALL_AI_EXPECTED_TEST_DATABASE_HOST"] = os.environ.get(
-    "COURT4_TEST_EXPECTED_DATABASE_HOST", "127.0.0.1"
+    "COURT4_TEST_EXPECTED_DATABASE_HOST", "localhost"
 )
 os.environ["PICKLEBALL_AI_EXPECTED_TEST_DATABASE_USER"] = os.environ.get(
     "COURT4_TEST_EXPECTED_DATABASE_USER", "court4_test"
@@ -90,7 +94,7 @@ def clean_production_database() -> None:
         connection.execute(
             text(
                 "TRUNCATE TABLE account_tokens, refresh_sessions, player_selections, "
-                "analysis_artifacts, "
+                "calibration_verifications, analysis_artifacts, analysis_stage_executions, "
                 "analysis_state_events, idempotency_records, analysis_runs, "
                 "analyses, uploaded_videos, users RESTART IDENTITY CASCADE"
             )

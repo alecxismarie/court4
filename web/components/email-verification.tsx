@@ -51,7 +51,7 @@ export function VerificationPending() {
         return;
       }
       setError(
-        "We haven’t confirmed your email yet. Open the latest verification link, then try again.",
+        "We haven’t confirmed your email yet. Open the latest verification link, then check again.",
       );
     } catch (caught) {
       setError(normalizeApiError(caught).message);
@@ -76,8 +76,24 @@ export function VerificationPending() {
         Your Court4 account has been created. Verify your email to continue.
       </p>
       <div className="mt-5 min-w-0 rounded-xl border border-white/10 bg-white/5 p-4">
-        <p className="text-sm text-slate-300">We sent a verification link to</p>
-        <p className="mt-1 break-all font-semibold text-white">{auth.user?.email}</p>
+        {auth.user?.verification_delivery_mode === "development" ? (
+          <>
+            <p className="text-sm text-slate-300">
+              Your verification message was captured in the local development inbox.
+            </p>
+            <p className="mt-1 break-all font-semibold text-white">{auth.user.email}</p>
+          </>
+        ) : auth.user?.verification_delivery_mode === "external" ? (
+          <p className="text-sm text-slate-300">
+            We sent a verification link to{" "}
+            <span className="break-all font-semibold text-white">{auth.user.email}</span>.
+          </p>
+        ) : (
+          <p className="text-sm text-slate-300">
+            Open the latest verification link for{" "}
+            <span className="break-all font-semibold text-white">{auth.user?.email}</span>.
+          </p>
+        )}
       </div>
 
       <ul className="mt-6 space-y-3 text-sm text-slate-200" aria-label="Why verification matters">
@@ -104,7 +120,7 @@ export function VerificationPending() {
           onClick={() => void checkVerification()}
           className="rounded-lg border border-white/20 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 focus:outline-none focus:ring-2 focus:ring-court-lime disabled:opacity-60 sm:col-span-2"
         >
-          {checking ? "Checking…" : "I’ve verified my email"}
+          {checking ? "Checking…" : "Check verification status"}
         </button>
         <button
           type="button"

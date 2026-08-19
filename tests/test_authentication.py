@@ -49,6 +49,7 @@ def test_registration_normalizes_email_and_stores_only_argon2_hash(
 
     assert response.status_code == 201
     assert response.json()["user"]["email"] == "player@example.com"
+    assert response.json()["user"]["verification_delivery_mode"] == "development"
     assert "password_hash" not in response.text
     with get_persistence().session_factory() as session:
         user = session.scalar(select(User).where(User.email == "player@example.com"))
@@ -232,7 +233,7 @@ def test_concurrent_same_email_registration_creates_one_user() -> None:
 
 def test_concurrent_refresh_allows_only_one_rotation() -> None:
     auth = AuthenticationService(get_persistence().session_factory, get_settings())
-    _user, tokens = auth.register("refresh-race@example.com", PASSWORD, user_agent=None)
+    _user, tokens, _delivery = auth.register("refresh-race@example.com", PASSWORD, user_agent=None)
     barrier = Barrier(2)
 
     def rotate() -> str:
@@ -338,6 +339,34 @@ def test_unverified_account_is_limited_to_activation_and_recovery_routes(
     assert password.json()["error"]["code"] == "email_verification_required"
 
     assert client.post("/api/v1/auth/logout", headers={"Origin": ORIGIN}).status_code == 200
+
+
+def test_local_origin_is_exact_for_cors_and_cookie_csrf(client: TestClient) -> None:
+    _register(client)
+
+    allowed = client.post("/api/v1/auth/refresh", headers={"Origin": ORIGIN})
+    assert allowed.status_code == 200
+    mixed = client.post(
+        "/api/v1/auth/refresh",
+        headers={"Origin": "http://127.0.0.1:3000"},
+    )
+    assert mixed.status_code == 403
+    assert mixed.json()["error"]["code"] == "invalid_origin"
+
+
+def test_refresh_access_can_recover_authenticated_resend(client: TestClient) -> None:
+    _register(client)
+    refreshed = client.post("/api/v1/auth/refresh", headers={"Origin": ORIGIN})
+    assert refreshed.status_code == 200
+
+    resent = client.post(
+        "/api/v1/auth/resend-verification",
+        headers={"Authorization": f"Bearer {refreshed.json()['access_token']}"},
+    )
+
+    assert resent.status_code == 200
+    assert resent.json()["delivery_mode"] == "development"
+    assert "captured" in resent.json()["message"]
 
 
 def test_private_route_policy_matrix_requires_the_central_verified_dependency() -> None:
@@ -501,6 +530,7 @@ def test_resend_invalidates_previous_verification_link(client: TestClient) -> No
     resent = client.post("/api/v1/auth/resend-verification", headers=headers)
     assert resent.status_code == 200
     assert resent.json()["verified"] is False
+    assert resent.json()["delivery_mode"] == "development"
     second_token = _email_token(client, headers, "email_verification", index=-1)
     assert second_token != first_token
     assert client.post("/api/v1/auth/verify-email", json={"token": first_token}).status_code == 400
@@ -853,12 +883,13 @@ def test_concurrent_resend_leaves_one_active_verification_token(
     auth = AuthenticationService(get_persistence().session_factory, get_settings())
     barrier = Barrier(2)
 
-    def resend() -> bool:
+    def resend() -> tuple[bool, object]:
         barrier.wait()
         return auth.resend_verification(user_id, user_agent="race")
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        assert list(executor.map(lambda _: resend(), range(2))) == [True, True]
+        results = list(executor.map(lambda _: resend(), range(2)))
+        assert [sent for sent, _delivery in results] == [True, True]
     with get_persistence().session_factory() as session:
         active_count = session.scalar(
             select(func.count())

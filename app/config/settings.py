@@ -1,3 +1,4 @@
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
@@ -14,7 +15,14 @@ from pydantic import (
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    NoDecode,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+from app.services.tracking.model_provisioning import DETECTOR_MODEL_SHA256
 
 
 class Settings(BaseSettings):
@@ -25,11 +33,25 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        del cls, settings_cls
+        if os.environ.get("PICKLEBALL_AI_ENVIRONMENT", "").casefold() == "test":
+            return init_settings, env_settings, file_secret_settings
+        return init_settings, env_settings, dotenv_settings, file_secret_settings
+
     input_dir: Path = Path("data/input")
     output_dir: Path = Path("data/output")
     environment: Literal["development", "test", "staging", "production"] = "development"
     persistence_backend: Literal["postgresql"] = "postgresql"
-    database_url: str = "postgresql+psycopg://court4:court4_local_only@127.0.0.1:55433/court4"
+    database_url: str = "postgresql+psycopg://court4:court4_local_only@localhost:55433/court4"
     database_pool_size: PositiveInt = 10
     database_max_overflow: int = Field(default=10, ge=0)
     database_pool_timeout_seconds: PositiveInt = 10
@@ -40,7 +62,7 @@ class Settings(BaseSettings):
     database_idle_transaction_timeout_ms: PositiveInt = 15_000
     allow_destructive_database_operations: bool = False
     expected_test_database_prefix: str = "court4_test"
-    expected_test_database_host: str = "127.0.0.1"
+    expected_test_database_host: str = "localhost"
     expected_test_database_user: str = "court4_test"
     local_storage_root: Path = Path("data/output")
     bootstrap_user_enabled: bool = False
@@ -78,6 +100,14 @@ class Settings(BaseSettings):
             "PICKLEBALL_AI_DETECTOR_MODEL_PATH",
         ),
     )
+    detector_model_sha256: str = Field(
+        default=DETECTOR_MODEL_SHA256,
+        pattern=r"^[a-f0-9]{64}$",
+        validation_alias=AliasChoices(
+            "COURT4_DETECTOR_MODEL_SHA256",
+            "PICKLEBALL_AI_DETECTOR_MODEL_SHA256",
+        ),
+    )
     detector_confidence_threshold: float = Field(default=0.35, ge=0, le=1)
     detector_image_size: PositiveInt = Field(default=640)
     frame_processing_interval: PositiveInt = Field(default=1)
@@ -106,10 +136,14 @@ class Settings(BaseSettings):
     court_detection_calibration_id: str = "auto-court-detection"
     court_detection_min_confidence: float = Field(default=0.72, ge=0, le=1)
     court_detection_low_confidence_threshold: float = Field(default=0.25, ge=0, le=1)
-    frontend_allowed_origins: Annotated[tuple[str, ...], NoDecode] = (
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
+    ball_tracking_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices(
+            "BALL_TRACKING_ENABLED",
+            "PICKLEBALL_AI_BALL_TRACKING_ENABLED",
+        ),
     )
+    frontend_allowed_origins: Annotated[tuple[str, ...], NoDecode] = ("http://localhost:3000",)
     auth_access_token_secret: SecretStr = SecretStr(
         "development-only-change-this-secret-before-production"
     )
@@ -442,13 +476,9 @@ class Settings(BaseSettings):
             "production",
         } and not self.auth_frontend_base_url.startswith("https://"):
             raise ValueError("Deployment frontend links must use HTTPS.")
-        if self.environment in {"staging", "production"}:
-            expected_origin = self.auth_frontend_base_url
-            if self.frontend_allowed_origins != (expected_origin,):
-                raise ValueError(
-                    "Deployment CORS/CSRF configuration must contain only the exact "
-                    "frontend origin."
-                )
+        expected_origin = self.auth_frontend_base_url
+        if self.frontend_allowed_origins != (expected_origin,):
+            raise ValueError("CORS/CSRF configuration must contain only the exact frontend origin.")
         return self
 
     @field_validator("court_detection_low_confidence_threshold")

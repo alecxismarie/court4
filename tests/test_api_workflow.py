@@ -579,6 +579,52 @@ def test_ultralytics_tracking_missing_model_returns_typed_error(
     assert job.json()["tracking_completed"] is False
 
 
+def test_ultralytics_tracking_invalid_model_returns_typed_error(
+    tmp_path: Path,
+    synthetic_video_factory: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_path = tmp_path / "models" / "yolo11n.pt"
+    model_path.parent.mkdir()
+    model_path.write_bytes(b"not-the-pinned-model")
+    monkeypatch.setenv("COURT4_DETECTOR_MODEL_SHA256", "0" * 64)
+    client, _output_dir = _api_client(
+        tmp_path,
+        monkeypatch,
+        detector_model_path=model_path,
+    )
+    video_path = synthetic_video_factory(
+        tmp_path / "match.avi",
+        frame_count=15,
+        fps=10.0,
+        width=800,
+        height=900,
+    )
+    analysis_id = _upload_video(client, video_path).json()["analysis_id"]
+    client.post(
+        f"/api/v1/analyses/{analysis_id}/calibration",
+        json=_calibration_payload(calibration_id="api-calibration"),
+    )
+
+    response = client.post(
+        f"/api/v1/analyses/{analysis_id}/tracking",
+        json={
+            "calibration_id": "api-calibration",
+            "backend": "ultralytics",
+            "frame_interval": 1,
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == {
+        "code": "detector_model_invalid",
+        "message": (
+            "Player detection is not available because the detector model failed "
+            "integrity verification."
+        ),
+    }
+
+
 def test_legacy_job_without_court_detection_fields_still_loads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

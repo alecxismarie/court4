@@ -18,7 +18,7 @@ from app.email.dependencies import (
     get_email_sender,
 )
 from app.email.development import DevelopmentEmailSink
-from app.email.models import EmailMessage
+from app.email.models import DeliveryResult, EmailMessage
 from app.email.resend import ResendEmailSender
 from app.email.service import AccountEmailService
 from app.main import create_app
@@ -291,3 +291,58 @@ def test_registration_rolls_back_when_brevo_delivery_is_unavailable() -> None:
     assert response.json()["error"]["code"] == "EMAIL_DELIVERY_UNAVAILABLE"
     with get_persistence().session_factory() as session:
         assert session.scalar(select(User).where(User.email == "brevo-failure@example.com")) is None
+
+
+def test_brevo_registration_reports_only_external_delivery_mode() -> None:
+    settings = _settings(registration_enabled=True)
+    sender = BrevoEmailSender(
+        settings,
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(201, json={"messageId": "mocked-message"})
+        ),
+    )
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_account_email_service] = lambda: AccountEmailService(
+        sender, settings
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/auth/register",
+        json={"email": "external-success@example.com", "password": "correct horse battery staple"},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["user"]["verification_delivery_mode"] == "external"
+    assert "brevo" not in response.text.casefold()
+
+
+def test_resend_delivery_failure_never_claims_success() -> None:
+    development = Settings(environment="test", auth_email_backend="development")
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: development
+    client = TestClient(app)
+    registration = client.post(
+        "/api/v1/auth/register",
+        json={"email": "resend-failure@example.com", "password": "correct horse battery staple"},
+    )
+    assert registration.status_code == 201
+    app.dependency_overrides[get_account_email_service] = lambda: AccountEmailService(
+        _AlwaysFailingSender(), development
+    )
+
+    resent = client.post(
+        "/api/v1/auth/resend-verification",
+        headers={"Authorization": f"Bearer {registration.json()['access_token']}"},
+    )
+
+    assert resent.status_code == 503
+    assert resent.json()["error"]["code"] == "EMAIL_DELIVERY_UNAVAILABLE"
+    assert "sent" not in resent.text.casefold()
+
+
+class _AlwaysFailingSender:
+    def send(self, message: EmailMessage) -> DeliveryResult:
+        del message
+        return DeliveryResult(status="failed")

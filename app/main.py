@@ -12,6 +12,7 @@ from app.config import get_settings
 from app.core.logging import configure_logging
 from app.schemas.jobs import ApiErrorDetail, ApiErrorResponse
 from app.services.jobs import JobWorkflowError
+from app.services.tracking.model_provisioning import verify_detector_model
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,8 @@ logger = logging.getLogger(__name__)
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.logging_level)
+    if settings.default_tracking_backend == "ultralytics":
+        verify_detector_model(settings.detector_model_path, settings.detector_model_sha256)
 
     application = FastAPI(
         title="Court4",

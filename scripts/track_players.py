@@ -69,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.detections_jsonl is not None
             else UltralyticsByteTrackBackend(
                 model_path=args.model_path,
+                expected_model_sha256=settings.detector_model_sha256,
                 confidence_threshold=args.confidence_threshold,
                 image_size=settings.detector_image_size,
             )

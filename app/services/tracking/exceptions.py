@@ -26,6 +26,10 @@ class DetectorModelMissingError(DetectorUnavailableError):
     """Raised when the configured detector model file is missing."""
 
 
+class DetectorModelInvalidError(DetectorUnavailableError):
+    """Raised when detector model bytes do not match the configured identity."""
+
+
 class DetectorRuntimeUnavailableError(DetectorUnavailableError):
     """Raised when detector runtime dependencies are not installed."""
 

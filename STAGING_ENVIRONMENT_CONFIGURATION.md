@@ -62,9 +62,23 @@ PICKLEBALL_AI_DEPLOYMENT_BUILD_IDENTIFIER=
 PICKLEBALL_AI_PIPELINE_VERSION=court4-1.8b
 PICKLEBALL_AI_DEFAULT_TRACKING_BACKEND=ultralytics
 COURT4_DETECTOR_MODEL_PATH=/app/models/yolo11n.pt
+COURT4_DETECTOR_MODEL_SHA256=0ebbc80d4a7680d14987a577cd21342b65ecfd94632bd9a8da63ae6417644ee1
+BALL_TRACKING_ENABLED=false
 ```
 
-The refresh cookie is host-only: there is no cookie-domain setting. Its path is fixed to `/api/v1/auth`, it is HttpOnly, and expiry is derived from `PICKLEBALL_AI_AUTH_REFRESH_TOKEN_DAYS`. CSRF protection uses the exact configured frontend origin; there is no duplicate CSRF-origin variable. Temporary uploads live below the configured local storage root in `_uploads`; there is no separate temporary-root setting. The only supported persistence and storage backends are PostgreSQL metadata and local filesystem bytes, respectively.
+Provision the detector volume from the exact release image before starting the API:
+
+```bash
+python -m scripts.provision_detector_model --destination /app/models/yolo11n.pt
+```
+
+The command retrieves only the pinned Ultralytics assets `v8.3.0` artifact and
+refuses to install bytes that do not match the committed checksum. Mount the
+provisioned model volume read-only in the API service. When the default tracking
+backend is `ultralytics`, API startup fails if the model is absent or invalid. See
+`DETECTOR_MODEL_PROVISIONING.md` for provenance and recovery details.
+
+The refresh cookie is host-only: there is no cookie-domain setting. Its path is fixed to `/api/v1/auth`, it is HttpOnly, Secure in staging/production, and expiry is derived from `PICKLEBALL_AI_AUTH_REFRESH_TOKEN_DAYS`. `SameSite=lax` is valid for the HTTPS `court4.lexora.ltd` / `api.court4.lexora.ltd` same-site topology. CSRF protection uses the exact configured frontend origin; there is no duplicate CSRF-origin variable. Temporary uploads live below the configured local storage root in `_uploads`; there is no separate temporary-root setting. The only supported persistence and storage backends are PostgreSQL metadata and local filesystem bytes, respectively.
 
 ## Environment matrix
 
@@ -72,7 +86,7 @@ The refresh cookie is host-only: there is no cookie-domain setting. Its path is 
 |---|---|---|---|---|
 | Environment/debug | SET / development routes allowed | SET / test-only controls | SET / debug routes absent | SET / debug routes absent |
 | Frontend and API URLs | HTTP localhost allowed | HTTP isolated origins allowed | HTTPS required | HTTPS required |
-| Allowed origins | Explicit localhost origins | Exact test origin | Exactly frontend origin | Exactly frontend origin |
+| Allowed origins | Exactly `http://localhost:3000` by default | Exact isolated test origin | Exactly frontend origin | Exactly frontend origin |
 | PostgreSQL URL/pool/timeouts | SET | SET to disposable database | Required; fail closed | Required; fail closed |
 | Signing secret | Development value allowed | Isolated test value | Required, non-default | Required, non-default |
 | Refresh cookie | Secure may be false | Secure may be false | Secure required | Secure required |
@@ -80,6 +94,8 @@ The refresh cookie is host-only: there is no cookie-domain setting. Its path is 
 | Allowlist | Optional | Fixture-controlled | Required if registration is enabled | Required if registration is enabled |
 | Email | Development sink allowed | Development sink unless explicit external opt-in | Real provider/key/sender required | Real provider/key/sender required |
 | Storage | Writable local path | Disposable writable path | Persistent mounted path | Persistent mounted path |
+| Detector model | Optional local pinned bytes | Not required for controlled fixtures | Pinned checksum-verified volume | Pinned checksum-verified volume |
+| Ball tracking | Disabled by default | Disabled by default | `BALL_TRACKING_ENABLED=false` | Disabled unless separately released |
 | Provenance | Local placeholders acceptable | Test identifiers | Commit and build ID required operationally | Commit and build ID required operationally |
 
 ## Current local value inventory
@@ -107,6 +123,5 @@ service environment. Build `NEXT_PUBLIC_*` values into the reviewed frontend ima
 never place secrets under that prefix. Keep the deployment manifest/configuration
 fingerprint in restricted operational records. `.env`, `.env.local`, database dumps,
 media, output, caches, `node_modules`, and build directories have ignore rules.
-`web/.env.local` is historically tracked despite that rule and must be removed from
-the index in the reviewed release checkpoint. Its current public localhost values
-are not secrets, but environment-local files do not belong in the release.
+`web/.env.local` is ignored and contains only local public settings. Environment-
+local files do not belong in a release.

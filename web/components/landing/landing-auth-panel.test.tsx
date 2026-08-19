@@ -54,6 +54,14 @@ describe("landing authentication panel", () => {
     });
   });
 
+  it("does not claim configurable session persistence", () => {
+    render(<LandingAuthPanel />);
+
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByText(/remember me|keep me signed in/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /forgot password/i })).toBeVisible();
+  });
+
   it("registers through the existing flow and opens verification pending", async () => {
     const user = userEvent.setup();
     render(<LandingAuthPanel />);

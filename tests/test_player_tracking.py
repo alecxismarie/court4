@@ -310,6 +310,7 @@ def test_unavailable_model_handling(tmp_path: Path) -> None:
     with pytest.raises(DetectorUnavailableError, match="does not exist"):
         UltralyticsByteTrackBackend(
             model_path=tmp_path / "missing.pt",
+            expected_model_sha256="0" * 64,
             confidence_threshold=0.35,
             image_size=640,
         )

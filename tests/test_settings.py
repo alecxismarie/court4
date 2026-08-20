@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,26 @@ def test_comma_separated_sequence_settings_are_parsed_from_environment(
 
     assert settings.supported_extensions == (".mp4", ".mov", ".avi")
     assert settings.frontend_allowed_origins == ("http://localhost:3000",)
+
+
+def test_railway_database_url_alias_is_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    railway_database_url = os.environ["PICKLEBALL_AI_DATABASE_URL"]
+    monkeypatch.delenv("PICKLEBALL_AI_DATABASE_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", railway_database_url)
+
+    assert Settings().database_url == railway_database_url
+
+
+def test_prefixed_database_url_takes_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prefixed_database_url = os.environ["PICKLEBALL_AI_DATABASE_URL"]
+    monkeypatch.setenv("PICKLEBALL_AI_DATABASE_URL", prefixed_database_url)
+    monkeypatch.setenv("DATABASE_URL", "must-not-be-selected")
+
+    assert Settings().database_url == prefixed_database_url
 
 
 def test_mixed_local_frontend_origins_are_rejected() -> None:
@@ -125,3 +146,13 @@ def test_compose_uses_runtime_env_and_isolates_test_email_configuration() -> Non
     assert 'ALLOW_EXTERNAL_EMAIL_IN_TESTS: "false"' in api_test
     assert 'BREVO_API_KEY: ""' in api_test
     assert 'RESEND_API_KEY: ""' in api_test
+
+
+def test_runtime_image_uses_railway_port_and_runs_migrations() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    alembic_env = Path("app/persistence/alembic/env.py").read_text(encoding="utf-8")
+
+    assert "alembic upgrade head" in dockerfile
+    assert "--host 0.0.0.0" in dockerfile
+    assert '--port \\"${PORT:-8000}\\"' in dockerfile
+    assert 'or os.getenv("DATABASE_URL")' in alembic_env

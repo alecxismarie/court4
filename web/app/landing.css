@@ -73,7 +73,7 @@
 }
 
 .landing-header > .landing-brand {
-  transform: translateY(1.25rem);
+  margin-right: auto;
 }
 
 .landing-brand img {
@@ -1273,10 +1273,6 @@
   .landing-header .landing-brand img {
     width: auto;
     height: 5.5rem;
-  }
-
-  .landing-header > .landing-brand {
-    transform: translateY(0.25rem);
   }
 
   .landing-hero-copy {

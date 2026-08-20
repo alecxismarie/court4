@@ -51,7 +51,10 @@ class Settings(BaseSettings):
     output_dir: Path = Path("data/output")
     environment: Literal["development", "test", "staging", "production"] = "development"
     persistence_backend: Literal["postgresql"] = "postgresql"
-    database_url: str = "postgresql+psycopg://court4:court4_local_only@localhost:55433/court4"
+    database_url: str = Field(
+        default="postgresql+psycopg://court4:court4_local_only@localhost:55433/court4",
+        validation_alias=AliasChoices("PICKLEBALL_AI_DATABASE_URL", "DATABASE_URL"),
+    )
     database_pool_size: PositiveInt = 10
     database_max_overflow: int = Field(default=10, ge=0)
     database_pool_timeout_seconds: PositiveInt = 10

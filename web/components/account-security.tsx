@@ -192,12 +192,14 @@ function ChangePassword({ onChanged }: { onChanged: () => Promise<void> }) {
           value={newPassword}
           onChange={setNewPassword}
           autoComplete="new-password"
+          minLength={12}
         />
         <PasswordField
           label="Confirm new password"
           value={confirmation}
           onChange={setConfirmation}
           autoComplete="new-password"
+          minLength={12}
         />
         {error ? <p role="alert" className="text-sm text-red-700">{error}</p> : null}
         {message ? <p role="status" className="text-sm text-green-800">{message}</p> : null}
@@ -218,11 +220,13 @@ function PasswordField({
   value,
   onChange,
   autoComplete,
+  minLength,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   autoComplete: string;
+  minLength?: number;
 }) {
   return (
     <label className="text-sm font-medium">
@@ -230,7 +234,7 @@ function PasswordField({
       <input
         required
         type="password"
-        minLength={12}
+        minLength={minLength}
         maxLength={256}
         autoComplete={autoComplete}
         value={value}

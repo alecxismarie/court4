@@ -63,16 +63,15 @@ describe("account security UI", () => {
     expect(revokeSession).toHaveBeenCalledWith(sessions[1].id);
   });
 
-  it("changes password and revokes all other sessions", async () => {
+  it("accepts a historical current password shorter than 12 characters", async () => {
     vi.mocked(changePassword).mockResolvedValue({} as never);
     vi.mocked(revokeAllSessions).mockResolvedValue(1);
     render(<AccountSecurity />);
     await screen.findByText("Chrome on Windows");
 
-    await userEvent.type(
-      screen.getByLabelText("Current password"),
-      "a current long password",
-    );
+    const currentPassword = screen.getByLabelText("Current password");
+    expect(currentPassword).not.toHaveAttribute("minlength");
+    await userEvent.type(currentPassword, "old-pass");
     await userEvent.type(
       screen.getByLabelText("New password"),
       "a replacement long password",
@@ -83,11 +82,34 @@ describe("account security UI", () => {
     );
     await userEvent.click(screen.getByRole("button", { name: "Change password" }));
     expect(await screen.findByText(/Other sessions were signed out/)).toBeVisible();
+    expect(changePassword).toHaveBeenCalledWith(
+      "old-pass",
+      "a replacement long password",
+    );
 
     await userEvent.click(
       screen.getByRole("button", { name: "Sign out all other sessions" }),
     );
     expect(revokeAllSessions).toHaveBeenCalledWith(true);
     expect(await screen.findByText("One other session was signed out.")).toBeVisible();
+  });
+
+  it("keeps the 12-character minimum for a newly chosen password", async () => {
+    render(<AccountSecurity />);
+    await screen.findByText("Chrome on Windows");
+
+    await userEvent.type(screen.getByLabelText("Current password"), "old-pass");
+    const newPassword = screen.getByLabelText("New password");
+    const confirmation = screen.getByLabelText("Confirm new password");
+    expect(newPassword).toHaveAttribute("minlength", "12");
+    expect(confirmation).toHaveAttribute("minlength", "12");
+    await userEvent.type(newPassword, "too-short");
+    await userEvent.type(confirmation, "too-short");
+
+    expect(newPassword).toHaveValue("too-short");
+    expect((newPassword as HTMLInputElement).value.length).toBeLessThan(
+      (newPassword as HTMLInputElement).minLength,
+    );
+    expect(changePassword).not.toHaveBeenCalled();
   });
 });

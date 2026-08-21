@@ -63,7 +63,7 @@ describe("authentication API client", () => {
   });
 
   it("logs in and exposes generic invalid credential errors", async () => {
-    vi.spyOn(globalThis, "fetch")
+    const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse(authPayload))
       .mockResolvedValueOnce(
         jsonResponse(
@@ -71,7 +71,11 @@ describe("authentication API client", () => {
           401,
         ),
       );
-    await expect(login("player@example.com", "long password value")).resolves.toBeTruthy();
+    await expect(login("player@example.com", "old-pass")).resolves.toBeTruthy();
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      email: "player@example.com",
+      password: "old-pass",
+    });
     await expect(login("player@example.com", "wrong password value")).rejects.toMatchObject({
       code: "invalid_credentials",
       message: "Email or password is incorrect.",
@@ -276,7 +280,11 @@ describe("authentication API client", () => {
         jsonResponse({ revoked_count: 2, current_session_preserved: true }),
       );
 
-    await changePassword("old long password", "new sufficiently long password");
+    await changePassword("old-pass", "new sufficiently long password");
+    expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body))).toEqual({
+      current_password: "old-pass",
+      new_password: "new sufficiently long password",
+    });
     expect(getAccessToken()).toBe("rotated");
     await expect(listSessions()).resolves.toHaveLength(1);
     await expect(revokeAllSessions(true)).resolves.toBe(2);

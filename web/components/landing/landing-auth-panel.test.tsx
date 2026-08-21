@@ -40,16 +40,18 @@ describe("landing authentication panel", () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/verification-pending"));
   });
 
-  it("logs in with the existing auth context and routes to the dashboard", async () => {
+  it("submits a historical password shorter than the new-password minimum", async () => {
     const user = userEvent.setup();
     render(<LandingAuthPanel />);
 
+    const password = screen.getByLabelText(/^password$/i);
+    expect(password).not.toHaveAttribute("minlength");
     await user.type(screen.getByLabelText(/^email$/i), "player@example.com");
-    await user.type(screen.getByLabelText(/^password$/i), "correct horse battery");
+    await user.type(password, "old-pass");
     await user.click(screen.getByRole("button", { name: /^log in$/i }));
 
     await waitFor(() => {
-      expect(login).toHaveBeenCalledWith("player@example.com", "correct horse battery");
+      expect(login).toHaveBeenCalledWith("player@example.com", "old-pass");
       expect(replace).toHaveBeenCalledWith("/dashboard");
     });
   });
@@ -75,6 +77,23 @@ describe("landing authentication panel", () => {
       expect(register).toHaveBeenCalledWith("new@example.com", "a long secure password");
       expect(replace).toHaveBeenCalledWith("/verification-pending");
     });
+  });
+
+  it("keeps the 12-character minimum for newly chosen signup passwords", async () => {
+    const user = userEvent.setup();
+    render(<LandingAuthPanel />);
+
+    await user.click(screen.getByRole("tab", { name: /sign up/i }));
+    const password = screen.getByLabelText(/^password$/i);
+    expect(password).toHaveAttribute("minlength", "12");
+    await user.type(screen.getByLabelText(/^email$/i), "new@example.com");
+    await user.type(password, "too-short");
+
+    expect(password).toHaveValue("too-short");
+    expect((password as HTMLInputElement).value.length).toBeLessThan(
+      (password as HTMLInputElement).minLength,
+    );
+    expect(register).not.toHaveBeenCalled();
   });
 
   it("opens the requested Sign Up tab from the consolidated auth route", () => {

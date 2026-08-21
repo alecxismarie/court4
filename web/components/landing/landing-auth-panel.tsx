@@ -128,7 +128,7 @@ export function LandingAuthPanel() {
             <input
               id="landing-password"
               required
-              minLength={12}
+              minLength={mode === "register" ? 12 : undefined}
               maxLength={256}
               type={showPassword ? "text" : "password"}
               autoComplete={mode === "login" ? "current-password" : "new-password"}

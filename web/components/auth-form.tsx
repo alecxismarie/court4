@@ -59,7 +59,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
           Password
           <input
             required
-            minLength={12}
+            minLength={isRegister ? 12 : undefined}
             maxLength={256}
             type="password"
             autoComplete={isRegister ? "new-password" : "current-password"}

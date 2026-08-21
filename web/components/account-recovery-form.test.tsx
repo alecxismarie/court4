@@ -66,4 +66,21 @@ describe("account recovery UI", () => {
       "invalid or has already been used",
     );
   });
+
+  it("keeps the 12-character minimum for reset passwords", async () => {
+    render(<ResetPasswordForm token="valid" />);
+
+    const password = screen.getByLabelText("New password");
+    const confirmation = screen.getByLabelText("Confirm new password");
+    expect(password).toHaveAttribute("minlength", "12");
+    expect(confirmation).toHaveAttribute("minlength", "12");
+    await userEvent.type(password, "too-short");
+    await userEvent.type(confirmation, "too-short");
+
+    expect(password).toHaveValue("too-short");
+    expect((password as HTMLInputElement).value.length).toBeLessThan(
+      (password as HTMLInputElement).minLength,
+    );
+    expect(resetPassword).not.toHaveBeenCalled();
+  });
 });

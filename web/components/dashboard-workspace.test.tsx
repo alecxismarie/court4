@@ -58,10 +58,30 @@ describe("dashboard workspace", () => {
     );
     const header = screen.getByRole("heading", { name: "Welcome back!" }).closest("section");
     expect(header).not.toBeNull();
+    expect(header).toHaveClass("md:rounded-md", "md:bg-white", "md:shadow-panel");
+    expect(screen.getByRole("heading", { name: "Welcome back!" })).toHaveClass(
+      "md:text-court-ink",
+    );
     expect(
       within(header as HTMLElement).queryByRole("link", { name: /upload match/i }),
     ).not.toBeInTheDocument();
     expect(screen.queryByText("Player workspace")).not.toBeInTheDocument();
+    const firstAnalysisHeading = screen.getByRole("heading", {
+      name: "Your first analysis starts here",
+    });
+    expect(firstAnalysisHeading.closest("section")).toHaveClass("md:hidden");
+    expect(screen.getByRole("link", { name: "Upload a match" })).toHaveAttribute(
+      "href",
+      "/upload-match",
+    );
+    expect(screen.getByRole("region", { name: "Dashboard actions" })).toHaveClass(
+      "hidden",
+      "md:flex",
+    );
+    expect(
+      screen.getByText("No completed analysis is available yet.").closest("section"),
+    ).toHaveClass("hidden", "md:grid");
+    expect(screen.getByText(/No verified movement insight is available/)).toBeInTheDocument();
   });
 
   it("shows a personalized welcome with a saved display name", () => {

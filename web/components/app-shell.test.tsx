@@ -1,4 +1,5 @@
 import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "@/components/app-shell";
@@ -31,6 +32,7 @@ describe("app shell navigation", () => {
     pathnameMock.mockReturnValue("/dashboard");
     authState.loading = false;
     authState.user.email_verified_at = "2026-08-04T00:00:00Z";
+    authState.logout.mockReset();
   });
 
   it("does not expose private navigation to an unverified account", () => {
@@ -43,7 +45,7 @@ describe("app shell navigation", () => {
   it("renders the six player-facing navigation items with expected routes", () => {
     renderWithQueryClient(<AppShell>Workspace</AppShell>);
 
-    const navigation = screen.getAllByRole("navigation", { name: "Primary navigation" })[0];
+    const navigation = screen.getAllByRole("navigation", { name: "Primary navigation" })[1];
     expect(within(navigation).getByRole("link", { name: /dashboard/i })).toHaveAttribute(
       "href",
       "/dashboard",
@@ -72,6 +74,46 @@ describe("app shell navigation", () => {
       within(navigation).queryByRole("link", { name: /calibration readiness/i }),
     ).not.toBeInTheDocument();
     expect(within(navigation).queryByRole("link", { name: /active play/i })).not.toBeInTheDocument();
+  });
+
+  it("uses a compact four-destination mobile navigation", () => {
+    renderWithQueryClient(<AppShell>Workspace</AppShell>);
+
+    const navigation = screen.getAllByRole("navigation", {
+      name: "Primary navigation",
+    })[0];
+    expect(
+      within(navigation)
+        .getAllByRole("link")
+        .map((link) => link.textContent?.trim()),
+    ).toEqual(["Dashboard", "Upload", "History", "Progress"]);
+    expect(within(navigation).queryByRole("link", { name: "Player" })).not.toBeInTheDocument();
+    expect(within(navigation).queryByRole("link", { name: "Settings" })).not.toBeInTheDocument();
+  });
+
+  it("opens the mobile player menu and logs out", async () => {
+    const user = userEvent.setup();
+    renderWithQueryClient(<AppShell>Workspace</AppShell>);
+
+    const accountButton = screen.getByRole("button", {
+      name: "Open account menu for Local Player",
+    });
+    expect(accountButton).toHaveAttribute("aria-expanded", "false");
+    await user.click(accountButton);
+
+    const menu = screen.getByRole("menu", { name: "Player account" });
+    expect(accountButton).toHaveAttribute("aria-expanded", "true");
+    expect(within(menu).getByRole("menuitem", { name: "Player profile" })).toHaveAttribute(
+      "href",
+      "/player",
+    );
+    expect(within(menu).getByRole("menuitem", { name: "Settings" })).toHaveAttribute(
+      "href",
+      "/settings",
+    );
+    await user.click(within(menu).getByRole("menuitem", { name: "Log out" }));
+    expect(authState.logout).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("menu", { name: "Player account" })).not.toBeInTheDocument();
   });
 
   it("marks the active route clearly", () => {

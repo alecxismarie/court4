@@ -73,7 +73,7 @@ export function PublicLandingPage() {
                 <strong>Every Match.</strong>
               </h1>
               <p className="landing-hero-summary">
-                Court4 analyzes your pickleball matches so you can track progress,
+                Court 4 analyzes your matches so you can track progress,
                 unlock insights, and become the player you aim to be.
               </p>
             </div>
@@ -176,10 +176,6 @@ export function PublicLandingPage() {
           >
             <div className="landing-clubs-intro">
               <h2 id="clubs-heading">Partner program in development</h2>
-              <p>
-                Court4 has not announced club partners, locations, rates, or discounts.
-                This map is a concept preview of a possible future directory.
-              </p>
               <div className="landing-map" aria-label="Illustrative partner club map">
                 {mapPins.map((pin, index) => (
                   <MapPin
@@ -196,14 +192,7 @@ export function PublicLandingPage() {
 
             <div className="landing-club-table-wrap" id="alpha-status">
               <h3>Private-alpha status</h3>
-              <p>
-                Access is limited to approved testers. Court4 does not currently
-                publish subscription pricing or partner-club benefits.
-              </p>
-              <p className="landing-reference-note">
-                Planned commercial programs will be announced only after their
-                terms and participating partners are verified.
-              </p>
+              <p>Access is limited to approved testers.</p>
             </div>
           </section>
 
@@ -226,10 +215,6 @@ export function PublicLandingPage() {
       <footer className="landing-footer" id="support">
         <div className="landing-footer-brand">
           <Court4Brand />
-          <p>
-            Court4 uses AI to analyze your pickleball matches and help you become
-            the best version of your game.
-          </p>
           <div className="landing-social-links" aria-label="Social media">
             <a href="#support" aria-label="Instagram, coming soon"><Instagram aria-hidden="true" /></a>
             <a href="#support" aria-label="Facebook, coming soon"><Facebook aria-hidden="true" /></a>

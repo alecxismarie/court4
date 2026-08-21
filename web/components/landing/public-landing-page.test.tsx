@@ -49,7 +49,11 @@ describe("public Court4 landing page", () => {
       expect(screen.getByText(step.copy)).toBeInTheDocument();
     }
 
-    expect(screen.getByText(/has not announced club partners/i)).toBeInTheDocument();
+    expect(screen.queryByText(/has not announced club partners/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/concept preview/i)).not.toBeInTheDocument();
+    expect(screen.getByText("Access is limited to approved testers.")).toBeInTheDocument();
+    expect(screen.queryByText(/subscription pricing/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/planned commercial programs/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/10K\+|5K\+|95%|20% OFF/)).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Privacy Policy" })).toHaveAttribute("href", "/privacy");
     expect(screen.getByRole("link", { name: "Terms of Service" })).toHaveAttribute("href", "/terms");
@@ -64,6 +68,9 @@ describe("public Court4 landing page", () => {
     );
     expect(screen.getByRole("navigation", { name: /primary navigation/i })).toBeInTheDocument();
     expect(screen.queryByText(/AI-powered match intelligence/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/Court4 uses AI to analyze your pickleball matches/i),
+    ).not.toBeInTheDocument();
     expect(screen.getAllByAltText("Court4")[0]).toHaveAttribute(
       "src",
       expect.stringContaining("court4-logo.png"),

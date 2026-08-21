@@ -444,7 +444,7 @@ def test_ball_flag_defaults_off_and_disabled_boundary_changes_nothing() -> None:
         assert analysis.current_stage == "uploaded"
 
 
-def test_enabled_shadow_boundary_records_effective_overrides_without_model_claims() -> None:
+def test_enabled_shadow_boundary_records_real_component_provenance_without_model_claims() -> None:
     settings = Settings.model_validate({"ball_tracking_enabled": True})
     runtime = get_persistence()
     analysis_id = "ball-shadow-boundary"
@@ -461,15 +461,18 @@ def test_enabled_shadow_boundary_records_effective_overrides_without_model_claim
                 checksum_sha256=_digest("source-ball-shadow-boundary"),
             )
         ],
-        request_overrides={"roi": "court", "confidence": 0.4},
+        request_overrides={"detector": {"acceptance_confidence": 0.4}},
     )
     with runtime.session_factory() as session:
         execution = session.get(AnalysisStageExecution, result.stage_execution_id)
         assert execution is not None
         provenance = execution.provenance_payload
-        assert provenance["effective_configuration"]["confidence"] == 0.4
-        assert provenance["detector_name"] is None
+        assert provenance["effective_configuration"]["detector"]["acceptance_confidence"] == 0.4
+        assert provenance["detector_name"] == "opencv_color_motion_ball_detector"
+        assert provenance["tracker_name"] == "bounded_nearest_trajectory_tracker"
+        assert provenance["confidence_threshold"] == 0.4
         assert provenance["model_identifier"] is None
+        assert provenance["model_sha256"] is None
         analysis = session.get(Analysis, analysis_id)
         assert analysis is not None
         assert analysis.state == "completed"

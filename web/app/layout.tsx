@@ -8,7 +8,7 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Court 4",
   description:
-    "Court4 turns pickleball match video into clear performance insights so players can track progress and improve every match.",
+    "Know your game, elevate every match.",
   icons: {
     icon: [
       {

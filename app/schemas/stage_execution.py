@@ -7,6 +7,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.sports import SportType
+
 
 class StageExecutionState(StrEnum):
     queued = "queued"
@@ -35,6 +37,9 @@ class StageProvenance(BaseModel):
     schema_version: int = Field(default=1, ge=1)
     stage_name: str
     stage_version: str
+    sport: SportType = SportType.PICKLEBALL
+    sport_config_version: str = "pickleball-analysis-v1"
+    court_definition_version: str = "pickleball-court-v1"
     detector_name: str | None = None
     detector_version: str | None = None
     model_identifier: str | None = None

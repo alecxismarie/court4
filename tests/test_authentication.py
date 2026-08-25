@@ -65,6 +65,17 @@ def test_duplicate_normalized_email_is_rejected(client: TestClient) -> None:
     assert "password" not in duplicate.text
 
 
+def test_registration_rate_limit_remains_five_attempts(client: TestClient) -> None:
+    assert get_settings().auth_register_rate_limit == 5
+    for index in range(5):
+        assert _register(client, f"limited-{index}@example.com").status_code == 201
+
+    limited = _register(client, "limited-sixth@example.com")
+
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "rate_limited"
+
+
 def test_login_and_me(client: TestClient) -> None:
     registration = _register(client)
     login = client.post(

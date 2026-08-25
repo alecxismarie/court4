@@ -36,6 +36,7 @@ from app.persistence.models import (
     utc_now,
 )
 from app.schemas.stage_execution import ArtifactReference, StageProvenance
+from app.sports import SportType, get_sport_config
 
 
 @dataclass(frozen=True)
@@ -158,6 +159,7 @@ class PersistenceService:
         source_checksum: str,
         job_payload: dict[str, Any],
         allow_duplicate: bool = False,
+        sport: SportType = SportType.PICKLEBALL,
         synchronization_hook: SynchronizationHook | None = None,
     ) -> ReservationResult:
         try:
@@ -172,6 +174,7 @@ class PersistenceService:
                 source_checksum=source_checksum,
                 job_payload=job_payload,
                 allow_duplicate=allow_duplicate,
+                sport=sport,
                 synchronization_hook=synchronization_hook,
             )
         except IntegrityError:
@@ -204,12 +207,14 @@ class PersistenceService:
         *,
         owner_user_id: UUID,
         checksum_sha256: str,
+        sport: SportType = SportType.PICKLEBALL,
     ) -> DuplicateVideoMatch | None:
         with self._session_factory() as session:
             return self._find_uploaded_video_by_owner_and_checksum(
                 session,
                 owner_user_id=owner_user_id,
                 checksum_sha256=checksum_sha256,
+                sport=sport,
             )
 
     def _reserve_analysis_once(
@@ -225,6 +230,7 @@ class PersistenceService:
         source_checksum: str,
         job_payload: dict[str, Any],
         allow_duplicate: bool,
+        sport: SportType,
         synchronization_hook: SynchronizationHook | None,
     ) -> ReservationResult:
         key_hash = sha256(idempotency_key.encode()).hexdigest()
@@ -260,6 +266,7 @@ class PersistenceService:
                     session,
                     owner_user_id=owner_user_id,
                     checksum_sha256=source_checksum,
+                    sport=sport,
                 )
                 if duplicate is not None:
                     session.add(
@@ -307,6 +314,7 @@ class PersistenceService:
                 id=analysis_id,
                 owner_user_id=owner_user_id,
                 uploaded_video_id=video.id,
+                sport=sport.value,
                 state="processing",
                 current_stage="uploaded",
                 job_payload=job_payload,
@@ -329,6 +337,7 @@ class PersistenceService:
         *,
         owner_user_id: UUID,
         checksum_sha256: str,
+        sport: SportType = SportType.PICKLEBALL,
     ) -> DuplicateVideoMatch | None:
         row = session.execute(
             select(UploadedVideo, Analysis)
@@ -341,6 +350,7 @@ class PersistenceService:
                 UploadedVideo.owner_user_id == owner_user_id,
                 UploadedVideo.source_checksum == checksum_sha256,
                 Analysis.owner_user_id == owner_user_id,
+                Analysis.sport == sport.value,
             )
             .order_by(Analysis.created_at.desc(), Analysis.id.desc())
             .limit(1)
@@ -674,6 +684,8 @@ class PersistenceService:
                 )
                 if run is None:
                     raise ResourceNotFoundError("Analysis run was not found.")
+                if provenance.sport.value != analysis.sport or run.sport != analysis.sport:
+                    raise ValueError("Stage sport provenance must match its analysis and run.")
                 active = session.scalar(
                     select(AnalysisStageExecution).where(
                         AnalysisStageExecution.analysis_id == analysis_id,
@@ -923,7 +935,9 @@ class PersistenceService:
     def load_job(self, *, owner_user_id: UUID, analysis_id: str) -> dict[str, Any]:
         with self._session_factory() as session:
             analysis = self._owned_analysis(session.get(Analysis, analysis_id), owner_user_id)
-            return dict(analysis.job_payload)
+            payload = dict(analysis.job_payload)
+            payload["sport"] = analysis.sport
+            return payload
 
     def list_analysis_ids(self, *, owner_user_id: UUID) -> list[str]:
         with self._session_factory() as session:
@@ -962,6 +976,7 @@ class PersistenceService:
                     id=analysis_id,
                     owner_user_id=owner_user_id,
                     uploaded_video_id=video.id,
+                    sport=str(payload.get("sport", SportType.PICKLEBALL.value)),
                     state=str(payload["status"]),
                     current_stage=str(payload["current_stage"]),
                     job_payload=payload,
@@ -977,6 +992,10 @@ class PersistenceService:
                 self._add_run_event(session, initial_run, None, "processing", "run_started")
             else:
                 analysis = self._owned_analysis(analysis, owner_user_id)
+
+            payload_sport = SportType(str(payload.get("sport", SportType.PICKLEBALL.value)))
+            if analysis.sport != payload_sport.value:
+                raise ValueError("An analysis sport is immutable; create a new analysis instead.")
 
             previous_state = analysis.state
             new_state = str(payload["status"])
@@ -1222,16 +1241,27 @@ class PersistenceService:
             .limit(1)
             .with_for_update()
         )
+        sport = SportType(analysis.sport)
+        sport_config = get_sport_config(sport)
+        configuration_fingerprint = sha256(
+            (
+                f"{self._provenance.configuration_fingerprint}\0{sport.value}\0"
+                f"{sport_config.config_version}\0{sport_config.court_definition_version}"
+            ).encode()
+        ).hexdigest()
         run = AnalysisRun(
             analysis_id=analysis.id,
             attempt_number=(latest.attempt_number + 1) if latest else 1,
             state=state,
             previous_run_id=latest.id if latest else None,
             source_video_checksum=source_checksum,
+            sport=sport.value,
+            sport_config_version=sport_config.config_version,
+            court_definition_version=sport_config.court_definition_version,
             pipeline_version=self._provenance.pipeline_version,
             schema_version=self._provenance.schema_version,
             policy_version=self._provenance.policy_version,
-            configuration_fingerprint=self._provenance.configuration_fingerprint,
+            configuration_fingerprint=configuration_fingerprint,
             software_commit_identifier=self._provenance.software_commit_identifier,
             deployment_build_identifier=self._provenance.deployment_build_identifier,
             lease_expires_at=lease_expires_at,

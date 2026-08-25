@@ -13,6 +13,7 @@ from app.services.ball_tracking.detector import (
 from app.services.ball_tracking.pipeline import BallPipelineConfig, ExperimentalBallPipeline
 from app.services.ball_tracking.tracker import TemporalBallTracker, TemporalBallTrackerConfig
 from app.services.stages.configuration import stage_configuration_fingerprint
+from app.sports import SportType, get_sport_config
 
 
 def main() -> int:
@@ -22,6 +23,7 @@ def main() -> int:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--analysis-id", default="offline-ball-review")
+    parser.add_argument("--sport", choices=[sport.value for sport in SportType], required=True)
     parser.add_argument("--max-frames", type=int, default=18_000)
     parser.add_argument(
         "--consent-reference",
@@ -41,8 +43,11 @@ def main() -> int:
 
     detector_config = OpenCVBallDetectorConfig()
     tracker_config = TemporalBallTrackerConfig()
+    sport = SportType(args.sport)
+    sport_config = get_sport_config(sport)
     configuration = {
         "mode": "offline_developer_review",
+        "sport": sport.value,
         "consent_reference": args.consent_reference,
         "detector": detector_config.as_dict(),
         "tracker": tracker_config.as_dict(),
@@ -52,6 +57,9 @@ def main() -> int:
     provenance = StageProvenance(
         stage_name="ball_tracking",
         stage_version="experimental-ball-evidence-v1",
+        sport=sport,
+        sport_config_version=sport_config.config_version,
+        court_definition_version=sport_config.court_definition_version,
         detector_name=OpenCVColorMotionBallDetector.name,
         detector_version=OpenCVColorMotionBallDetector.version,
         model_identifier=None,

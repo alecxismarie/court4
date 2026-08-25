@@ -6,6 +6,7 @@ from app.schemas.jobs import AnalysisJob, AnalysisStatus
 from app.schemas.match_iq import MatchIQReport
 from app.schemas.recording_quality import RecordingQualityLevel
 from app.services.recording_quality.assessment import QUALITY_THRESHOLDS
+from app.sports import SportType
 
 PLAY_HISTORY_POLICY_VERSION = "play-history-v1"
 ANALYTICS_SCHEMA_VERSION = "movement-analytics-v1"
@@ -21,6 +22,18 @@ def evaluate_contribution(
     """Evaluate one persisted analysis without changing its source artifacts."""
     source_version = match_iq.engine_version if match_iq is not None else ANALYTICS_SCHEMA_VERSION
     readiness = job.analysis_readiness
+
+    if job.sport != SportType.PICKLEBALL:
+        return _decision(
+            ContributionStatus.excluded,
+            ["SPORT_INTERPRETATION_UNAVAILABLE"],
+            (
+                "This Padel analysis remains in Analysis History but does not contribute to "
+                "Pickleball Play History because sport-specific interpretation is unavailable."
+            ),
+            evaluated_at,
+            "padel-experimental-v1",
+        )
 
     if job.status == AnalysisStatus.failed:
         return _decision(

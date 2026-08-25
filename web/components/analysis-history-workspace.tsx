@@ -99,6 +99,9 @@ function AnalysisRow({ item }: { item: AnalysisHistoryItem }) {
         <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           <h2 className="font-semibold text-court-ink">{item.title}</h2>
+          <span className="rounded-full border border-court-line px-2 py-1 text-xs font-semibold uppercase tracking-wide text-court-muted">
+            {item.sport === "padel" ? "Padel — Experimental" : "Pickleball"}
+          </span>
           <AnalysisStatusBadge status={item.status} />
           <ContributionBadge status={item.contribution.status} />
         </div>

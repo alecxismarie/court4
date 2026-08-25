@@ -107,6 +107,7 @@ from app.services.video.player_analysis import (
     refresh_player_selection_metrics,
 )
 from app.services.video.player_selection import load_tracking_report, select_player_track
+from app.sports import SportType, get_sport_config
 from app.sports.pickleball import (
     CalibrationOutputExistsError,
     CourtCalibrationError,
@@ -140,6 +141,7 @@ class AnalysisWorkflowService:
         *,
         idempotency_key: str | None = None,
         reanalyze: bool = False,
+        sport: SportType = SportType.PICKLEBALL,
     ) -> UploadAnalysisResponse:
         reservation_bytes = int(
             self.settings.max_upload_size_bytes
@@ -173,6 +175,7 @@ class AnalysisWorkflowService:
                 upload,
                 idempotency_key=idempotency_key,
                 reanalyze=reanalyze,
+                sport=sport,
             )
         finally:
             reservation.release()
@@ -183,6 +186,7 @@ class AnalysisWorkflowService:
         *,
         idempotency_key: str | None = None,
         reanalyze: bool = False,
+        sport: SportType = SportType.PICKLEBALL,
     ) -> UploadAnalysisResponse:
         if idempotency_key is not None and (
             not idempotency_key.strip() or len(idempotency_key) > 256
@@ -199,10 +203,11 @@ class AnalysisWorkflowService:
         now = datetime.now(tz=UTC)
         filename = upload.filename or "upload"
         request_fingerprint = hashlib.sha256(
-            f"{filename}\0{source_checksum}\0reanalyze={reanalyze}".encode()
+            f"{filename}\0{source_checksum}\0sport={sport.value}\0reanalyze={reanalyze}".encode()
         ).hexdigest()
         initial_job = AnalysisJob(
             analysis_id=analysis_id,
+            sport=sport,
             status=AnalysisStatus.processing,
             current_stage=AnalysisStage.uploaded,
             created_at=now,
@@ -222,6 +227,7 @@ class AnalysisWorkflowService:
                     source_checksum=source_checksum,
                     job_payload=initial_job.model_dump(mode="json"),
                     allow_duplicate=reanalyze,
+                    sport=sport,
                 )
             except IdempotencyConflictError as exc:
                 raise JobConflictError("idempotency_conflict", str(exc)) from exc
@@ -247,6 +253,7 @@ class AnalysisWorkflowService:
             source_video_path = self._move_upload_to_analysis(analysis_id, staging_path)
             job = AnalysisJob(
                 analysis_id=analysis_id,
+                sport=sport,
                 status=AnalysisStatus.processing,
                 current_stage=AnalysisStage.inspected,
                 source_video=source_video_path.relative_to(
@@ -267,6 +274,7 @@ class AnalysisWorkflowService:
             source_video_path = self._move_upload_to_analysis(analysis_id, staging_path)
             failed_job = AnalysisJob(
                 analysis_id=analysis_id,
+                sport=sport,
                 status=AnalysisStatus.failed,
                 current_stage=AnalysisStage.uploaded,
                 source_video=source_video_path.relative_to(
@@ -319,6 +327,7 @@ class AnalysisWorkflowService:
         request: CalibrationRequest,
     ) -> CalibrationResponse:
         job = self.repository.load_job(analysis_id)
+        self._require_supported_interpretation(job, "manual court calibration")
         self._require(
             job.inspection_completed, "inspection_required", "Upload inspection is required."
         )
@@ -382,6 +391,7 @@ class AnalysisWorkflowService:
 
     def detect_court(self, analysis_id: str) -> CourtDetectionResponse:
         job = self.repository.load_job(analysis_id)
+        self._require_supported_interpretation(job, "automatic court detection")
         self._require(
             job.inspection_completed, "inspection_required", "Upload inspection is required."
         )
@@ -446,6 +456,7 @@ class AnalysisWorkflowService:
 
     def start_tracking(self, analysis_id: str, request: TrackingRequest) -> TrackingResponse:
         job = self.repository.load_job(analysis_id)
+        self._require_supported_interpretation(job, "court-mapped player tracking")
         self._require(job.calibration_completed, "calibration_required", "Calibration is required.")
         calibration_id = self._validate_output_id(request.calibration_id, "calibration")
         tracking_path = self.repository.analysis_dir(analysis_id) / "tracking" / "tracking.json"
@@ -810,6 +821,7 @@ class AnalysisWorkflowService:
 
     def generate_analytics(self, analysis_id: str) -> AnalyticsGenerationResponse:
         job = self.repository.load_job(analysis_id)
+        self._require_supported_interpretation(job, "movement analytics and Match IQ")
         self._require(
             job.player_selected, "player_selection_required", "Player selection is required."
         )
@@ -868,6 +880,7 @@ class AnalysisWorkflowService:
         """Generate internal shadow evidence without changing job or analytics state."""
 
         job = self.repository.load_job(analysis_id)
+        self._require_supported_interpretation(job, "Active Play interpretation")
         self._require(
             job.tracking_completed,
             "tracking_required",
@@ -911,6 +924,7 @@ class AnalysisWorkflowService:
 
     def get_analytics(self, analysis_id: str) -> AnalyticsResponse:
         job = self.repository.load_job(analysis_id)
+        self._require_supported_interpretation(job, "movement analytics and Match IQ")
         self._require(job.analytics_completed, "analytics_not_ready", "Analytics are not ready.")
         try:
             analytics_path = self.repository.resolve_artifact(
@@ -1048,6 +1062,16 @@ class AnalysisWorkflowService:
     def _require(self, condition: bool, code: str, message: str) -> None:
         if not condition:
             raise JobConflictError(code, message)
+
+    def _require_supported_interpretation(self, job: AnalysisJob, capability: str) -> None:
+        config = get_sport_config(job.sport)
+        if job.sport == SportType.PICKLEBALL:
+            return
+        raise JobConflictError(
+            "sport_interpretation_unavailable",
+            f"{capability.capitalize()} is intentionally unavailable for "
+            f"{job.sport.value} while {config.capability_status} validation is in progress.",
+        )
 
     def _require_frame_artifact(self, source_frame: Path, analysis_id: str) -> None:
         frames_dir = self.repository.analysis_dir(analysis_id) / "frames"

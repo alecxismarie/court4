@@ -33,6 +33,16 @@ test("controlled happy path persists Match IQ and renders share preview", async 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: /welcome back/i })).toBeVisible();
   await page.getByRole("link", { name: /upload match/i }).first().click();
+  const padelOption = page.getByRole("radio", { name: /Padel/i });
+  const pickleballOption = page.getByRole("radio", { name: /Pickleball/i });
+  await expect(pickleballOption).toBeChecked();
+  await expect(page.getByText("Supported", { exact: true })).toBeVisible();
+  await expect(page.getByText("Experimental", { exact: true })).toBeVisible();
+  await page.getByText("Padel", { exact: true }).click();
+  await expect(padelOption).toBeChecked();
+  await expect(page.getByText(/will not run Pickleball court logic or Match IQ/i)).toBeVisible();
+  await page.getByText("Pickleball", { exact: true }).click();
+  await expect(pickleballOption).toBeChecked();
   await page.locator('input[type="file"]').setInputFiles({
     name: "controlled-happy.avi",
     mimeType: "video/x-msvideo",
@@ -145,8 +155,8 @@ test("analysis and play histories persist, explain contribution, and preserve le
   await expect(page).toHaveURL(/\/analysis-history$/);
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByRole("link", { name: "Analysis History" }).first()).toBeVisible();
-  await expect(page.getByRole("link", { name: "My Progress" }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "History", exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Progress", exact: true })).toBeVisible();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
   ).toBe(true);

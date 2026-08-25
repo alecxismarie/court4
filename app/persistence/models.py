@@ -178,6 +178,7 @@ class Analysis(Base):
             "('uploaded','inspected','calibrated','tracked','player_selected','analyzed')",
             name="ck_analysis_stage",
         ),
+        CheckConstraint("sport in ('pickleball','padel')", name="ck_analysis_sport"),
         Index("ix_analysis_owner_created", "owner_user_id", "created_at"),
     )
 
@@ -186,6 +187,7 @@ class Analysis(Base):
         Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     uploaded_video_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    sport: Mapped[str] = mapped_column(String(24), nullable=False, default="pickleball")
     state: Mapped[str] = mapped_column(String(24), nullable=False)
     current_stage: Mapped[str] = mapped_column(String(32), nullable=False)
     job_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
@@ -219,6 +221,7 @@ class AnalysisRun(Base):
             "configuration_fingerprint ~ '^[a-f0-9]{64}$'",
             name="ck_run_configuration_fingerprint",
         ),
+        CheckConstraint("sport in ('pickleball','padel')", name="ck_run_sport"),
         Index(
             "uq_run_one_active",
             "analysis_id",
@@ -239,6 +242,9 @@ class AnalysisRun(Base):
     )
     row_version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
     source_video_checksum: Mapped[str | None] = mapped_column(String(64))
+    sport: Mapped[str] = mapped_column(String(24), nullable=False)
+    sport_config_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    court_definition_version: Mapped[str] = mapped_column(String(64), nullable=False)
     pipeline_version: Mapped[str] = mapped_column(String(64), nullable=False)
     schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
     policy_version: Mapped[str] = mapped_column(String(64), nullable=False)

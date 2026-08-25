@@ -146,6 +146,22 @@ def test_compose_uses_runtime_env_and_isolates_test_email_configuration() -> Non
     assert 'ALLOW_EXTERNAL_EMAIL_IN_TESTS: "false"' in api_test
     assert 'BREVO_API_KEY: ""' in api_test
     assert 'RESEND_API_KEY: ""' in api_test
+    assert (
+        "PICKLEBALL_AI_FRONTEND_ALLOWED_ORIGINS: "
+        "${COURT4_TEST_FRONTEND_ORIGIN:-http://localhost:3002}"
+    ) in api_test
+    assert "FRONTEND_BASE_URL: ${COURT4_TEST_FRONTEND_ORIGIN:-http://localhost:3002}" in api_test
+    assert (
+        "PICKLEBALL_AI_AUTH_REGISTER_RATE_LIMIT: ${COURT4_TEST_AUTH_REGISTER_RATE_LIMIT:-5}"
+    ) in api_test
+
+
+def test_e2e_runner_refuses_an_api_that_does_not_allow_its_browser_origin() -> None:
+    runner = Path("web/scripts/run-e2e.mjs").read_text(encoding="utf-8")
+
+    assert 'method: "OPTIONS"' in runner
+    assert 'response.headers["access-control-allow-origin"] !== url' in runner
+    assert "await verifyApiOrigin();" in runner
 
 
 def test_runtime_image_uses_railway_port_and_runs_migrations() -> None:

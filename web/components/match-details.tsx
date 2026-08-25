@@ -76,13 +76,17 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
         </div>
 
         <dl className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <MetaItem
+            label="Sport"
+            value={job.sport === "padel" ? "Padel — Experimental" : "Pickleball — Supported"}
+          />
           <MetaItem label="Created" value={formatDateTime(job.created_at)} />
           <MetaItem label="Updated" value={formatDateTime(job.updated_at)} />
           <MetaItem label="Workflow stage" value={getStageLabel(job.current_stage)} />
         </dl>
       </section>
 
-      <JobStatus job={job} />
+      {job.sport === "pickleball" ? <JobStatus job={job} /> : null}
 
       <RecordingQualityCard
         assessment={job.analysis_readiness ?? job.upload_preflight}
@@ -114,7 +118,23 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
         />
       )}
 
-      {job.inspection_completed ? <MatchWorkflow job={job} /> : null}
+      {job.inspection_completed && job.sport === "padel" ? (
+        <section className="rounded-md border border-amber-200 bg-amber-50 p-6">
+          <p className="text-sm font-semibold uppercase tracking-wide text-amber-700">
+            Padel — Experimental
+          </p>
+          <h2 className="mt-2 text-xl font-semibold text-court-ink">
+            Video inspection complete
+          </h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-court-muted">
+            Court calibration, court-mapped player tracking, movement analytics, Play History,
+            and Match IQ are intentionally unavailable until Padel-specific validation is complete.
+            This analysis will never use Pickleball interpretation rules.
+          </p>
+        </section>
+      ) : job.inspection_completed ? (
+        <MatchWorkflow job={job} />
+      ) : null}
     </div>
   );
 }
@@ -124,6 +144,13 @@ function NextAction({ job }: { job: AnalysisJob }) {
     return (
       <span className="rounded-md bg-red-50 px-3 py-2 text-sm font-semibold text-court-red">
         Review issue
+      </span>
+    );
+  }
+  if (job.sport === "padel") {
+    return (
+      <span className="rounded-md bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">
+        Experimental validation
       </span>
     );
   }

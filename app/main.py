@@ -25,7 +25,7 @@ def create_app() -> FastAPI:
 
     application = FastAPI(
         title="Court4",
-        description="Upload-first pickleball performance analytics API.",
+        description="Upload-first racket-sport analysis API.",
         version="0.5.0",
     )
     application.include_router(router)

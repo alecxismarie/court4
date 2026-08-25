@@ -4,6 +4,7 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.recording_quality import RecordingQualityLevel
+from app.sports import SportType
 
 
 class ContributionStatus(StrEnum):
@@ -39,6 +40,7 @@ class AnalysisHistoryItem(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     analysis_id: str
+    sport: SportType
     title: str
     created_at: datetime
     updated_at: datetime

@@ -178,6 +178,7 @@ class HistoryProjectionService:
         signals = job.analysis_readiness.analysis_signals if job.analysis_readiness else None
         return AnalysisHistoryItem(
             analysis_id=analysis_id,
+            sport=job.sport,
             title=_title(job),
             created_at=job.created_at,
             updated_at=job.updated_at,

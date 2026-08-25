@@ -15,6 +15,7 @@ import type {
   DuplicateUploadResponse,
   UploadAnalysisResponse,
   UploadProgress as UploadProgressValue,
+  SportType,
 } from "@/lib/api/types";
 import { getPublicEnv } from "@/lib/env";
 import { rememberAnalysisId } from "@/lib/recent-analyses";
@@ -24,6 +25,7 @@ import { UploadProgress } from "@/components/upload-progress";
 
 type UploadFormValues = {
   file: File;
+  sport: SportType;
 };
 
 export type UploadAnalysisFn = (
@@ -32,6 +34,7 @@ export type UploadAnalysisFn = (
   options?: {
     idempotencyKey?: string;
     reanalyze?: boolean;
+    sport?: SportType;
   },
 ) => Promise<UploadAnalysisResponse>;
 
@@ -39,6 +42,7 @@ type UploadCommand = {
   file: File;
   idempotencyKey: string;
   reanalyze: boolean;
+  sport: SportType;
 };
 
 export function UploadDropzone({
@@ -59,14 +63,17 @@ export function UploadDropzone({
 
   const form = useForm<UploadFormValues>({
     resolver: zodResolver(buildUploadSchema(publicEnv)),
+    defaultValues: { sport: "pickleball" },
   });
   const selectedFile = form.watch("file");
+  const selectedSport = form.watch("sport");
 
   const uploadMutation = useMutation({
     mutationFn: (command: UploadCommand) =>
       uploadAnalysis(command.file, setProgress, {
         idempotencyKey: command.idempotencyKey,
         reanalyze: command.reanalyze,
+        sport: command.sport,
       }),
     onMutate: (command) => {
       setApiError(null);
@@ -116,6 +123,7 @@ export function UploadDropzone({
       file: values.file,
       idempotencyKey,
       reanalyze: false,
+      sport: values.sport,
     });
   });
 
@@ -151,6 +159,38 @@ export function UploadDropzone({
           <li>Usable tracked time matters more than total duration.</li>
         </ul>
       </section>
+
+      <fieldset className="rounded-md border border-court-line bg-white p-5">
+        <legend className="px-1 text-lg font-semibold text-court-ink">Choose your sport</legend>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <SportOption
+            sport="pickleball"
+            label="Pickleball"
+            status="Supported"
+            description="Full current Court4 workflow, movement analytics, and Match IQ."
+            selected={selectedSport === "pickleball"}
+            disabled={uploadMutation.isPending}
+            onSelect={() => {
+              form.setValue("sport", "pickleball", { shouldDirty: true });
+              uploadIdempotencyKeyRef.current = crypto.randomUUID();
+              setDuplicate(null);
+            }}
+          />
+          <SportOption
+            sport="padel"
+            label="Padel"
+            status="Experimental"
+            description="Upload and video inspection only; Padel analytics and Match IQ stay disabled."
+            selected={selectedSport === "padel"}
+            disabled={uploadMutation.isPending}
+            onSelect={() => {
+              form.setValue("sport", "padel", { shouldDirty: true });
+              uploadIdempotencyKeyRef.current = crypto.randomUUID();
+              setDuplicate(null);
+            }}
+          />
+        </div>
+      </fieldset>
 
       <div
         role="button"
@@ -189,8 +229,9 @@ export function UploadDropzone({
         </div>
         <h2 className="mt-5 text-xl font-semibold text-court-ink">Upload a match video</h2>
         <p className="mx-auto mt-2 max-w-2xl text-sm leading-6 text-court-muted">
-          Court4 currently processes one pickleball match video at a time. After upload,
-          you will confirm the court view and choose which tracked player is you.
+          {selectedSport === "pickleball"
+            ? "Court4 processes one Pickleball match video at a time. After upload, you will confirm the court view and choose which tracked player is you."
+            : "Padel is an experimental validation path. Court4 will inspect and preserve the upload, but will not run Pickleball court logic or Match IQ."}
         </p>
         <p className="mt-4 text-sm font-medium text-court-blue">
           Drag a video here or press Enter to choose a file.
@@ -255,6 +296,7 @@ export function UploadDropzone({
                   file: selectedFile,
                   idempotencyKey: crypto.randomUUID(),
                   reanalyze: true,
+                  sport: selectedSport,
                 });
               }}
             >
@@ -297,6 +339,7 @@ function isDuplicateUpload(
 
 function buildUploadSchema(env: ReturnType<typeof getPublicEnv>) {
   return z.object({
+    sport: z.enum(["pickleball", "padel"]),
     file: z
       .custom<File>((value): value is File => value instanceof File, {
         message: "Select a match video to upload.",
@@ -308,4 +351,49 @@ function buildUploadSchema(env: ReturnType<typeof getPublicEnv>) {
         return env.supportedVideoExtensions.includes(extension);
       }, "Court4 supports .mp4, .mov, .avi, and .mkv videos."),
   });
+}
+
+function SportOption({
+  sport,
+  label,
+  status,
+  description,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  sport: SportType;
+  label: string;
+  status: string;
+  description: string;
+  selected: boolean;
+  disabled: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <label
+      className={cn(
+        "cursor-pointer rounded-md border p-4 transition",
+        selected ? "border-court-green bg-green-50" : "border-court-line",
+        disabled && "cursor-not-allowed opacity-70",
+      )}
+    >
+      <input
+        type="radio"
+        name="sport"
+        value={sport}
+        checked={selected}
+        disabled={disabled}
+        onChange={onSelect}
+        className="sr-only"
+      />
+      <span className="flex items-center justify-between gap-3">
+        <span className="font-semibold text-court-ink">{label}</span>
+        <span className="rounded-full border border-court-line px-2 py-1 text-xs font-semibold uppercase tracking-wide text-court-muted">
+          {status}
+        </span>
+      </span>
+      <span className="mt-2 block text-sm leading-5 text-court-muted">{description}</span>
+    </label>
+  );
 }

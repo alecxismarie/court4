@@ -88,6 +88,19 @@ describe("match details workflow", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows an honest Padel experimental state without Pickleball workflow actions", async () => {
+    mockedGetAnalysis.mockResolvedValue(makeJob({ sport: "padel" }));
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+
+    renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+
+    expect(await screen.findByText("Video inspection complete")).toBeInTheDocument();
+    expect(screen.getAllByText(/Padel — Experimental/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/will never use Pickleball interpretation rules/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /recognize court/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /generate my match iq/i })).not.toBeInTheDocument();
+  });
+
   it("shows normalized API errors when loading fails", async () => {
     mockedGetAnalysis.mockRejectedValue(
       new Court4ApiError("Analysis does not exist.", {

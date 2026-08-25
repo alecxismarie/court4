@@ -28,6 +28,30 @@ describe("upload dropzone", () => {
     expect(screen.getByText(/behind or diagonally behind the baseline/i)).toBeInTheDocument();
     expect(screen.getByText(/720p minimum; 1080p is recommended/i)).toBeInTheDocument();
     expect(screen.getByText(/Usable tracked time matters more/i)).toBeInTheDocument();
+    expect(screen.getByText("Supported")).toBeInTheDocument();
+    expect(screen.getByText("Experimental")).toBeInTheDocument();
+  });
+
+  it("submits the selected Padel sport through the experimental path", async () => {
+    const user = userEvent.setup();
+    const file = new File(["video"], "padel.mp4", { type: "video/mp4" });
+    const uploadAnalysis = vi
+      .fn<UploadAnalysisFn>()
+      .mockResolvedValue(makeJob({ analysis_id: "padel-analysis", sport: "padel" }));
+
+    renderWithQueryClient(<UploadDropzone uploadAnalysis={uploadAnalysis} onUploadComplete={vi.fn()} />);
+    await user.click(screen.getByRole("radio", { name: /Padel/i }));
+    await user.upload(screen.getByLabelText("Match video file"), file);
+    await user.click(screen.getByRole("button", { name: /upload selected video/i }));
+
+    await waitFor(() =>
+      expect(uploadAnalysis).toHaveBeenCalledWith(
+        file,
+        expect.any(Function),
+        expect.objectContaining({ sport: "padel" }),
+      ),
+    );
+    expect(screen.getByText(/will not run Pickleball court logic or Match IQ/i)).toBeInTheDocument();
   });
 
   it("validates selected video size before upload", async () => {

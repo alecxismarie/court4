@@ -1,1 +1,1 @@
-"""Pickleball AI application package."""
+"""Court4 multi-sport analysis application package."""

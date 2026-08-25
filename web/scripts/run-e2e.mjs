@@ -105,6 +105,46 @@ function verifyApiIsolation(timeoutMs = 10_000) {
   });
 }
 
+function verifyApiOrigin(timeoutMs = 10_000) {
+  return new Promise((resolve, reject) => {
+    const request = http.request(
+      new URL("/api/v1/auth/refresh", apiUrl),
+      {
+        method: "OPTIONS",
+        headers: {
+          Origin: url,
+          "Access-Control-Request-Method": "POST",
+        },
+      },
+      (response) => {
+        response.resume();
+        response.on("end", () => {
+          if (
+            response.statusCode !== 200 ||
+            response.headers["access-control-allow-origin"] !== url
+          ) {
+            reject(
+              new Error(
+                `E2E safety refusal: isolated API does not allow the browser origin ${url}. ` +
+                  "Start api-test with COURT4_TEST_FRONTEND_ORIGIN set to that exact origin.",
+              ),
+            );
+            return;
+          }
+          resolve();
+        });
+      },
+    );
+    request.on("error", () =>
+      reject(new Error("E2E safety refusal: API origin preflight failed.")),
+    );
+    request.setTimeout(timeoutMs, () =>
+      request.destroy(new Error("E2E API origin preflight timed out.")),
+    );
+    request.end();
+  });
+}
+
 function runPlaywright() {
   const requestedTests = process.argv.slice(2);
   const child = spawn(process.execPath, [playwrightBin, "test", ...requestedTests], {
@@ -142,6 +182,7 @@ async function main() {
 
   try {
     await verifyApiIsolation();
+    await verifyApiOrigin();
     await waitForServer();
     exitCode = await runPlaywright();
   } catch (error) {

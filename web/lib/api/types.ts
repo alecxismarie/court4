@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export const sportTypeSchema = z.enum(["pickleball", "padel"]);
+export type SportType = z.infer<typeof sportTypeSchema>;
+
 export const analysisArtifactSchema = z.object({
   path: z.string(),
   url: z.string(),
@@ -80,6 +83,7 @@ function missingAsNull<TSchema extends z.ZodTypeAny>(schema: TSchema) {
 
 export const analysisJobSchema = z.object({
   analysis_id: z.string(),
+  sport: sportTypeSchema.default("pickleball"),
   status: z.string(),
   current_stage: z.string(),
   source_video: z.string().nullable(),
@@ -483,6 +487,7 @@ export const contributionDecisionSchema = z.object({
 
 export const analysisHistoryItemSchema = z.object({
   analysis_id: z.string(),
+  sport: sportTypeSchema.default("pickleball"),
   title: z.string(),
   created_at: z.string(),
   updated_at: z.string(),

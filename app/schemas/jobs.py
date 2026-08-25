@@ -12,6 +12,7 @@ from app.schemas.player_candidates import PlayerCandidateCollection
 from app.schemas.player_tracking import PlayerTrackingReport, TrackSummary
 from app.schemas.recording_quality import RecordingQualityAssessment
 from app.schemas.video import VideoMetadataReport
+from app.sports import SportType
 
 
 class AnalysisStatus(StrEnum):
@@ -78,6 +79,7 @@ class AnalysisJob(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     analysis_id: str
+    sport: SportType = SportType.PICKLEBALL
     status: AnalysisStatus
     current_stage: AnalysisStage
     source_video: str | None = None

@@ -33,6 +33,7 @@ from app.schemas.player_candidates import (
 )
 from app.services.history import HistoryProjectionService
 from app.services.jobs import AnalysisWorkflowService
+from app.sports import SportType
 
 router = APIRouter(prefix="/analyses", tags=["analyses"])
 development_router = APIRouter(prefix="/analyses", tags=["internal-development"])
@@ -48,7 +49,7 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
 
 
 SettingsDependency = Annotated[Settings, Depends(get_settings)]
-VideoUploadFile = Annotated[UploadFile, File(description="Pickleball match video file.")]
+VideoUploadFile = Annotated[UploadFile, File(description="Pickleball or Padel match video file.")]
 
 
 def get_workflow_service(
@@ -87,7 +88,7 @@ def list_analyses(
     status_code=201,
     summary="Upload a match video",
     description=(
-        "Upload a pickleball match video, create a filesystem-backed analysis job, "
+        "Upload a sport-identified match video, create a filesystem-backed analysis job, "
         "and run synchronous video inspection."
     ),
     responses=ERROR_RESPONSES,
@@ -98,11 +99,13 @@ async def upload_video(
     response: Response,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     reanalyze: Annotated[bool, Form()] = False,
+    sport: Annotated[SportType, Form()] = SportType.PICKLEBALL,
 ) -> UploadAnalysisResponse:
     result = await workflow.create_analysis(
         file,
         idempotency_key=idempotency_key,
         reanalyze=reanalyze,
+        sport=sport,
     )
     if isinstance(result, DuplicateUploadResponse):
         response.status_code = 200

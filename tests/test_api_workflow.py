@@ -11,12 +11,13 @@ from httpx import Response
 
 from app.config import get_settings
 from app.main import create_app
-from app.persistence.models import User
+from app.persistence.models import Analysis, AnalysisRun, User
 from app.persistence.runtime import get_persistence
 from app.schemas.jobs import AnalysisJob
 from app.services.jobs import AnalysisJobRepository
 from app.services.tracking.json_tracking_backend import build_controlled_detection_line
 from app.services.video.player_analysis import load_calibration_report
+from app.sports import SportType
 from app.sports.pickleball.calibration import court_point_to_image
 
 API_TEST_OWNERS: dict[Path, UUID] = {}
@@ -48,6 +49,7 @@ def test_video_upload_job_retrieval_frames_and_safe_filename(
     assert upload.status_code == 201
     job = upload.json()
     analysis_id = job["analysis_id"]
+    assert job["sport"] == "pickleball"
     assert job["status"] == "processing"
     assert job["current_stage"] == "inspected"
     assert job["source_video"] == "uploads/source.avi"
@@ -67,6 +69,78 @@ def test_video_upload_job_retrieval_frames_and_safe_filename(
     assert frames.json()["frames"][0]["url"].startswith(
         f"/api/v1/analyses/{analysis_id}/artifacts/frames/"
     )
+
+
+def test_padel_upload_persists_sport_and_blocks_pickleball_interpretation(
+    tmp_path: Path,
+    synthetic_video_factory: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _output_dir = _api_client(tmp_path, monkeypatch)
+    video_path = synthetic_video_factory(tmp_path / "padel.avi", width=800, height=900)
+
+    upload = _upload_video(client, video_path, sport=SportType.PADEL)
+
+    assert upload.status_code == 201
+    payload = upload.json()
+    assert payload["sport"] == "padel"
+    analysis_id = payload["analysis_id"]
+    assert client.get(f"/api/v1/analyses/{analysis_id}").json()["sport"] == "padel"
+    blocked = client.post(f"/api/v1/analyses/{analysis_id}/court-detection")
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "sport_interpretation_unavailable"
+    match_iq_blocked = client.post(f"/api/v1/analyses/{analysis_id}/analytics")
+    assert match_iq_blocked.status_code == 409
+    assert match_iq_blocked.json()["error"]["code"] == "sport_interpretation_unavailable"
+    history_item = client.get("/api/v1/analyses").json()["items"][0]
+    assert history_item["sport"] == "padel"
+    assert history_item["match_iq_available"] is False
+    assert history_item["contribution"]["reason_codes"] == ["SPORT_INTERPRETATION_UNAVAILABLE"]
+
+    with get_persistence().session_factory() as session:
+        analysis = session.get(Analysis, analysis_id)
+        run = session.query(AnalysisRun).filter_by(analysis_id=analysis_id).one()
+        assert analysis is not None
+        assert analysis.sport == "padel"
+        assert run.sport == "padel"
+        assert run.sport_config_version == "padel-experimental-v1"
+        assert run.court_definition_version == "padel-court-v1"
+
+
+def test_upload_rejects_unknown_sport_before_persistence(
+    tmp_path: Path,
+    synthetic_video_factory: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _output_dir = _api_client(tmp_path, monkeypatch)
+    video_path = synthetic_video_factory(tmp_path / "unknown-sport.avi")
+
+    with video_path.open("rb") as video:
+        response = client.post(
+            "/api/v1/analyses",
+            data={"sport": "tennis"},
+            files={"file": (video_path.name, video.read(), "video/x-msvideo")},
+        )
+
+    assert response.status_code == 422
+
+
+def test_exact_duplicate_detection_is_scoped_by_sport(
+    tmp_path: Path,
+    synthetic_video_factory: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _output_dir = _api_client(tmp_path, monkeypatch)
+    video_path = synthetic_video_factory(tmp_path / "cross-sport.avi")
+
+    pickleball = _upload_video(client, video_path, sport=SportType.PICKLEBALL)
+    padel = _upload_video(client, video_path, sport=SportType.PADEL)
+
+    assert pickleball.status_code == 201
+    assert padel.status_code == 201
+    assert pickleball.json()["analysis_id"] != padel.json()["analysis_id"]
+    assert pickleball.json()["sport"] == "pickleball"
+    assert padel.json()["sport"] == "padel"
 
 
 def test_upload_rejects_invalid_extension(
@@ -818,12 +892,13 @@ def _upload_video(
     filename: str | None = None,
     idempotency_key: str | None = None,
     reanalyze: bool = False,
+    sport: SportType = SportType.PICKLEBALL,
 ) -> Response:
     with video_path.open("rb") as video:
         response = client.post(
             "/api/v1/analyses",
             headers=({"Idempotency-Key": idempotency_key} if idempotency_key is not None else None),
-            data={"reanalyze": "true"} if reanalyze else None,
+            data={"reanalyze": "true" if reanalyze else "false", "sport": sport.value},
             files={
                 "file": (
                     filename or video_path.name,

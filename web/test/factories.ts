@@ -24,6 +24,7 @@ export function makeAnalysisHistoryItem(
 ): AnalysisHistoryItem {
   return {
     analysis_id: "analysis-123",
+    sport: "pickleball",
     title: "Saturday match",
     created_at: "2026-07-21T00:00:00Z",
     updated_at: "2026-07-21T00:03:00Z",
@@ -244,6 +245,7 @@ export function makeRecordingQuality(
 export function makeJob(overrides: Partial<AnalysisJob> = {}): AnalysisJob {
   return {
     analysis_id: "analysis-123",
+    sport: "pickleball",
     status: "processing",
     current_stage: "inspected",
     source_video: "match.mp4",

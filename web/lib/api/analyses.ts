@@ -22,6 +22,7 @@ import {
   type PlayerCandidateCollection,
   type PlayersResponse,
   type SampledFramesResponse,
+  type SportType,
   type TrackingRequest,
   type TrackingResponse,
   type UploadProgress,
@@ -44,6 +45,7 @@ export function createAnalysis(
   options?: {
     idempotencyKey?: string;
     reanalyze?: boolean;
+    sport?: SportType;
   },
 ): Promise<UploadAnalysisResponse> {
   return new Promise((resolve, reject) => {
@@ -53,6 +55,7 @@ export function createAnalysis(
       const xhr = new XMLHttpRequest();
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("sport", options?.sport ?? "pickleball");
       if (options?.reanalyze) {
         formData.append("reanalyze", "true");
       }

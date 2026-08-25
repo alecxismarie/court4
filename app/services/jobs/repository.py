@@ -19,6 +19,7 @@ from app.persistence.service import ArtifactInput, DuplicateVideoMatch, PlayerSe
 from app.persistence.storage import LocalStorage
 from app.schemas.jobs import AnalysisArtifact, AnalysisJob
 from app.services.jobs.exceptions import JobNotFoundError, JobRequestError
+from app.sports import SportType
 
 ANALYSIS_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
@@ -95,11 +96,14 @@ class AnalysisJobRepository:
         return self.persistence.service.list_analysis_ids(owner_user_id=self.owner_user_id)
 
     def find_uploaded_video_by_owner_and_checksum(
-        self, checksum_sha256: str
+        self,
+        checksum_sha256: str,
+        sport: SportType = SportType.PICKLEBALL,
     ) -> DuplicateVideoMatch | None:
         return self.persistence.service.find_uploaded_video_by_owner_and_checksum(
             owner_user_id=self.owner_user_id,
             checksum_sha256=checksum_sha256,
+            sport=sport,
         )
 
     def update_job(self, job: AnalysisJob, **updates: object) -> AnalysisJob:

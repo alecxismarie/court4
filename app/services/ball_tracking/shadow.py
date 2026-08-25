@@ -32,6 +32,7 @@ from app.services.stages.configuration import (
     stage_configuration_fingerprint,
 )
 from app.services.video.frame_source import FrameSourceError
+from app.sports import SportType, get_sport_config
 
 
 class BallTrackingDisabledError(RuntimeError):
@@ -69,14 +70,24 @@ class BallShadowStageService:
         request_overrides: Mapping[str, Any] | None = None,
         court_calibration_artifact_checksum: str | None = None,
         calibration_schema_version: int | None = None,
+        sport: SportType = SportType.PICKLEBALL,
     ) -> StageExecutionResult:
         if not self._settings.ball_tracking_enabled:
             raise BallTrackingDisabledError("Ball tracking is disabled.")
-        effective_configuration = self._effective_configuration(request_overrides)
+        sport_config = get_sport_config(sport)
+        effective_configuration = {
+            **self._effective_configuration(request_overrides),
+            "sport": sport.value,
+            "sport_config_version": sport_config.config_version,
+            "court_definition_version": sport_config.court_definition_version,
+        }
         fingerprint = stage_configuration_fingerprint(effective_configuration)
         provenance = StageProvenance(
             stage_name=self.STAGE_TYPE,
             stage_version=self.STAGE_VERSION,
+            sport=sport,
+            sport_config_version=sport_config.config_version,
+            court_definition_version=sport_config.court_definition_version,
             detector_name=OpenCVColorMotionBallDetector.name,
             detector_version=OpenCVColorMotionBallDetector.version,
             model_identifier=None,
@@ -126,6 +137,7 @@ class BallShadowStageService:
         calibration: CourtCalibrationReport | None = None,
         calibration_verification: CalibrationVerificationRecord | None = None,
         court_calibration_artifact_checksum: str | None = None,
+        sport: SportType = SportType.PICKLEBALL,
     ) -> BallStageRunResult:
         stage = self.start_for_analysis(
             owner_user_id=owner_user_id,
@@ -136,16 +148,24 @@ class BallShadowStageService:
             request_overrides=request_overrides,
             court_calibration_artifact_checksum=court_calibration_artifact_checksum,
             calibration_schema_version=calibration.schema_version if calibration else None,
+            sport=sport,
         )
         if not stage.created:
             return BallStageRunResult(stage=stage, pipeline=None)
 
-        effective_configuration = self._effective_configuration(request_overrides)
+        sport_config = get_sport_config(sport)
+        effective_configuration = {
+            **self._effective_configuration(request_overrides),
+            "sport": sport.value,
+            "sport_config_version": sport_config.config_version,
+            "court_definition_version": sport_config.court_definition_version,
+        }
         provenance = self._provenance(
             effective_configuration=effective_configuration,
             source_video_checksum=source_video_checksum,
             court_calibration_artifact_checksum=court_calibration_artifact_checksum,
             calibration_schema_version=calibration.schema_version if calibration else None,
+            sport=sport,
         )
         detector = OpenCVColorMotionBallDetector(
             OpenCVBallDetectorConfig(**effective_configuration["detector"])
@@ -252,10 +272,15 @@ class BallShadowStageService:
         source_video_checksum: str | None,
         court_calibration_artifact_checksum: str | None,
         calibration_schema_version: int | None,
+        sport: SportType,
     ) -> StageProvenance:
+        sport_config = get_sport_config(sport)
         return StageProvenance(
             stage_name=self.STAGE_TYPE,
             stage_version=self.STAGE_VERSION,
+            sport=sport,
+            sport_config_version=sport_config.config_version,
+            court_definition_version=sport_config.court_definition_version,
             detector_name=OpenCVColorMotionBallDetector.name,
             detector_version=OpenCVColorMotionBallDetector.version,
             model_identifier=None,

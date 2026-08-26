@@ -153,6 +153,8 @@ class AnalysisWorkflowService:
                 warning_free_bytes=self.settings.storage_warning_free_bytes,
                 hard_stop_free_bytes=self.settings.storage_hard_stop_free_bytes,
                 max_active_uploads=self.settings.storage_max_active_uploads,
+                software_commit_identifier=self.settings.software_commit_identifier,
+                deployment_build_identifier=self.settings.deployment_build_identifier,
             )
         except StorageCapacityError as exc:
             if exc.reason == "active_limit":

@@ -20,7 +20,7 @@ export function UploadProgress({ progress }: { progress: UploadProgressValue }) 
         className="h-3 overflow-hidden rounded-md bg-court-panel"
       >
         <div
-          className="h-full rounded-md bg-court-blue"
+          className="h-full rounded-md bg-court-lime"
           style={{ width: `${Math.max(5, Math.min(100, percent))}%` }}
         />
       </div>

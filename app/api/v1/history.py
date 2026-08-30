@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
@@ -16,13 +17,15 @@ SettingsDependency = Annotated[Settings, Depends(get_settings)]
 
 def get_history_service(
     settings: SettingsDependency, user: VerifiedUser
-) -> HistoryProjectionService:
-    repository = AnalysisJobRepository(
-        output_dir=settings.analysis_output_dir,
-        api_base_path=settings.api_base_path,
+) -> Iterator[HistoryProjectionService]:
+    repository = AnalysisJobRepository.from_settings(
+        settings=settings,
         owner_user_id=user.id,
     )
-    return HistoryProjectionService(repository=repository)
+    try:
+        yield HistoryProjectionService(repository=repository)
+    finally:
+        repository.close()
 
 
 HistoryDependency = Annotated[HistoryProjectionService, Depends(get_history_service)]

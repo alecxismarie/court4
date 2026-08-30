@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import get_settings
 from app.persistence.database import create_database_engine, create_session_factory
+from app.persistence.object_storage import ObjectStorage, build_object_storage
 from app.persistence.service import PersistenceService, RunProvenance
-from app.persistence.storage import LocalStorage
 
 
 @dataclass(frozen=True)
@@ -20,7 +20,7 @@ class PersistenceRuntime:
     engine: Engine
     session_factory: sessionmaker[Session]
     service: PersistenceService
-    storage: LocalStorage
+    storage: ObjectStorage
     _bootstrap_owner_user_id: UUID | None = None
 
     @property
@@ -67,6 +67,6 @@ def get_persistence() -> PersistenceRuntime:
         engine=engine,
         session_factory=session_factory,
         service=service,
-        storage=LocalStorage(settings.local_storage_root),
+        storage=build_object_storage(settings),
         _bootstrap_owner_user_id=owner_user_id,
     )

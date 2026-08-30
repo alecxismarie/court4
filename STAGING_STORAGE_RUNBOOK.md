@@ -1,4 +1,8 @@
-# Staging persistent-storage runbook
+# Staging persistent-storage runbook (legacy/local compatibility)
+
+For the Phase 1.8D S3 architecture and Railway bucket configuration, see
+`docs/platform/PHASE_1_8D_OBJECT_STORAGE_AND_WORKSPACES.md`. The volume and this runbook remain
+in force for existing local artifacts; do not remove or wipe them.
 
 Court4 uses PostgreSQL as metadata authority and local filesystem storage for bytes. Mount a persistent volume at `/app/data`; `/app/data/output` must survive application replacement and restart. Do not place it in a disposable container layer.
 

@@ -11,6 +11,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.13,<2.0",
     "argon2-cffi>=23.1,<26.0",
+    "boto3>=1.35,<2.0",
     "fastapi>=0.111,<1.0",
     "httpx>=0.27,<1.0",
     "numpy>=1.26,<3.0",
@@ -70,4 +71,8 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["ultralytics"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["boto3", "botocore.*"]
 ignore_missing_imports = true

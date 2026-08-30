@@ -129,11 +129,13 @@ class ArtifactFile:
 class AnalysisWorkflowService:
     def __init__(self, *, settings: Settings, owner_user_id: UUID | None = None) -> None:
         self.settings = settings
-        self.repository = AnalysisJobRepository(
-            output_dir=settings.analysis_output_dir,
-            api_base_path=settings.api_base_path,
+        self.repository = AnalysisJobRepository.from_settings(
+            settings=settings,
             owner_user_id=owner_user_id,
         )
+
+    def close(self) -> None:
+        self.repository.close()
 
     async def create_analysis(
         self,
@@ -242,7 +244,9 @@ class AnalysisWorkflowService:
                 )
             if not reservation.created:
                 return UploadVideoResponse.model_validate(
-                    self.repository.load_job(reservation.analysis_id).model_dump(mode="json")
+                    self.repository.refresh_artifacts(
+                        self.repository.load_job_metadata(reservation.analysis_id)
+                    ).model_dump(mode="json")
                 )
             inspection = inspect_video(
                 input_path=staging_path,
@@ -295,11 +299,13 @@ class AnalysisWorkflowService:
 
     def get_job(self, analysis_id: str) -> AnalysisJobResponse:
         return AnalysisJobResponse.model_validate(
-            self.repository.load_job(analysis_id).model_dump(mode="json")
+            self.repository.refresh_artifacts(
+                self.repository.load_job_metadata(analysis_id)
+            ).model_dump(mode="json")
         )
 
     def list_sampled_frames(self, analysis_id: str) -> SampledFramesResponse:
-        job = self.repository.load_job(analysis_id)
+        job = self.repository.refresh_artifacts(self.repository.load_job_metadata(analysis_id))
         frames = []
         for artifact in job.available_artifacts:
             path = Path(artifact.path)
@@ -316,7 +322,7 @@ class AnalysisWorkflowService:
         return SampledFramesResponse(analysis_id=analysis_id, frames=frames)
 
     def get_artifact_file(self, analysis_id: str, artifact_path: str) -> ArtifactFile:
-        self.repository.load_job(analysis_id)
+        self.repository.load_job_metadata(analysis_id)
         resolved = self.repository.resolve_artifact(analysis_id, artifact_path)
         if not resolved.exists() or not resolved.is_file():
             raise JobNotFoundError("Artifact not found.")

@@ -47,6 +47,8 @@ class ArtifactInput:
     checksum_sha256: str
     artifact_kind: str
     schema_version: int | None = None
+    storage_provider: str = "local"
+    logical_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -863,7 +865,10 @@ class PersistenceService:
                     "Artifacts cannot be added to a terminal stage execution."
                 )
             expected_prefix = stage_artifact_prefix(execution.stage_type, execution.attempt_number)
-            if any(not artifact.storage_key.startswith(expected_prefix) for artifact in artifacts):
+            if any(
+                not (artifact.logical_key or artifact.storage_key).startswith(expected_prefix)
+                for artifact in artifacts
+            ):
                 raise ValueError(
                     "Stage artifact storage keys must be namespaced by stage and attempt."
                 )
@@ -881,7 +886,7 @@ class PersistenceService:
             execution.output_artifact_references = [
                 {
                     "artifact_id": str(artifact.id),
-                    "storage_key": artifact.storage_key,
+                    "storage_key": artifact.logical_key,
                     "checksum_sha256": artifact.checksum_sha256,
                     "schema_version": artifact.schema_version,
                 }
@@ -1028,8 +1033,26 @@ class PersistenceService:
             persisted_video = session.get(UploadedVideo, analysis.uploaded_video_id)
             source_video = payload.get("source_video")
             if persisted_video is not None and isinstance(source_video, str):
+                source_artifact = next(
+                    (
+                        artifact
+                        for artifact in artifacts
+                        if (artifact.logical_key or artifact.storage_key) == source_video
+                        and artifact.artifact_kind == "source_video"
+                    ),
+                    None,
+                )
                 persisted_video.state = "available"
-                persisted_video.storage_key = source_video
+                persisted_video.storage_provider = (
+                    source_artifact.storage_provider if source_artifact else "local"
+                )
+                persisted_video.storage_key = (
+                    source_artifact.storage_key if source_artifact else source_video
+                )
+                if source_artifact is not None:
+                    persisted_video.content_type = source_artifact.content_type
+                    persisted_video.size_bytes = source_artifact.size_bytes
+                    persisted_video.source_checksum = source_artifact.checksum_sha256
                 persisted_video.row_version += 1
                 persisted_video.updated_at = now
 
@@ -1083,14 +1106,14 @@ class PersistenceService:
             )
 
     def get_artifact(
-        self, *, owner_user_id: UUID, analysis_id: str, storage_key: str
+        self, *, owner_user_id: UUID, analysis_id: str, logical_key: str
     ) -> AnalysisArtifact:
         with self._session_factory() as session:
             artifact = session.scalar(
                 select(AnalysisArtifact).where(
                     AnalysisArtifact.owner_user_id == owner_user_id,
                     AnalysisArtifact.analysis_id == analysis_id,
-                    AnalysisArtifact.storage_key == storage_key,
+                    AnalysisArtifact.logical_key == logical_key,
                     AnalysisArtifact.state == "available",
                     AnalysisArtifact.is_current.is_(True),
                 )
@@ -1148,8 +1171,7 @@ class PersistenceService:
             current = session.scalar(
                 select(AnalysisArtifact).where(
                     AnalysisArtifact.analysis_id == analysis.id,
-                    AnalysisArtifact.storage_provider == "local",
-                    AnalysisArtifact.storage_key == artifact.storage_key,
+                    AnalysisArtifact.logical_key == (artifact.logical_key or artifact.storage_key),
                     AnalysisArtifact.is_current.is_(True),
                 )
             )
@@ -1157,6 +1179,8 @@ class PersistenceService:
                 current is not None
                 and current.checksum_sha256 == artifact.checksum_sha256
                 and current.size_bytes == artifact.size_bytes
+                and current.storage_provider == artifact.storage_provider
+                and current.storage_key == artifact.storage_key
             ):
                 registered.append(current)
                 continue
@@ -1169,8 +1193,9 @@ class PersistenceService:
                 analysis_run_id=run.id if run else None,
                 stage_execution_id=stage_execution.id if stage_execution else None,
                 artifact_kind=artifact.artifact_kind,
-                storage_provider="local",
+                storage_provider=artifact.storage_provider,
                 storage_key=artifact.storage_key,
+                logical_key=artifact.logical_key or artifact.storage_key,
                 content_type=artifact.content_type,
                 size_bytes=artifact.size_bytes,
                 checksum_sha256=artifact.checksum_sha256,

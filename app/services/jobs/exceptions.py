@@ -33,6 +33,11 @@ class JobStorageCapacityError(JobWorkflowError):
         super().__init__(code=code, message=message, status_code=status_code)
 
 
+class JobStorageBackendError(JobWorkflowError):
+    def __init__(self, message: str = "Private storage is temporarily unavailable.") -> None:
+        super().__init__(code="storage_backend_unavailable", message=message, status_code=503)
+
+
 class JobInternalError(JobWorkflowError):
     def __init__(self, message: str = "Unexpected analysis workflow failure.") -> None:
         super().__init__(code="internal_error", message=message, status_code=500)

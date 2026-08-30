@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import mimetypes
 import re
+import shutil
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from uuid import UUID
@@ -14,14 +17,30 @@ from app.persistence.errors import (
     OwnershipMismatchError,
     ResourceNotFoundError,
 )
+from app.persistence.models import AnalysisArtifact as PersistedArtifact
+from app.persistence.object_storage import (
+    LocalObjectStorage,
+    ObjectNotFoundError,
+    ObjectStorage,
+    ObjectStorageError,
+    artifact_object_key,
+    build_object_storage,
+    source_object_key,
+)
 from app.persistence.runtime import PersistenceRuntime, get_persistence
 from app.persistence.service import ArtifactInput, DuplicateVideoMatch, PlayerSelectionInput
-from app.persistence.storage import LocalStorage
+from app.persistence.storage import LocalStorage, StorageCapacityError, StorageReservation
 from app.schemas.jobs import AnalysisArtifact, AnalysisJob
-from app.services.jobs.exceptions import JobNotFoundError, JobRequestError
+from app.services.jobs.exceptions import (
+    JobNotFoundError,
+    JobRequestError,
+    JobStorageBackendError,
+    JobStorageCapacityError,
+)
 from app.sports import SportType
 
 ANALYSIS_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+logger = logging.getLogger(__name__)
 
 
 class AnalysisJobRepository:
@@ -34,12 +53,81 @@ class AnalysisJobRepository:
         api_base_path: str,
         owner_user_id: UUID | None = None,
         persistence: PersistenceRuntime | None = None,
+        object_storage: ObjectStorage | None = None,
+        capacity_root: Path | None = None,
+        cleanup_workspace: bool = False,
+        workspace_warning_free_bytes: int | None = None,
+        workspace_hard_stop_free_bytes: int | None = None,
+        workspace_max_active: int = 1,
+        legacy_storage_root: Path | None = None,
     ) -> None:
         self.output_dir = output_dir.expanduser().resolve()
-        self.storage = LocalStorage(self.output_dir)
+        self.workspace = LocalStorage(self.output_dir)
+        self.storage = LocalStorage(capacity_root or self.output_dir)
+        self.legacy_storage = LocalStorage(legacy_storage_root or self.output_dir)
         self.api_base_path = api_base_path.rstrip("/")
         self.persistence = persistence or get_persistence()
         self.owner_user_id = owner_user_id or self.persistence.owner_user_id
+        self.object_storage = object_storage or LocalObjectStorage(self.output_dir)
+        self._cleanup_workspace = cleanup_workspace
+        self._workspace_warning_free_bytes = workspace_warning_free_bytes
+        self._workspace_hard_stop_free_bytes = workspace_hard_stop_free_bytes
+        self._workspace_max_active = workspace_max_active
+        self._workspace_reservation: StorageReservation | None = None
+
+    @classmethod
+    def from_settings(
+        cls,
+        *,
+        settings: object,
+        owner_user_id: UUID | None = None,
+        persistence: PersistenceRuntime | None = None,
+    ) -> AnalysisJobRepository:
+        from app.config.settings import Settings
+
+        if not isinstance(settings, Settings):
+            raise TypeError("Court4 settings are required.")
+        object_storage = build_object_storage(settings)
+        if object_storage.provider == "local":
+            return cls(
+                output_dir=settings.analysis_output_dir,
+                api_base_path=settings.api_base_path,
+                owner_user_id=owner_user_id,
+                persistence=persistence,
+                object_storage=object_storage,
+            )
+        workspace_root = settings.processing_workspace_root.expanduser().resolve()
+        workspace_root.mkdir(parents=True, exist_ok=True)
+        prefix_owner = str(owner_user_id or "bootstrap")
+        output_dir = Path(tempfile.mkdtemp(prefix=f"court4-{prefix_owner}-", dir=workspace_root))
+        return cls(
+            output_dir=output_dir,
+            api_base_path=settings.api_base_path,
+            owner_user_id=owner_user_id,
+            persistence=persistence,
+            object_storage=object_storage,
+            capacity_root=workspace_root,
+            cleanup_workspace=True,
+            workspace_warning_free_bytes=settings.storage_warning_free_bytes,
+            workspace_hard_stop_free_bytes=settings.storage_hard_stop_free_bytes,
+            workspace_max_active=settings.storage_max_active_uploads,
+            legacy_storage_root=settings.local_storage_root,
+        )
+
+    def close(self) -> None:
+        if self._workspace_reservation is not None:
+            self._workspace_reservation.release()
+            self._workspace_reservation = None
+        if not self._cleanup_workspace or not self.output_dir.exists():
+            return
+        try:
+            shutil.rmtree(self.output_dir)
+        except OSError:
+            logger.warning(
+                "processing_workspace_cleanup_failed",
+                extra={"workspace_name": self.output_dir.name},
+                exc_info=True,
+            )
 
     def create_or_replace_job(self, job: AnalysisJob) -> AnalysisJob:
         return self.save_job(job)
@@ -50,10 +138,10 @@ class AnalysisJobRepository:
             update={
                 "available_artifacts": [
                     AnalysisArtifact(
-                        path=artifact.storage_key,
+                        path=artifact.logical_key or artifact.storage_key,
                         url=(
                             f"{self.api_base_path}/analyses/{job.analysis_id}/artifacts/"
-                            f"{artifact.storage_key}"
+                            f"{artifact.logical_key or artifact.storage_key}"
                         ),
                         content_type=artifact.content_type,
                         size_bytes=artifact.size_bytes,
@@ -75,7 +163,9 @@ class AnalysisJobRepository:
         return projected
 
     def load_job(self, analysis_id: str) -> AnalysisJob:
-        return self.refresh_artifacts(self.load_job_metadata(analysis_id))
+        job = self.load_job_metadata(analysis_id)
+        self._materialize_current_artifacts(analysis_id)
+        return self.refresh_artifacts(job)
 
     def load_job_metadata(self, analysis_id: str) -> AnalysisJob:
         self.validate_analysis_id(analysis_id)
@@ -113,7 +203,7 @@ class AnalysisJobRepository:
 
     def analysis_dir(self, analysis_id: str) -> Path:
         self.validate_analysis_id(analysis_id)
-        return self.storage.analysis_root(analysis_id)
+        return self.workspace.analysis_root(analysis_id)
 
     def staging_dir(self, analysis_id: str) -> Path:
         self.validate_analysis_id(analysis_id)
@@ -125,16 +215,44 @@ class AnalysisJobRepository:
         analysis_dir = self.analysis_dir(analysis_id)
         relative_path = validate_relative_artifact_path(artifact_path)
         try:
-            self.persistence.service.get_artifact(
+            record = self.persistence.service.get_artifact(
                 owner_user_id=self.owner_user_id,
                 analysis_id=analysis_id,
-                storage_key=relative_path,
+                logical_key=relative_path,
             )
         except (ResourceNotFoundError, OwnershipMismatchError):
             raise JobNotFoundError("Artifact was not found.") from None
-        resolved = self.storage.resolve(analysis_id, relative_path)
+        resolved = self.workspace.resolve(analysis_id, relative_path)
         if not _is_relative_to(resolved, analysis_dir):
             raise JobRequestError("unsafe_artifact_path", "Artifact path is outside the analysis.")
+        if not resolved.is_file() and record.storage_provider == "local":
+            legacy_path = self.legacy_storage.resolve(analysis_id, record.storage_key)
+            if legacy_path.is_file() and legacy_path != resolved:
+                if (
+                    legacy_path.stat().st_size != record.size_bytes
+                    or _file_sha256(legacy_path) != record.checksum_sha256
+                ):
+                    raise JobNotFoundError("Artifact bytes failed integrity verification.")
+                self._reserve_workspace([record])
+                resolved.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(legacy_path, resolved)
+        if not resolved.is_file() and record.storage_provider != "local":
+            self._reserve_workspace([record])
+            try:
+                metadata = self.object_storage.download_file(
+                    key=record.storage_key,
+                    destination=resolved,
+                )
+            except ObjectNotFoundError:
+                raise JobNotFoundError("Artifact bytes are unavailable.") from None
+            except ObjectStorageError as exc:
+                raise JobStorageBackendError() from exc
+            if (
+                metadata.size_bytes != record.size_bytes
+                or metadata.checksum_sha256 != record.checksum_sha256
+            ):
+                resolved.unlink(missing_ok=True)
+                raise JobNotFoundError("Artifact bytes failed integrity verification.")
         if not resolved.is_file():
             raise JobNotFoundError("Artifact bytes are unavailable.")
         return resolved
@@ -160,8 +278,8 @@ class AnalysisJobRepository:
             return []
         return [
             AnalysisArtifact(
-                path=record.storage_key,
-                url=(f"{self.api_base_path}/analyses/{analysis_id}/artifacts/{record.storage_key}"),
+                path=record.logical_key,
+                url=(f"{self.api_base_path}/analyses/{analysis_id}/artifacts/{record.logical_key}"),
                 content_type=record.content_type,
                 size_bytes=record.size_bytes,
             )
@@ -188,17 +306,113 @@ class AnalysisJobRepository:
             if path.name == "job.json":
                 continue
             relative = path.relative_to(analysis_dir).as_posix()
+            checksum = _file_sha256(path)
+            content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            storage_key = relative
+            if self.object_storage.provider == "s3":
+                storage_key = (
+                    source_object_key(self.owner_user_id, analysis_id, path.suffix)
+                    if _artifact_kind(relative) == "source_video"
+                    else artifact_object_key(
+                        self.owner_user_id,
+                        analysis_id,
+                        relative,
+                        checksum,
+                    )
+                )
+                try:
+                    self.object_storage.put_file(
+                        key=storage_key,
+                        source=path,
+                        content_type=content_type,
+                        checksum_sha256=checksum,
+                    )
+                except ObjectStorageError as exc:
+                    raise JobStorageBackendError(
+                        "Durable object storage could not persist analysis output."
+                    ) from exc
             artifacts.append(
                 ArtifactInput(
-                    storage_key=relative,
-                    content_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+                    storage_key=storage_key,
+                    logical_key=relative,
+                    storage_provider=self.object_storage.provider,
+                    content_type=content_type,
                     size_bytes=path.stat().st_size,
-                    checksum_sha256=_file_sha256(path),
+                    checksum_sha256=checksum,
                     artifact_kind=_artifact_kind(relative),
                     schema_version=_artifact_schema_version(relative),
                 )
             )
         return artifacts
+
+    def _materialize_current_artifacts(self, analysis_id: str) -> None:
+        if self.object_storage.provider == "local":
+            return
+        records = self.persistence.service.list_artifacts(
+            owner_user_id=self.owner_user_id,
+            analysis_id=analysis_id,
+        )
+        self._reserve_workspace(records)
+        for record in records:
+            destination = self.workspace.resolve(analysis_id, record.logical_key)
+            if destination.is_file():
+                continue
+            if record.storage_provider == "local":
+                legacy_path = self.legacy_storage.resolve(analysis_id, record.storage_key)
+                if not legacy_path.is_file():
+                    raise JobNotFoundError("Artifact bytes are unavailable.")
+                if (
+                    legacy_path.stat().st_size != record.size_bytes
+                    or _file_sha256(legacy_path) != record.checksum_sha256
+                ):
+                    raise JobNotFoundError("Artifact bytes failed integrity verification.")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(legacy_path, destination)
+                continue
+            try:
+                metadata = self.object_storage.download_file(
+                    key=record.storage_key,
+                    destination=destination,
+                )
+            except ObjectNotFoundError as exc:
+                raise JobNotFoundError("Artifact bytes are unavailable.") from exc
+            except ObjectStorageError as exc:
+                raise JobStorageBackendError() from exc
+            if (
+                metadata.size_bytes != record.size_bytes
+                or metadata.checksum_sha256 != record.checksum_sha256
+            ):
+                destination.unlink(missing_ok=True)
+                raise JobNotFoundError("Artifact bytes failed integrity verification.")
+
+    def _reserve_workspace(self, records: list[PersistedArtifact]) -> None:
+        if self.object_storage.provider == "local" or self._workspace_reservation is not None:
+            return
+        if (
+            self._workspace_warning_free_bytes is None
+            or self._workspace_hard_stop_free_bytes is None
+        ):
+            return
+        sizes = [record.size_bytes for record in records]
+        source_sizes = [
+            record.size_bytes for record in records if record.artifact_kind == "source_video"
+        ]
+        requested_bytes = sum(sizes) + (max(source_sizes) if source_sizes else 0)
+        try:
+            reservation, _status = self.storage.reserve_capacity(
+                requested_bytes=requested_bytes,
+                warning_free_bytes=self._workspace_warning_free_bytes,
+                hard_stop_free_bytes=self._workspace_hard_stop_free_bytes,
+                max_active_uploads=self._workspace_max_active,
+            )
+        except StorageCapacityError as exc:
+            status_code = 429 if exc.reason == "active_limit" else 507
+            raise JobStorageCapacityError(
+                "processing_workspace_unavailable",
+                "Temporary processing workspace capacity is unavailable.",
+                status_code=status_code,
+            ) from exc
+        self._workspace_reservation = reservation
 
     def _player_selection(self, analysis_id: str) -> PlayerSelectionInput | None:
         tracking_path = self.analysis_dir(analysis_id) / "tracking" / "tracking.json"

@@ -450,6 +450,13 @@ class AnalysisArtifact(Base):
             unique=True,
             postgresql_where=text("is_current"),
         ),
+        Index(
+            "uq_artifact_current_logical",
+            "analysis_id",
+            "logical_key",
+            unique=True,
+            postgresql_where=text("is_current"),
+        ),
         Index("ix_artifact_stage_execution", "stage_execution_id", "created_at"),
     )
 
@@ -463,6 +470,7 @@ class AnalysisArtifact(Base):
     artifact_kind: Mapped[str] = mapped_column(String(64), nullable=False)
     storage_provider: Mapped[str] = mapped_column(String(32), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    logical_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     content_type: Mapped[str] = mapped_column(String(255), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     checksum_sha256: Mapped[str] = mapped_column(String(64), nullable=False)

@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile
@@ -45,6 +46,7 @@ ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     413: {"model": ApiErrorResponse, "description": "Upload exceeds configured size limit."},
     429: {"model": ApiErrorResponse, "description": "Upload capacity is currently busy."},
     507: {"model": ApiErrorResponse, "description": "Storage capacity is unavailable."},
+    503: {"model": ApiErrorResponse, "description": "Private storage is unavailable."},
 }
 
 
@@ -54,8 +56,12 @@ VideoUploadFile = Annotated[UploadFile, File(description="Pickleball or Padel ma
 
 def get_workflow_service(
     settings: SettingsDependency, user: VerifiedUser
-) -> AnalysisWorkflowService:
-    return AnalysisWorkflowService(settings=settings, owner_user_id=user.id)
+) -> Iterator[AnalysisWorkflowService]:
+    workflow = AnalysisWorkflowService(settings=settings, owner_user_id=user.id)
+    try:
+        yield workflow
+    finally:
+        workflow.close()
 
 
 WorkflowDependency = Annotated[AnalysisWorkflowService, Depends(get_workflow_service)]
@@ -88,8 +94,8 @@ def list_analyses(
     status_code=201,
     summary="Upload a match video",
     description=(
-        "Upload a sport-identified match video, create a filesystem-backed analysis job, "
-        "and run synchronous video inspection."
+        "Upload a sport-identified match video to private durable storage, create an analysis "
+        "job, and run synchronous video inspection in a bounded local workspace."
     ),
     responses=ERROR_RESPONSES,
 )
@@ -146,7 +152,7 @@ def list_sampled_frames(
 @router.get(
     "/{analysis_id}/artifacts/{artifact_path:path}",
     summary="Retrieve analysis artifact",
-    description="Serve a generated artifact from within the requested analysis directory.",
+    description="Authorize and proxy one private generated artifact for the requested analysis.",
     responses=ERROR_RESPONSES,
 )
 def retrieve_artifact(

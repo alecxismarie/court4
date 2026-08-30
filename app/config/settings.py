@@ -68,6 +68,50 @@ class Settings(BaseSettings):
     expected_test_database_host: str = "localhost"
     expected_test_database_user: str = "court4_test"
     local_storage_root: Path = Path("data/output")
+    storage_backend: Literal["local", "s3"] = Field(
+        default="local",
+        validation_alias=AliasChoices("STORAGE_BACKEND", "PICKLEBALL_AI_STORAGE_BACKEND"),
+    )
+    processing_workspace_root: Path = Field(
+        default=Path("data/workspace"),
+        validation_alias=AliasChoices(
+            "STORAGE_PROCESSING_WORKSPACE_ROOT",
+            "PICKLEBALL_AI_PROCESSING_WORKSPACE_ROOT",
+        ),
+    )
+    storage_s3_endpoint: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("STORAGE_S3_ENDPOINT", "PICKLEBALL_AI_STORAGE_S3_ENDPOINT"),
+    )
+    storage_s3_region: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("STORAGE_S3_REGION", "PICKLEBALL_AI_STORAGE_S3_REGION"),
+    )
+    storage_s3_bucket: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("STORAGE_S3_BUCKET", "PICKLEBALL_AI_STORAGE_S3_BUCKET"),
+    )
+    storage_s3_addressing_style: Literal["auto", "virtual", "path"] = Field(
+        default="auto",
+        validation_alias=AliasChoices(
+            "STORAGE_S3_ADDRESSING_STYLE",
+            "PICKLEBALL_AI_STORAGE_S3_ADDRESSING_STYLE",
+        ),
+    )
+    storage_s3_access_key_id: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "STORAGE_S3_ACCESS_KEY_ID",
+            "PICKLEBALL_AI_STORAGE_S3_ACCESS_KEY_ID",
+        ),
+    )
+    storage_s3_secret_access_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "STORAGE_S3_SECRET_ACCESS_KEY",
+            "PICKLEBALL_AI_STORAGE_S3_SECRET_ACCESS_KEY",
+        ),
+    )
     bootstrap_user_enabled: bool = False
     bootstrap_user_id: UUID | None = None
     bootstrap_user_identity: str | None = None
@@ -398,6 +442,26 @@ class Settings(BaseSettings):
     def validate_auth_deployment_security(self) -> "Settings":
         if self.storage_warning_free_bytes <= self.storage_hard_stop_free_bytes:
             raise ValueError("Storage warning threshold must exceed the hard-stop threshold.")
+        if self.storage_backend == "s3":
+            required_s3_values = {
+                "STORAGE_S3_ENDPOINT": self.storage_s3_endpoint,
+                "STORAGE_S3_REGION": self.storage_s3_region,
+                "STORAGE_S3_BUCKET": self.storage_s3_bucket,
+                "STORAGE_S3_ACCESS_KEY_ID": self.storage_s3_access_key_id,
+                "STORAGE_S3_SECRET_ACCESS_KEY": self.storage_s3_secret_access_key,
+            }
+            missing = [name for name, value in required_s3_values.items() if not value]
+            if missing:
+                raise ValueError(
+                    "S3 storage configuration is incomplete; missing " + ", ".join(missing) + "."
+                )
+            endpoint = urlparse(self.storage_s3_endpoint or "")
+            if endpoint.scheme not in {"http", "https"} or not endpoint.netloc:
+                raise ValueError("STORAGE_S3_ENDPOINT must be an absolute HTTP(S) URL.")
+            if endpoint.username or endpoint.password:
+                raise ValueError("STORAGE_S3_ENDPOINT must not contain credentials.")
+            if self.environment in {"staging", "production"} and endpoint.scheme != "https":
+                raise ValueError("Staging and production S3 endpoints must use HTTPS.")
         if self.environment == "test":
             from app.persistence.database_safety import (
                 ExpectedDatabaseIdentity,

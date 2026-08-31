@@ -121,6 +121,43 @@ export const uploadAnalysisResponseSchema = z.union([
   duplicateUploadResponseSchema,
 ]);
 
+export const presignedUploadPartSchema = z.object({
+  part_number: z.number().int().positive(),
+  url: z.string().min(1),
+  expires_at: z.string(),
+});
+
+export const initiateUploadResponseSchema = z.object({
+  transport: z.enum(["direct", "proxy"]),
+  upload_session_id: z.string().uuid().nullable(),
+  status: z.string(),
+  part_size: z.number().int().positive().nullable(),
+  part_count: z.number().int().positive().nullable(),
+  max_concurrency: z.number().int().positive(),
+  max_attempts: z.number().int().positive(),
+  expires_at: z.string().nullable(),
+  parts: z.array(presignedUploadPartSchema),
+});
+
+export const uploadSessionResponseSchema = z.object({
+  upload_session_id: z.string().uuid(),
+  status: z.string(),
+  byte_size: z.number().int().positive(),
+  verified_sha256: z.string().nullable(),
+  result: uploadAnalysisResponseSchema.nullable(),
+  failure_code: z.string().nullable(),
+  expires_at: z.string(),
+});
+
+export const uploadPartUrlResponseSchema = z.object({
+  upload_session_id: z.string().uuid(),
+  parts: z.array(presignedUploadPartSchema),
+});
+
+export type PresignedUploadPart = z.infer<typeof presignedUploadPartSchema>;
+export type InitiateUploadResponse = z.infer<typeof initiateUploadResponseSchema>;
+export type UploadSessionResponse = z.infer<typeof uploadSessionResponseSchema>;
+
 export const sampledFrameSchema = z.object({
   frame_number: z.number().int().positive(),
   path: z.string(),
@@ -708,4 +745,5 @@ export type UploadProgress = {
   loaded: number;
   total: number | null;
   percent: number | null;
+  phase?: "uploading" | "verifying";
 };

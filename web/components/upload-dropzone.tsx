@@ -35,6 +35,7 @@ export type UploadAnalysisFn = (
     idempotencyKey?: string;
     reanalyze?: boolean;
     sport?: SportType;
+    signal?: AbortSignal;
   },
 ) => Promise<UploadAnalysisResponse>;
 
@@ -56,6 +57,7 @@ export function UploadDropzone({
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const uploadIdempotencyKeyRef = useRef<string | null>(null);
+  const uploadAbortControllerRef = useRef<AbortController | null>(null);
   const publicEnv = getPublicEnv();
   const [progress, setProgress] = useState<UploadProgressValue | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -74,8 +76,10 @@ export function UploadDropzone({
         idempotencyKey: command.idempotencyKey,
         reanalyze: command.reanalyze,
         sport: command.sport,
+        signal: uploadAbortControllerRef.current?.signal,
       }),
     onMutate: (command) => {
+      uploadAbortControllerRef.current = new AbortController();
       setApiError(null);
       setProgress({ loaded: 0, total: command.file.size, percent: 0 });
     },
@@ -98,6 +102,9 @@ export function UploadDropzone({
     onError: (error) => {
       const normalized = normalizeApiError(error);
       setApiError(normalized.message);
+    },
+    onSettled: () => {
+      uploadAbortControllerRef.current = null;
     },
   });
 
@@ -129,6 +136,7 @@ export function UploadDropzone({
 
   const reset = () => {
     if (uploadMutation.isPending) {
+      uploadAbortControllerRef.current?.abort();
       return;
     }
     form.reset();
@@ -245,9 +253,9 @@ export function UploadDropzone({
               <p className="text-sm font-semibold text-court-ink">{selectedFile.name}</p>
               <p className="text-sm text-court-muted">{formatFileSize(selectedFile.size)}</p>
             </div>
-            <Button type="button" variant="secondary" onClick={reset} disabled={uploadMutation.isPending}>
+            <Button type="button" variant="secondary" onClick={reset}>
               <RotateCcw aria-hidden="true" className="h-4 w-4" />
-              Reset
+              {uploadMutation.isPending ? "Cancel upload" : "Reset"}
             </Button>
           </div>
         </div>
@@ -319,7 +327,11 @@ export function UploadDropzone({
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" disabled={!selectedFile || uploadMutation.isPending}>
             <Upload aria-hidden="true" className="h-4 w-4" />
-            {uploadMutation.isPending ? "Uploading" : "Upload selected video"}
+            {uploadMutation.isPending
+              ? progress?.phase === "verifying"
+                ? "Finalizing"
+                : "Uploading"
+              : "Upload selected video"}
           </Button>
           <p className="text-sm text-court-muted">
             Accepted formats: {publicEnv.supportedVideoExtensions.join(", ")}. Maximum size:{" "}

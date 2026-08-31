@@ -2,13 +2,20 @@ import type { UploadProgress as UploadProgressValue } from "@/lib/api/types";
 
 export function UploadProgress({ progress }: { progress: UploadProgressValue }) {
   const percent = progress.percent ?? 0;
+  const isVerifying = progress.phase === "verifying";
   const label =
-    progress.percent === null ? `${progress.loaded} bytes uploaded` : `${percent}% uploaded`;
+    isVerifying
+      ? "Upload complete"
+      : progress.percent === null
+        ? `${progress.loaded} bytes uploaded`
+        : `${percent}% uploaded`;
 
   return (
     <div className="rounded-md border border-court-line bg-white p-4" aria-live="polite">
       <div className="mb-2 flex items-center justify-between text-sm">
-        <span className="font-medium text-court-ink">Uploading video</span>
+        <span className="font-medium text-court-ink">
+          {isVerifying ? "Verifying and finalizing video" : "Uploading video"}
+        </span>
         <span className="text-court-muted">{label}</span>
       </div>
       <div

@@ -93,7 +93,8 @@ def clean_production_database() -> None:
     with runtime.engine.begin() as connection:
         connection.execute(
             text(
-                "TRUNCATE TABLE account_tokens, refresh_sessions, player_selections, "
+                "TRUNCATE TABLE account_tokens, refresh_sessions, upload_sessions, "
+                "player_selections, "
                 "calibration_verifications, analysis_artifacts, analysis_stage_executions, "
                 "analysis_state_events, idempotency_records, analysis_runs, "
                 "analyses, uploaded_videos, users RESTART IDENTITY CASCADE"

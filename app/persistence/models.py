@@ -113,6 +113,75 @@ class AccountToken(Base):
     request_user_agent: Mapped[str | None] = mapped_column(String(512))
 
 
+class UploadSession(Base):
+    """Durable control-plane state for one direct multipart source upload."""
+
+    __tablename__ = "upload_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "status in ('initiated','uploading','completing','verifying','analyzing',"
+            "'completed','aborted','failed','expired')",
+            name="ck_upload_session_status",
+        ),
+        CheckConstraint("declared_size > 0", name="ck_upload_session_declared_size"),
+        CheckConstraint("part_size > 0", name="ck_upload_session_part_size"),
+        CheckConstraint("part_count > 0", name="ck_upload_session_part_count"),
+        CheckConstraint("row_version > 0", name="ck_upload_session_row_version"),
+        CheckConstraint("sport in ('pickleball','padel')", name="ck_upload_session_sport"),
+        CheckConstraint(
+            "expected_sha256 is null or expected_sha256 ~ '^[a-f0-9]{64}$'",
+            name="ck_upload_session_expected_checksum",
+        ),
+        CheckConstraint(
+            "verified_sha256 is null or verified_sha256 ~ '^[a-f0-9]{64}$'",
+            name="ck_upload_session_verified_checksum",
+        ),
+        UniqueConstraint(
+            "owner_user_id",
+            "idempotency_key_hash",
+            name="uq_upload_session_owner_idempotency",
+        ),
+        Index("ix_upload_session_owner_created", "owner_user_id", "created_at"),
+        Index("ix_upload_session_status_expiry", "status", "expires_at"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    owner_user_id: Mapped[UUID] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    analysis_id: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    sport: Mapped[str] = mapped_column(String(24), nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(255), nullable=False)
+    declared_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    logical_key: Mapped[str] = mapped_column(String(1024), nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_upload_id: Mapped[str] = mapped_column(String(1024), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False)
+    part_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    part_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_sha256: Mapped[str | None] = mapped_column(String(64))
+    verified_sha256: Mapped[str | None] = mapped_column(String(64))
+    idempotency_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    reanalyze: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    client_metadata: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    result_payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    failure_reason: Mapped[str | None] = mapped_column(String(256))
+    row_version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    verification_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    aborted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class UploadedVideo(Base):
     __tablename__ = "uploaded_videos"
     __table_args__ = (

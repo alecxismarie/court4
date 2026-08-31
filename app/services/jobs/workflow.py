@@ -14,6 +14,7 @@ from starlette.datastructures import UploadFile
 
 from app.config.settings import Settings
 from app.persistence.errors import IdempotencyConflictError, OperationInProgressError
+from app.persistence.object_storage import ObjectStorageError
 from app.persistence.storage import StorageCapacityError
 from app.schemas.active_play import ActivePlayReport
 from app.schemas.analytics import AnalyticsReport
@@ -78,6 +79,7 @@ from app.services.jobs.exceptions import (
     JobConflictError,
     JobNotFoundError,
     JobRequestError,
+    JobStorageBackendError,
     JobStorageCapacityError,
     JobTooLargeError,
 )
@@ -127,11 +129,16 @@ class ArtifactFile:
 
 
 class AnalysisWorkflowService:
-    def __init__(self, *, settings: Settings, owner_user_id: UUID | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        owner_user_id: UUID | None = None,
+        repository: AnalysisJobRepository | None = None,
+    ) -> None:
         self.settings = settings
-        self.repository = AnalysisJobRepository.from_settings(
-            settings=settings,
-            owner_user_id=owner_user_id,
+        self.repository = repository or AnalysisJobRepository.from_settings(
+            settings=settings, owner_user_id=owner_user_id
         )
 
     def close(self) -> None:
@@ -203,9 +210,99 @@ class AnalysisWorkflowService:
         staging_path, source_checksum, upload_size_bytes = await self._save_upload_to_staging(
             upload, analysis_id
         )
+        return self._create_analysis_from_staging(
+            staging_path=staging_path,
+            source_checksum=source_checksum,
+            upload_size_bytes=upload_size_bytes,
+            analysis_id=analysis_id,
+            filename=upload.filename or "upload",
+            content_type=upload.content_type,
+            idempotency_key=idempotency_key,
+            reanalyze=reanalyze,
+            sport=sport,
+        )
+
+    def create_analysis_from_verified_object(
+        self,
+        *,
+        analysis_id: str,
+        storage_key: str,
+        filename: str,
+        content_type: str,
+        size_bytes: int,
+        checksum_sha256: str,
+        idempotency_key: str,
+        reanalyze: bool,
+        sport: SportType,
+    ) -> UploadAnalysisResponse:
+        reservation_bytes = int(
+            self.settings.max_upload_size_bytes
+            * self.settings.storage_upload_reservation_multiplier
+        )
+        try:
+            capacity_reservation, _capacity = self.repository.storage.reserve_capacity(
+                requested_bytes=reservation_bytes,
+                warning_free_bytes=self.settings.storage_warning_free_bytes,
+                hard_stop_free_bytes=self.settings.storage_hard_stop_free_bytes,
+                max_active_uploads=self.settings.storage_max_active_uploads,
+                software_commit_identifier=self.settings.software_commit_identifier,
+                deployment_build_identifier=self.settings.deployment_build_identifier,
+            )
+        except StorageCapacityError as exc:
+            status_code = 429 if exc.reason == "active_limit" else 507
+            code = "upload_capacity_busy" if status_code == 429 else "storage_capacity_unavailable"
+            raise JobStorageCapacityError(
+                code,
+                "Analysis workspace capacity is temporarily unavailable.",
+                status_code=status_code,
+            ) from exc
+        suffix = self._validate_upload_filename(filename)
+        self._validate_upload_content_type(content_type)
+        staging_dir = self.repository.staging_dir(analysis_id)
+        staging_path = staging_dir / f"source{suffix}"
+        try:
+            staging_dir.mkdir(parents=True, exist_ok=False)
+            try:
+                metadata = self.repository.object_storage.download_file(
+                    key=storage_key, destination=staging_path
+                )
+            except ObjectStorageError as exc:
+                raise JobStorageBackendError(
+                    "Verified source video could not be materialized for analysis."
+                ) from exc
+            if metadata.size_bytes != size_bytes or metadata.checksum_sha256 != checksum_sha256:
+                raise JobStorageBackendError(
+                    "Verified source video metadata changed before analysis."
+                )
+            return self._create_analysis_from_staging(
+                staging_path=staging_path,
+                source_checksum=checksum_sha256,
+                upload_size_bytes=size_bytes,
+                analysis_id=analysis_id,
+                filename=filename,
+                content_type=content_type,
+                idempotency_key=idempotency_key,
+                reanalyze=reanalyze,
+                sport=sport,
+            )
+        finally:
+            capacity_reservation.release()
+
+    def _create_analysis_from_staging(
+        self,
+        *,
+        staging_path: Path,
+        source_checksum: str,
+        upload_size_bytes: int,
+        analysis_id: str,
+        filename: str,
+        content_type: str | None,
+        idempotency_key: str | None,
+        reanalyze: bool,
+        sport: SportType,
+    ) -> UploadAnalysisResponse:
         source_video_path: Path | None = None
         now = datetime.now(tz=UTC)
-        filename = upload.filename or "upload"
         request_fingerprint = hashlib.sha256(
             f"{filename}\0{source_checksum}\0sport={sport.value}\0reanalyze={reanalyze}".encode()
         ).hexdigest()
@@ -226,7 +323,7 @@ class AnalysisWorkflowService:
                     idempotency_key=idempotency_key or analysis_id,
                     request_fingerprint=request_fingerprint,
                     original_filename=filename,
-                    content_type=upload.content_type,
+                    content_type=content_type,
                     size_bytes=upload_size_bytes,
                     source_checksum=source_checksum,
                     job_payload=initial_job.model_dump(mode="json"),

@@ -205,6 +205,19 @@ describe("authentication API client", () => {
 
   it("authenticates upload requests without browser token persistence", async () => {
     setAccessToken("upload-token");
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({
+        transport: "proxy",
+        upload_session_id: null,
+        status: "proxy",
+        part_size: null,
+        part_count: null,
+        max_concurrency: 1,
+        max_attempts: 1,
+        expires_at: null,
+        parts: [],
+      }),
+    );
     const original = globalThis.XMLHttpRequest;
     const request = new FakeXmlHttpRequest();
     Object.defineProperty(globalThis, "XMLHttpRequest", {
@@ -213,6 +226,17 @@ describe("authentication API client", () => {
     });
     try {
       await createAnalysis(new File(["video"], "match.mp4", { type: "video/mp4" }));
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://localhost:8000/api/v1/uploads/initiate",
+        expect.objectContaining({
+          credentials: "include",
+          method: "POST",
+        }),
+      );
+      const initiateOptions = fetchMock.mock.calls[0]?.[1];
+      expect(new Headers(initiateOptions?.headers).get("Authorization")).toBe(
+        "Bearer upload-token",
+      );
       expect(request.headers.Authorization).toBe("Bearer upload-token");
       expect(request.withCredentials).toBe(true);
       expect(window.localStorage).toHaveLength(0);

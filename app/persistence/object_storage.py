@@ -31,6 +31,15 @@ class ObjectMetadata:
     provider_version: str | None = None
 
 
+@dataclass(frozen=True)
+class UploadObjectMetadata:
+    key: str
+    size_bytes: int
+    content_type: str
+    custom_metadata: dict[str, str]
+    provider_version: str | None = None
+
+
 class ObjectStorage(Protocol):
     @property
     def provider(self) -> str: ...
@@ -53,6 +62,33 @@ class ObjectStorage(Protocol):
     def exists(self, *, key: str) -> bool: ...
 
     def delete(self, *, key: str) -> None: ...
+
+
+class MultipartObjectStorage(ObjectStorage, Protocol):
+    def initiate_multipart_upload(
+        self,
+        *,
+        key: str,
+        content_type: str,
+        upload_session_id: str,
+        declared_size: int,
+    ) -> str: ...
+
+    def presign_upload_part(
+        self, *, key: str, upload_id: str, part_number: int, expires_in: int
+    ) -> str: ...
+
+    def complete_multipart_upload(
+        self, *, key: str, upload_id: str, parts: list[dict[str, object]]
+    ) -> None: ...
+
+    def abort_multipart_upload(self, *, key: str, upload_id: str) -> None: ...
+
+    def head_upload(self, *, key: str) -> UploadObjectMetadata: ...
+
+    def calculate_sha256(self, *, key: str, chunk_size: int) -> str: ...
+
+    def set_verified_checksum(self, *, key: str, checksum_sha256: str) -> ObjectMetadata: ...
 
 
 def validate_object_key(value: str) -> str:
@@ -177,6 +213,52 @@ class LocalObjectStorage:
 
     def delete(self, *, key: str) -> None:
         self._path(key).unlink(missing_ok=True)
+
+    def initiate_multipart_upload(
+        self,
+        *,
+        key: str,
+        content_type: str,
+        upload_session_id: str,
+        declared_size: int,
+    ) -> str:
+        del key, content_type, upload_session_id, declared_size
+        raise ObjectStorageError("Direct multipart upload requires the S3 storage backend.")
+
+    def presign_upload_part(
+        self, *, key: str, upload_id: str, part_number: int, expires_in: int
+    ) -> str:
+        del key, upload_id, part_number, expires_in
+        raise ObjectStorageError("Direct multipart upload requires the S3 storage backend.")
+
+    def complete_multipart_upload(
+        self, *, key: str, upload_id: str, parts: list[dict[str, object]]
+    ) -> None:
+        del key, upload_id, parts
+        raise ObjectStorageError("Direct multipart upload requires the S3 storage backend.")
+
+    def abort_multipart_upload(self, *, key: str, upload_id: str) -> None:
+        del key, upload_id
+        raise ObjectStorageError("Direct multipart upload requires the S3 storage backend.")
+
+    def head_upload(self, *, key: str) -> UploadObjectMetadata:
+        metadata = self.stat(key=key)
+        return UploadObjectMetadata(
+            key=metadata.key,
+            size_bytes=metadata.size_bytes,
+            content_type=metadata.content_type,
+            custom_metadata={"court4-sha256": metadata.checksum_sha256},
+            provider_version=metadata.provider_version,
+        )
+
+    def calculate_sha256(self, *, key: str, chunk_size: int) -> str:
+        del chunk_size
+        return _file_sha256(self._path(key))
+
+    def set_verified_checksum(self, *, key: str, checksum_sha256: str) -> ObjectMetadata:
+        metadata = self.stat(key=key)
+        _verify_metadata(metadata, checksum_sha256, metadata.size_bytes)
+        return metadata
 
     def _path(self, key: str) -> Path:
         resolved = self.root.joinpath(*PurePosixPath(validate_object_key(key)).parts).resolve()
@@ -316,6 +398,129 @@ class S3ObjectStorage:
     def delete(self, *, key: str) -> None:
         self._call("delete_object", Bucket=self._bucket, Key=validate_object_key(key))
 
+    def initiate_multipart_upload(
+        self,
+        *,
+        key: str,
+        content_type: str,
+        upload_session_id: str,
+        declared_size: int,
+    ) -> str:
+        response = self._call(
+            "create_multipart_upload",
+            Bucket=self._bucket,
+            Key=validate_object_key(key),
+            ContentType=content_type,
+            Metadata={
+                "court4-upload-session": upload_session_id,
+                "court4-declared-size": str(declared_size),
+            },
+        )
+        if not isinstance(response, dict) or not isinstance(response.get("UploadId"), str):
+            raise ObjectStorageError("Object storage returned invalid multipart metadata.")
+        return str(response["UploadId"])
+
+    def presign_upload_part(
+        self, *, key: str, upload_id: str, part_number: int, expires_in: int
+    ) -> str:
+        if part_number < 1 or part_number > 10_000:
+            raise ObjectStorageError("Multipart part number is invalid.")
+        response = self._call(
+            "generate_presigned_url",
+            "upload_part",
+            Params={
+                "Bucket": self._bucket,
+                "Key": validate_object_key(key),
+                "UploadId": upload_id,
+                "PartNumber": part_number,
+            },
+            ExpiresIn=expires_in,
+            HttpMethod="PUT",
+        )
+        if not isinstance(response, str) or not response:
+            raise ObjectStorageError("Object storage returned an invalid signed part URL.")
+        return response
+
+    def complete_multipart_upload(
+        self, *, key: str, upload_id: str, parts: list[dict[str, object]]
+    ) -> None:
+        self._call(
+            "complete_multipart_upload",
+            Bucket=self._bucket,
+            Key=validate_object_key(key),
+            UploadId=upload_id,
+            MultipartUpload={"Parts": parts},
+        )
+
+    def abort_multipart_upload(self, *, key: str, upload_id: str) -> None:
+        try:
+            self._call(
+                "abort_multipart_upload",
+                Bucket=self._bucket,
+                Key=validate_object_key(key),
+                UploadId=upload_id,
+            )
+        except ObjectNotFoundError:
+            # Provider abort is idempotent from Court4's perspective. This also
+            # makes reconciliation retry-safe after an abort/DB-commit split.
+            return
+
+    def head_upload(self, *, key: str) -> UploadObjectMetadata:
+        safe_key = validate_object_key(key)
+        response = self._call("head_object", Bucket=self._bucket, Key=safe_key)
+        if not isinstance(response, dict):
+            raise ObjectStorageError("Object storage returned invalid metadata.")
+        raw_metadata = response.get("Metadata") or {}
+        custom_metadata = (
+            {str(name): str(value) for name, value in raw_metadata.items()}
+            if isinstance(raw_metadata, dict)
+            else {}
+        )
+        return UploadObjectMetadata(
+            key=safe_key,
+            size_bytes=int(response["ContentLength"]),
+            content_type=str(response.get("ContentType") or "application/octet-stream"),
+            custom_metadata=custom_metadata,
+            provider_version=(
+                str(response["VersionId"]) if response.get("VersionId") is not None else None
+            ),
+        )
+
+    def calculate_sha256(self, *, key: str, chunk_size: int) -> str:
+        response = self._call("get_object", Bucket=self._bucket, Key=validate_object_key(key))
+        if not isinstance(response, dict) or response.get("Body") is None:
+            raise ObjectStorageError("Object storage returned an invalid object stream.")
+        body = response["Body"]
+        digest = hashlib.sha256()
+        try:
+            while chunk := body.read(chunk_size):
+                digest.update(chunk)
+        except Exception as exc:
+            raise ObjectStorageError("Private object storage verification failed.") from exc
+        finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
+        return digest.hexdigest()
+
+    def set_verified_checksum(self, *, key: str, checksum_sha256: str) -> ObjectMetadata:
+        safe_key = validate_object_key(key)
+        head = self.head_upload(key=safe_key)
+        metadata = dict(head.custom_metadata)
+        metadata["court4-sha256"] = checksum_sha256
+        self._call(
+            "copy_object",
+            Bucket=self._bucket,
+            Key=safe_key,
+            CopySource={"Bucket": self._bucket, "Key": safe_key},
+            Metadata=metadata,
+            MetadataDirective="REPLACE",
+            ContentType=head.content_type,
+        )
+        verified = self.stat(key=safe_key)
+        _verify_metadata(verified, checksum_sha256, head.size_bytes)
+        return verified
+
     def _call(self, method: str, *args: object, **kwargs: object) -> object:
         try:
             operation = getattr(self._client, method)
@@ -327,7 +532,7 @@ class S3ObjectStorage:
                 error = response.get("Error")
                 if isinstance(error, dict):
                     code = error.get("Code")
-            if code in {"404", "NoSuchKey", "NotFound"}:
+            if code in {"404", "NoSuchKey", "NoSuchUpload", "NotFound"}:
                 raise ObjectNotFoundError("Private object was not found.") from exc
             logger.warning("private_object_storage_operation_failed", extra={"operation": method})
             raise ObjectStorageError("Private object storage operation failed.") from exc

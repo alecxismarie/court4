@@ -82,12 +82,13 @@ class AnalysisJobRepository:
         settings: object,
         owner_user_id: UUID | None = None,
         persistence: PersistenceRuntime | None = None,
+        object_storage: ObjectStorage | None = None,
     ) -> AnalysisJobRepository:
         from app.config.settings import Settings
 
         if not isinstance(settings, Settings):
             raise TypeError("Court4 settings are required.")
-        object_storage = build_object_storage(settings)
+        object_storage = object_storage or build_object_storage(settings)
         if object_storage.provider == "local":
             return cls(
                 output_dir=settings.analysis_output_dir,
@@ -321,12 +322,22 @@ class AnalysisJobRepository:
                     )
                 )
                 try:
-                    self.object_storage.put_file(
-                        key=storage_key,
-                        source=path,
-                        content_type=content_type,
-                        checksum_sha256=checksum,
-                    )
+                    already_direct = False
+                    if _artifact_kind(relative) == "source_video" and self.object_storage.exists(
+                        key=storage_key
+                    ):
+                        existing = self.object_storage.stat(key=storage_key)
+                        already_direct = (
+                            existing.size_bytes == path.stat().st_size
+                            and existing.checksum_sha256 == checksum
+                        )
+                    if not already_direct:
+                        self.object_storage.put_file(
+                            key=storage_key,
+                            source=path,
+                            content_type=content_type,
+                            checksum_sha256=checksum,
+                        )
                 except ObjectStorageError as exc:
                     raise JobStorageBackendError(
                         "Durable object storage could not persist analysis output."

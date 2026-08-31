@@ -11,4 +11,15 @@ describe("UploadProgress", () => {
     expect(fill).toHaveClass("bg-court-lime");
     expect(fill).not.toHaveClass("bg-court-blue");
   });
+
+  it("distinguishes completed transfer from server verification", () => {
+    render(
+      <UploadProgress
+        progress={{ loaded: 100, total: 100, percent: 100, phase: "verifying" }}
+      />,
+    );
+
+    expect(screen.getByText("Verifying and finalizing video")).toBeInTheDocument();
+    expect(screen.getByText("Upload complete")).toBeInTheDocument();
+  });
 });

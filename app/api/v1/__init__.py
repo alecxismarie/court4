@@ -6,6 +6,7 @@ from app.api.v1.auth import development_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.history import router as history_router
 from app.api.v1.internal import router as internal_router
+from app.api.v1.uploads import router as uploads_router
 from app.config.settings import Settings
 
 
@@ -14,6 +15,7 @@ def create_api_v1_router(settings: Settings) -> APIRouter:
     router.include_router(auth_router)
     router.include_router(analyses_router)
     router.include_router(history_router)
+    router.include_router(uploads_router)
     if settings.environment in {"development", "test"}:
         router.include_router(development_router)
         router.include_router(analyses_development_router)

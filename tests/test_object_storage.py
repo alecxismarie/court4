@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -147,6 +148,59 @@ def test_s3_errors_do_not_log_credentials(monkeypatch: pytest.MonkeyPatch) -> No
     rendered = repr(logged)
     assert "highly-secret-credential" not in rendered
     assert "private_object_storage_operation_failed" in rendered
+
+
+def test_s3_multipart_contract_presigns_completes_streams_and_aborts() -> None:
+    client = FakeS3Client()
+    client.multipart_data = b"direct-multipart-video"
+    storage = S3ObjectStorage(client=client, bucket="private-court4")
+    key = "users/owner/analyses/direct/source/video.mp4"
+
+    upload_id = storage.initiate_multipart_upload(
+        key=key,
+        content_type="video/mp4",
+        upload_session_id="session-123",
+        declared_size=len(client.multipart_data),
+    )
+    url = storage.presign_upload_part(key=key, upload_id=upload_id, part_number=1, expires_in=900)
+    storage.complete_multipart_upload(
+        key=key,
+        upload_id=upload_id,
+        parts=[{"PartNumber": 1, "ETag": '"part-etag"'}],
+    )
+    head = storage.head_upload(key=key)
+    checksum = storage.calculate_sha256(key=key, chunk_size=4)
+    verified = storage.set_verified_checksum(key=key, checksum_sha256=checksum)
+
+    assert url == "https://private.test/upload-part"
+    assert head.size_bytes == len(client.multipart_data)
+    assert head.custom_metadata == {
+        "court4-upload-session": "session-123",
+        "court4-declared-size": str(len(client.multipart_data)),
+    }
+    assert checksum == hashlib.sha256(client.multipart_data).hexdigest()
+    assert verified.checksum_sha256 == checksum
+    assert client.presign_params == {
+        "Bucket": "private-court4",
+        "Key": key,
+        "UploadId": upload_id,
+        "PartNumber": 1,
+    }
+
+    second = storage.initiate_multipart_upload(
+        key="users/owner/analyses/aborted/source/video.mp4",
+        content_type="video/mp4",
+        upload_session_id="session-abort",
+        declared_size=10,
+    )
+    storage.abort_multipart_upload(
+        key="users/owner/analyses/aborted/source/video.mp4", upload_id=second
+    )
+    storage.abort_multipart_upload(
+        key="users/owner/analyses/aborted/source/video.mp4", upload_id=second
+    )
+    assert second in client.aborted_upload_ids
+    assert client.aborted_upload_ids.count(second) == 1
 
 
 def test_s3_configuration_is_explicit_and_secrets_remain_wrapped() -> None:
@@ -346,6 +400,10 @@ class FakeS3Client:
     def __init__(self) -> None:
         self.objects: dict[tuple[str, str], tuple[bytes, dict[str, Any]]] = {}
         self.upload_extra_args: dict[str, Any] = {}
+        self.multipart_uploads: dict[str, dict[str, Any]] = {}
+        self.multipart_data = b""
+        self.presign_params: dict[str, Any] = {}
+        self.aborted_upload_ids: list[str] = []
 
     def head_bucket(self, **kwargs: Any) -> dict[str, Any]:
         return kwargs
@@ -382,6 +440,84 @@ class FakeS3Client:
 
     def delete_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
         self.objects.pop((Bucket, Key), None)
+        return {}
+
+    def create_multipart_upload(
+        self, *, Bucket: str, Key: str, ContentType: str, Metadata: dict[str, str]
+    ) -> dict[str, str]:
+        upload_id = f"upload-{len(self.multipart_uploads) + 1}"
+        self.multipart_uploads[upload_id] = {
+            "bucket": Bucket,
+            "key": Key,
+            "content_type": ContentType,
+            "metadata": Metadata,
+        }
+        return {"UploadId": upload_id}
+
+    def generate_presigned_url(
+        self,
+        operation: str,
+        *,
+        Params: dict[str, Any],
+        ExpiresIn: int,
+        HttpMethod: str,
+    ) -> str:
+        assert operation == "upload_part"
+        assert ExpiresIn == 900
+        assert HttpMethod == "PUT"
+        self.presign_params = Params
+        return "https://private.test/upload-part"
+
+    def complete_multipart_upload(
+        self,
+        *,
+        Bucket: str,
+        Key: str,
+        UploadId: str,
+        MultipartUpload: dict[str, Any],
+    ) -> dict[str, str]:
+        assert MultipartUpload["Parts"]
+        upload = self.multipart_uploads[UploadId]
+        assert upload["bucket"] == Bucket
+        assert upload["key"] == Key
+        extra = {
+            "ContentType": upload["content_type"],
+            "Metadata": dict(upload["metadata"]),
+        }
+        self.objects[(Bucket, Key)] = (self.multipart_data, extra)
+        return {"ETag": '"multipart-etag"'}
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
+        data, _extra = self.objects[(Bucket, Key)]
+        return {"Body": io.BytesIO(data)}
+
+    def copy_object(
+        self,
+        *,
+        Bucket: str,
+        Key: str,
+        CopySource: dict[str, str],
+        Metadata: dict[str, str],
+        MetadataDirective: str,
+        ContentType: str,
+    ) -> dict[str, Any]:
+        assert CopySource == {"Bucket": Bucket, "Key": Key}
+        assert MetadataDirective == "REPLACE"
+        data, _extra = self.objects[(Bucket, Key)]
+        self.objects[(Bucket, Key)] = (
+            data,
+            {"ContentType": ContentType, "Metadata": Metadata},
+        )
+        return {}
+
+    def abort_multipart_upload(self, *, Bucket: str, Key: str, UploadId: str) -> dict[str, Any]:
+        try:
+            upload = self.multipart_uploads.pop(UploadId)
+        except KeyError as exc:
+            raise FakeClientError("NoSuchUpload") from exc
+        assert upload["bucket"] == Bucket
+        assert upload["key"] == Key
+        self.aborted_upload_ids.append(UploadId)
         return {}
 
 

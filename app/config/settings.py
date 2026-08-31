@@ -123,6 +123,13 @@ class Settings(BaseSettings):
     deployment_build_identifier: str = "local"
     default_sample_interval_seconds: PositiveFloat = Field(default=30)
     max_upload_size_bytes: PositiveInt = Field(default=1_073_741_824)
+    direct_upload_part_size_bytes: PositiveInt = Field(default=8_388_608, ge=5_242_880)
+    direct_upload_max_concurrency: PositiveInt = Field(default=3, le=8)
+    direct_upload_part_max_attempts: PositiveInt = Field(default=3, le=8)
+    direct_upload_presign_ttl_seconds: PositiveInt = Field(default=900, le=3600)
+    direct_upload_session_ttl_seconds: PositiveInt = Field(default=21_600, le=86_400)
+    direct_upload_verification_lease_seconds: PositiveInt = Field(default=1_800, le=7_200)
+    direct_upload_checksum_chunk_size_bytes: PositiveInt = Field(default=8_388_608)
     storage_warning_free_bytes: PositiveInt = 10_737_418_240
     storage_hard_stop_free_bytes: PositiveInt = 5_368_709_120
     storage_upload_reservation_multiplier: PositiveFloat = 2.0

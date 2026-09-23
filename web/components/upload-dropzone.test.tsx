@@ -1,8 +1,9 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UploadDropzone, type UploadAnalysisFn } from "@/components/upload-dropzone";
+import { TerminalUploadError } from "@/lib/api/analyses";
 import type { DuplicateUploadResponse, UploadAnalysisResponse } from "@/lib/api/types";
 import { makeJob } from "@/test/factories";
 import { renderWithQueryClient } from "@/test/render";
@@ -15,6 +16,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 describe("upload dropzone", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     pushMock.mockClear();
     window.localStorage.clear();
@@ -223,12 +225,76 @@ describe("upload dropzone", () => {
     await user.upload(screen.getByLabelText("Match video file"), file);
     await user.click(screen.getByRole("button", { name: /upload selected video/i }));
     expect(await screen.findByText("Court4 backend is unavailable.")).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /upload selected video/i }));
 
     await waitFor(() => expect(onUploadComplete).toHaveBeenCalledTimes(1));
     const firstKey = uploadAnalysis.mock.calls[0][2]?.idempotencyKey;
     const retryKey = uploadAnalysis.mock.calls[1][2]?.idempotencyKey;
     expect(retryKey).toBe(firstKey);
+  });
+
+  it("uses a fresh key after confirmed terminal cleanup", async () => {
+    const user = userEvent.setup();
+    const uploadAnalysis = vi.fn<UploadAnalysisFn>()
+      .mockRejectedValueOnce(new TerminalUploadError("Upload was canceled.", {
+        code: "upload_canceled",
+      }))
+      .mockResolvedValueOnce(makeJob());
+    renderWithQueryClient(<UploadDropzone uploadAnalysis={uploadAnalysis} />);
+    await user.upload(screen.getByLabelText("Match video file"), new File(["video"], "match.mp4"));
+    await user.click(screen.getByRole("button", { name: /upload selected video/i }));
+    await screen.findByText("Upload was canceled.");
+    await user.click(screen.getByRole("button", { name: /upload selected video/i }));
+    await waitFor(() => expect(uploadAnalysis).toHaveBeenCalledTimes(2));
+    expect(uploadAnalysis.mock.calls[1][2]?.idempotencyKey)
+      .not.toBe(uploadAnalysis.mock.calls[0][2]?.idempotencyKey);
+  });
+
+  it("Cancel upload signals cancellation and Reset clears the settled form", async () => {
+    const user = userEvent.setup();
+    const uploadAnalysis = vi.fn<UploadAnalysisFn>((_file, _progress, options) =>
+      new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(
+          new TerminalUploadError("Upload was canceled.", { code: "upload_canceled" }),
+        ));
+      }),
+    );
+    renderWithQueryClient(<UploadDropzone uploadAnalysis={uploadAnalysis} />);
+    await user.upload(screen.getByLabelText("Match video file"), new File(["video"], "match.mp4"));
+    await user.click(screen.getByRole("button", { name: /upload selected video/i }));
+    await user.click(await screen.findByRole("button", { name: "Cancel upload" }));
+    await screen.findByText("Upload was canceled.");
+    expect(uploadAnalysis.mock.calls[0][2]?.signal?.aborted).toBe(true);
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Reset" }));
+    expect(screen.queryByText("match.mp4")).not.toBeInTheDocument();
+  });
+
+  it.each(["reset", "replacement"])("%s retries abort of a known session", async (action) => {
+    const user = userEvent.setup();
+    const id = "8b2ee1d1-3176-4a9e-a643-66559d667e47";
+    const uploadAnalysis = vi.fn<UploadAnalysisFn>(async (_file, _progress, options) => {
+      options?.onSession?.(id);
+      throw new TypeError("offline");
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(
+      JSON.stringify({ status: "aborted" }), { status: 200 },
+    ));
+    renderWithQueryClient(<UploadDropzone uploadAnalysis={uploadAnalysis} />);
+    await user.upload(screen.getByLabelText("Match video file"), new File(["video"], "match.mp4"));
+    await user.click(screen.getByRole("button", { name: /upload selected video/i }));
+    await screen.findByText("Court4 backend is unavailable.");
+    if (action === "reset") {
+      await user.click(screen.getByRole("button", { name: "Reset" }));
+    } else {
+      await user.upload(screen.getByLabelText("Match video file"), new File(["new"], "new.mov"));
+      await screen.findByText("new.mov");
+    }
+    await waitFor(() => expect(screen.queryByText("match.mp4")).not.toBeInTheDocument());
+    expect(fetchMock).toHaveBeenCalledWith(
+      `http://localhost:8000/api/v1/uploads/${id}`, expect.objectContaining({ method: "DELETE" }),
+    );
   });
 });
 

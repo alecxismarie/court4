@@ -44,6 +44,8 @@ import {
   uploadSessionResponseSchema,
 } from "@/lib/api/types";
 
+export class TerminalUploadError extends Court4ApiError {}
+
 export function createAnalysis(
   file: File,
   onProgress?: (progress: UploadProgress) => void,
@@ -52,6 +54,7 @@ export function createAnalysis(
     reanalyze?: boolean;
     sport?: SportType;
     signal?: AbortSignal;
+    onSession?: (sessionId: string) => void;
   },
 ): Promise<UploadAnalysisResponse> {
   return createAnalysisDirect(file, onProgress, options);
@@ -65,6 +68,7 @@ async function createAnalysisDirect(
     reanalyze?: boolean;
     sport?: SportType;
     signal?: AbortSignal;
+    onSession?: (sessionId: string) => void;
   },
 ): Promise<UploadAnalysisResponse> {
   const idempotencyKey = options?.idempotencyKey ?? crypto.randomUUID();
@@ -99,6 +103,7 @@ async function createAnalysisDirect(
   }
 
   const sessionId = initiated.upload_session_id;
+  options?.onSession?.(sessionId);
   if (initiated.status === "completed") {
     return waitForUploadResult(sessionId, file, onProgress, options?.signal);
   }
@@ -106,6 +111,10 @@ async function createAnalysisDirect(
     return waitForUploadResult(sessionId, file, onProgress, options?.signal);
   }
 
+  const transferController = new AbortController();
+  const cancelTransfer = () => transferController.abort();
+  options?.signal?.addEventListener("abort", cancelTransfer, { once: true });
+  if (options?.signal?.aborted) cancelTransfer();
   try {
     const completedParts = await uploadParts({
       file,
@@ -115,7 +124,7 @@ async function createAnalysisDirect(
       concurrency: initiated.max_concurrency,
       maxAttempts: initiated.max_attempts,
       onProgress,
-      signal: options?.signal,
+      signal: transferController.signal,
     });
     onProgress?.({
       loaded: file.size,
@@ -139,10 +148,17 @@ async function createAnalysisDirect(
     if (status.status === "completed" && status.result) {
       return status.result;
     }
-    return waitForUploadResult(sessionId, file, onProgress, options?.signal);
+    return await waitForUploadResult(sessionId, file, onProgress, options?.signal);
   } catch (error) {
-    await abortDirectUpload(sessionId);
-    throw normalizeDirectUploadError(error);
+    transferController.abort();
+    const aborted = await abortDirectUpload(sessionId);
+    const normalized = normalizeDirectUploadError(error);
+    if (aborted) {
+      throw new TerminalUploadError(normalized.message, normalized);
+    }
+    throw normalized;
+  } finally {
+    options?.signal?.removeEventListener("abort", cancelTransfer);
   }
 }
 
@@ -265,6 +281,7 @@ async function uploadParts({
   let nextPart = 1;
 
   const reportProgress = () => {
+    if (signal?.aborted) return;
     const loaded = [...loadedByPart.values()].reduce((sum, value) => sum + value, 0);
     onProgress?.({
       loaded,
@@ -361,6 +378,11 @@ function uploadPart(
     xhr.addEventListener("loadend", () => signal?.removeEventListener("abort", abort));
     signal?.addEventListener("abort", abort, { once: true });
     xhr.open("PUT", url);
+    if (signal?.aborted) {
+      signal.removeEventListener("abort", abort);
+      reject(new Court4ApiError("Upload was canceled.", { code: "upload_canceled" }));
+      return;
+    }
     xhr.send(body);
   });
 }
@@ -413,32 +435,35 @@ async function waitForUploadResult(
   }
 }
 
-async function abortDirectUpload(sessionId: string): Promise<void> {
+export async function abortDirectUpload(sessionId: string): Promise<boolean> {
   try {
-    await authenticatedFetch(toApiUrl(`/api/v1/uploads/${encodeURIComponent(sessionId)}`), {
+    const response = await authenticatedFetch(toApiUrl(`/api/v1/uploads/${encodeURIComponent(sessionId)}`), {
       method: "DELETE",
       headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
     });
+    return response.ok;
   } catch {
-    // Best-effort client cleanup; the durable session remains operator-reconcilable.
+    // Admission reconciliation remains authoritative if this request cannot finish.
+    return false;
   }
 }
 
 function uploadTerminalError(status: string, failureCode: string | null): Court4ApiError {
   if (status === "aborted") {
-    return new Court4ApiError("Upload was canceled.", { code: "upload_canceled" });
+    return new TerminalUploadError("Upload was canceled.", { code: "upload_canceled" });
   }
   if (status === "expired") {
-    return new Court4ApiError("The upload session expired. Please start the upload again.", {
+    return new TerminalUploadError("The upload session expired. Please start the upload again.", {
       code: "upload_session_expired",
     });
   }
   if (failureCode === "checksum_mismatch") {
-    return new Court4ApiError("The uploaded video failed integrity verification.", {
+    return new TerminalUploadError("The uploaded video failed integrity verification.", {
       code: "checksum_mismatch",
     });
   }
-  return new Court4ApiError("Court4 could not verify and finalize the uploaded video.", {
+  return new TerminalUploadError("Court4 could not verify and finalize the uploaded video.", {
     code: failureCode ?? "upload_verification_failed",
   });
 }
@@ -460,6 +485,10 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 function abortableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Upload aborted", "AbortError"));
+      return;
+    }
     const finish = () => {
       signal?.removeEventListener("abort", abort);
       resolve();

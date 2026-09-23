@@ -4,11 +4,11 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileVideo2, RotateCcw, Upload } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
-import { createAnalysis } from "@/lib/api/analyses";
+import { abortDirectUpload, createAnalysis, TerminalUploadError } from "@/lib/api/analyses";
 import { normalizeApiError } from "@/lib/api/client";
 import type {
   AnalysisJob,
@@ -36,6 +36,7 @@ export type UploadAnalysisFn = (
     reanalyze?: boolean;
     sport?: SportType;
     signal?: AbortSignal;
+    onSession?: (sessionId: string) => void;
   },
 ) => Promise<UploadAnalysisResponse>;
 
@@ -58,6 +59,10 @@ export function UploadDropzone({
   const inputRef = useRef<HTMLInputElement | null>(null);
   const uploadIdempotencyKeyRef = useRef<string | null>(null);
   const uploadAbortControllerRef = useRef<AbortController | null>(null);
+  const uploadSessionRef = useRef<string | null>(null);
+  const cleanupPendingRef = useRef(false);
+  const [cleanupPending, setCleanupPending] = useState(false);
+  useEffect(() => () => uploadAbortControllerRef.current?.abort(), []);
   const publicEnv = getPublicEnv();
   const [progress, setProgress] = useState<UploadProgressValue | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -77,6 +82,7 @@ export function UploadDropzone({
         reanalyze: command.reanalyze,
         sport: command.sport,
         signal: uploadAbortControllerRef.current?.signal,
+        onSession: (id) => { uploadSessionRef.current = id; },
       }),
     onMutate: (command) => {
       uploadAbortControllerRef.current = new AbortController();
@@ -84,6 +90,7 @@ export function UploadDropzone({
       setProgress({ loaded: 0, total: command.file.size, percent: 0 });
     },
     onSuccess: (result) => {
+      uploadSessionRef.current = null;
       if (isDuplicateUpload(result)) {
         setDuplicate(result);
         return;
@@ -102,16 +109,44 @@ export function UploadDropzone({
     onError: (error) => {
       const normalized = normalizeApiError(error);
       setApiError(normalized.message);
+      setProgress(null);
+      // Preserve the key after an ambiguous network failure so retry can recover
+      // a committed initiation. Only confirmed terminal sessions get a new key.
+      if (error instanceof TerminalUploadError) {
+        uploadIdempotencyKeyRef.current = null;
+        uploadSessionRef.current = null;
+      }
     },
     onSettled: () => {
       uploadAbortControllerRef.current = null;
     },
   });
 
-  const chooseFile = (file: File | null) => {
+  const releasePreviousUpload = async () => {
+    if (cleanupPendingRef.current) return false;
+    const id = uploadSessionRef.current;
+    if (!id) return true;
+    cleanupPendingRef.current = true;
+    setCleanupPending(true);
+    try {
+      if (!await abortDirectUpload(id)) {
+        setApiError("The previous upload could not be canceled. Retry Reset when connected, " +
+          "or retry the upload to check its status. Abandoned transfers expire automatically.");
+        return false;
+      }
+      uploadSessionRef.current = null;
+      return true;
+    } finally {
+      cleanupPendingRef.current = false;
+      setCleanupPending(false);
+    }
+  };
+
+  const chooseFile = async (file: File | null) => {
     if (!file || uploadMutation.isPending) {
       return;
     }
+    if (!await releasePreviousUpload()) return;
     form.setValue("file", file, { shouldDirty: true, shouldValidate: true });
     uploadIdempotencyKeyRef.current = crypto.randomUUID();
     setDuplicate(null);
@@ -120,7 +155,7 @@ export function UploadDropzone({
   };
 
   const submit = form.handleSubmit((values) => {
-    if (uploadMutation.isPending) {
+    if (uploadMutation.isPending || cleanupPendingRef.current) {
       return;
     }
     const idempotencyKey =
@@ -134,11 +169,12 @@ export function UploadDropzone({
     });
   });
 
-  const reset = () => {
+  const reset = async () => {
     if (uploadMutation.isPending) {
       uploadAbortControllerRef.current?.abort();
       return;
     }
+    if (!await releasePreviousUpload()) return;
     form.reset();
     uploadIdempotencyKeyRef.current = null;
     setDuplicate(null);
@@ -253,7 +289,7 @@ export function UploadDropzone({
               <p className="text-sm font-semibold text-court-ink">{selectedFile.name}</p>
               <p className="text-sm text-court-muted">{formatFileSize(selectedFile.size)}</p>
             </div>
-            <Button type="button" variant="secondary" onClick={reset}>
+            <Button type="button" variant="secondary" onClick={reset} disabled={cleanupPending}>
               <RotateCcw aria-hidden="true" className="h-4 w-4" />
               {uploadMutation.isPending ? "Cancel upload" : "Reset"}
             </Button>
@@ -325,7 +361,7 @@ export function UploadDropzone({
         </section>
       ) : (
         <div className="flex flex-wrap items-center gap-3">
-          <Button type="submit" disabled={!selectedFile || uploadMutation.isPending}>
+          <Button type="submit" disabled={!selectedFile || uploadMutation.isPending || cleanupPending}>
             <Upload aria-hidden="true" className="h-4 w-4" />
             {uploadMutation.isPending
               ? progress?.phase === "verifying"

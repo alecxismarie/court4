@@ -371,7 +371,7 @@ def test_stale_workspace_cleanup_is_dry_run_first_and_scoped(tmp_path: Path) -> 
 
 
 def test_repository_translates_object_backend_failure(tmp_path: Path) -> None:
-    persistence = cast(PersistenceRuntime, SimpleNamespace())
+    persistence = get_persistence()
     repository = AnalysisJobRepository(
         output_dir=tmp_path / "workspace",
         api_base_path="/api/v1",

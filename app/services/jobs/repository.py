@@ -7,15 +7,21 @@ import mimetypes
 import re
 import shutil
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from time import sleep
 from uuid import UUID
 
 from pydantic import ValidationError
+from sqlalchemy import text
 
 from app.persistence.errors import (
     OwnershipMismatchError,
     ResourceNotFoundError,
+    SourceMediaUnavailableError,
 )
 from app.persistence.models import AnalysisArtifact as PersistedArtifact
 from app.persistence.object_storage import (
@@ -32,6 +38,7 @@ from app.persistence.service import ArtifactInput, DuplicateVideoMatch, PlayerSe
 from app.persistence.storage import LocalStorage, StorageCapacityError, StorageReservation
 from app.schemas.jobs import AnalysisArtifact, AnalysisJob
 from app.services.jobs.exceptions import (
+    JobConflictError,
     JobNotFoundError,
     JobRequestError,
     JobStorageBackendError,
@@ -74,6 +81,60 @@ class AnalysisJobRepository:
         self._workspace_hard_stop_free_bytes = workspace_hard_stop_free_bytes
         self._workspace_max_active = workspace_max_active
         self._workspace_reservation: StorageReservation | None = None
+        self._media_locks: ContextVar[tuple[str, ...]] = ContextVar(
+            "source_media_locks", default=()
+        )
+
+    @contextmanager
+    def media_operation(
+        self, analysis_id: str, *, exclusive: bool = False, wait: bool = False
+    ) -> Iterator[None]:
+        """Exclude deletion from source operations without a long DB transaction."""
+        self.validate_analysis_id(analysis_id)
+        held = self._media_locks.get()
+        if analysis_id in held:
+            if exclusive:
+                raise JobConflictError("source_media_busy", "This match is busy. Please retry.")
+            yield
+            return
+        while True:
+            with self.persistence.engine.connect().execution_options(
+                isolation_level="AUTOCOMMIT"
+            ) as conn:
+                key = {"key": f"source-media:{self.owner_user_id}:{analysis_id}"}
+                suffix = "" if exclusive else "_shared"
+                locked = conn.scalar(
+                    text(f"SELECT pg_try_advisory_lock{suffix}(hashtextextended(:key, 0))"), key
+                )
+                if locked:
+                    token = self._media_locks.set((*held, analysis_id))
+                    try:
+                        yield
+                    finally:
+                        self._media_locks.reset(token)
+                        try:
+                            conn.execute(
+                                text(
+                                    f"SELECT pg_advisory_unlock{suffix}(hashtextextended(:key, 0))"
+                                ),
+                                key,
+                            )
+                        except Exception:
+                            conn.invalidate()
+                    return
+            if not wait:
+                raise JobConflictError("source_media_busy", "This match is busy. Please retry.")
+            # Never occupy the connection pool while waiting: the lock holder
+            # still needs connections for its short persistence transactions.
+            sleep(0.05)
+
+    def require_retained_source(self, analysis_id: str) -> None:
+        job = self.load_job_metadata(analysis_id)
+        if job.source_media_state in {"deleting", "deleted"}:
+            raise JobConflictError(
+                "source_video_unavailable",
+                "The original recording is no longer available for reanalysis.",
+            )
 
     @classmethod
     def from_settings(
@@ -134,6 +195,12 @@ class AnalysisJobRepository:
         return self.save_job(job)
 
     def save_job(self, job: AnalysisJob) -> AnalysisJob:
+        with self.media_operation(job.analysis_id):
+            with suppress(JobNotFoundError):  # Compatibility import of a new analysis.
+                self.require_retained_source(job.analysis_id)
+            return self._save_job(job)
+
+    def _save_job(self, job: AnalysisJob) -> AnalysisJob:
         filesystem_artifacts = self._filesystem_artifacts(job.analysis_id)
         projected = job.model_copy(
             update={
@@ -161,12 +228,18 @@ class AnalysisJobRepository:
             )
         except (ResourceNotFoundError, OwnershipMismatchError):
             raise JobNotFoundError() from None
+        except SourceMediaUnavailableError:
+            raise JobConflictError(
+                "source_video_unavailable",
+                "The original recording is no longer available for reanalysis.",
+            ) from None
         return projected
 
     def load_job(self, analysis_id: str) -> AnalysisJob:
-        job = self.load_job_metadata(analysis_id)
-        self._materialize_current_artifacts(analysis_id)
-        return self.refresh_artifacts(job)
+        with self.media_operation(analysis_id, wait=True):
+            job = self.load_job_metadata(analysis_id)
+            self._materialize_current_artifacts(analysis_id)
+            return self.refresh_artifacts(job)
 
     def load_job_metadata(self, analysis_id: str) -> AnalysisJob:
         self.validate_analysis_id(analysis_id)
@@ -206,6 +279,28 @@ class AnalysisJobRepository:
         self.validate_analysis_id(analysis_id)
         return self.workspace.analysis_root(analysis_id)
 
+    def delete_local_source_copies(self, analysis_id: str, logical_key: str) -> None:
+        """Remove only this source from configured local roots under the exclusive lock."""
+        self.validate_analysis_id(analysis_id)
+        relative = validate_relative_artifact_path(logical_key)
+        roots = {self.output_dir, self.legacy_storage.root}
+        # from_settings creates one owner-prefixed directory per S3 request.
+        # Include abandoned workspaces as well as currently open repositories.
+        if self.storage.root != self.output_dir:
+            for candidate in self.storage.root.glob(f"court4-{self.owner_user_id}-*"):
+                if (
+                    not candidate.is_symlink()
+                    and candidate.is_dir()
+                    and candidate.resolve().parent == self.storage.root
+                ):
+                    roots.add(candidate.resolve())
+        for root in roots:
+            analysis_root = LocalStorage(root).analysis_root(analysis_id)
+            storage = LocalObjectStorage(analysis_root)
+            storage.delete(key=relative)
+            source = PurePosixPath(relative)
+            storage.delete(key=str(source.with_name(f".{source.name}.court4-download")))
+
     def staging_dir(self, analysis_id: str) -> Path:
         self.validate_analysis_id(analysis_id)
         path = (self.output_dir / "_uploads" / analysis_id).resolve()
@@ -213,8 +308,16 @@ class AnalysisJobRepository:
         return path
 
     def resolve_artifact(self, analysis_id: str, artifact_path: str) -> Path:
+        # Include the durable-state read, cache hit, copy/download and final rename.
+        with self.media_operation(analysis_id, wait=True):
+            return self._resolve_artifact(analysis_id, artifact_path)
+
+    def _resolve_artifact(self, analysis_id: str, artifact_path: str) -> Path:
         analysis_dir = self.analysis_dir(analysis_id)
         relative_path = validate_relative_artifact_path(artifact_path)
+        job = self.load_job_metadata(analysis_id)
+        if relative_path == job.source_video:
+            self.require_retained_source(analysis_id)
         try:
             record = self.persistence.service.get_artifact(
                 owner_user_id=self.owner_user_id,
@@ -357,12 +460,18 @@ class AnalysisJobRepository:
         return artifacts
 
     def _materialize_current_artifacts(self, analysis_id: str) -> None:
+        with self.media_operation(analysis_id, wait=True):
+            self._materialize_retained_artifacts(analysis_id)
+
+    def _materialize_retained_artifacts(self, analysis_id: str) -> None:
         if self.object_storage.provider == "local":
             return
         records = self.persistence.service.list_artifacts(
             owner_user_id=self.owner_user_id,
             analysis_id=analysis_id,
         )
+        if self.load_job_metadata(analysis_id).source_media_state in {"deleting", "deleted"}:
+            records = [record for record in records if record.artifact_kind != "source_video"]
         self._reserve_workspace(records)
         for record in records:
             destination = self.workspace.resolve(analysis_id, record.logical_key)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -24,9 +25,210 @@ from app.persistence.object_storage import (
 )
 from app.persistence.runtime import get_persistence
 from app.schemas.uploads import CompletedUploadPart, CompleteUploadRequest, InitiateUploadRequest
-from app.services.jobs.exceptions import JobConflictError, JobRequestError
+from app.services.jobs.exceptions import (
+    JobConflictError,
+    JobRequestError,
+    JobStorageBackendError,
+    JobStorageCapacityError,
+)
 from app.services.uploads import DirectUploadService
 from scripts.reconcile_multipart_uploads import reconcile_expired_multipart_uploads
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "aborted", "expired"])
+def test_terminal_session_permits_next_upload(tmp_path: Path, status: str) -> None:
+    _client_instance, service, storage, owner = _client(tmp_path)
+    service.settings.storage_max_active_uploads = 1
+    request = InitiateUploadRequest.model_validate(_metadata())
+    first = service.initiate(owner_user_id=owner, request=request, idempotency_key="first")
+    with get_persistence().session_factory.begin() as session:
+        record = session.get(UploadSession, first.upload_session_id)
+        assert record is not None
+        record.status = status
+        record.expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+    second = service.initiate(owner_user_id=owner, request=request, idempotency_key="second")
+    assert second.upload_session_id != first.upload_session_id
+    if status == "expired":
+        assert f"upload-{first.upload_session_id}" not in storage.uploads
+
+
+def test_abandoned_upload_recovers_on_new_initiation_after_restart(tmp_path: Path) -> None:
+    _client_instance, service, storage, owner = _client(tmp_path)
+    service.settings.storage_max_active_uploads = 1
+    request = InitiateUploadRequest.model_validate(_metadata())
+    first = service.initiate(owner_user_id=owner, request=request, idempotency_key="abandoned")
+    restarted = DirectUploadService(
+        settings=service.settings, persistence=get_persistence(), storage=storage
+    )
+    with pytest.raises(JobStorageCapacityError):
+        restarted.initiate(owner_user_id=owner, request=request, idempotency_key="new")
+    with get_persistence().session_factory.begin() as session:
+        record = session.get(UploadSession, first.upload_session_id)
+        assert record is not None
+        record.expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+    second = restarted.initiate(owner_user_id=owner, request=request, idempotency_key="new")
+    assert second.upload_session_id != first.upload_session_id
+    assert f"upload-{first.upload_session_id}" not in storage.uploads
+    with get_persistence().session_factory() as session:
+        record = session.get(UploadSession, first.upload_session_id)
+        assert record is not None and record.status == "expired"
+    with pytest.raises(JobStorageCapacityError):
+        service.initiate(owner_user_id=owner, request=request, idempotency_key="third")
+
+
+@pytest.mark.parametrize("abandoned", [False, True])
+def test_concurrent_initiations_have_exactly_one_winner(tmp_path: Path, abandoned: bool) -> None:
+    _client_instance, service, storage, owner = _client(tmp_path)
+    service.settings.storage_max_active_uploads = 1
+    if abandoned:
+        first = service.initiate(
+            owner_user_id=owner,
+            request=InitiateUploadRequest.model_validate(_metadata()),
+            idempotency_key="abandoned",
+        )
+        with get_persistence().session_factory.begin() as session:
+            record = session.get(UploadSession, first.upload_session_id)
+            assert record is not None
+            record.expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+    barrier = threading.Barrier(2)
+
+    def initiate(key: str) -> str:
+        worker = DirectUploadService(
+            settings=service.settings, persistence=get_persistence(), storage=storage
+        )
+        barrier.wait(timeout=5)
+        try:
+            worker.initiate(
+                owner_user_id=owner,
+                request=InitiateUploadRequest.model_validate(_metadata()),
+                idempotency_key=key,
+            )
+            return "admitted"
+        except JobStorageCapacityError:
+            return "busy"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        assert sorted(executor.map(initiate, ["one", "two"])) == ["admitted", "busy"]
+    assert len(storage.uploads) == 1
+
+
+def test_reconciliation_aborts_provider_and_database_under_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from scripts import reconcile_multipart_uploads as reconciliation
+
+    _client_instance, service, storage, owner = _client(tmp_path)
+    first = service.initiate(
+        owner_user_id=owner,
+        request=InitiateUploadRequest.model_validate(_metadata()),
+        idempotency_key="reconcile",
+    )
+    assert first.upload_session_id is not None
+    with get_persistence().session_factory.begin() as session:
+        record = session.get(UploadSession, first.upload_session_id)
+        assert record is not None
+        record.expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+    runtime = replace(get_persistence(), storage=storage)
+    monkeypatch.setattr(reconciliation, "get_persistence", lambda: runtime)
+    report = reconciliation.reconcile_expired_multipart_uploads(
+        apply=True, confirmation=reconciliation.CONFIRMATION, max_sessions=1
+    )
+    assert report.aborted_session_ids == (str(first.upload_session_id),)
+    assert not storage.uploads
+    with runtime.session_factory() as session:
+        record = session.get(UploadSession, first.upload_session_id)
+        assert record is not None and record.status == "aborted"
+
+
+def test_reconciliation_stale_snapshot_cannot_abort_completion(tmp_path: Path) -> None:
+    from scripts.reconcile_multipart_uploads import _mark_aborted
+
+    _client_instance, service, storage, owner = _client(tmp_path)
+    first = service.initiate(
+        owner_user_id=owner,
+        request=InitiateUploadRequest.model_validate(_metadata()),
+        idempotency_key="stale-reconcile",
+    )
+    assert first.upload_session_id is not None
+    with get_persistence().session_factory.begin() as session:
+        record = session.get(UploadSession, first.upload_session_id)
+        assert record is not None
+        record.status = "completing"
+        record.expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+    assert not _mark_aborted(first.upload_session_id, datetime.now(tz=UTC), storage)
+    assert len(storage.uploads) == 1
+
+
+def test_owner_admission_and_expiration_are_isolated(tmp_path: Path) -> None:
+    client, service, storage, owner = _client(tmp_path)
+    service.settings.storage_max_active_uploads = 1
+    request = InitiateUploadRequest.model_validate(_metadata())
+    first = service.initiate(owner_user_id=owner, request=request, idempotency_key="owner-a")
+    token = _register_verified_user(client, "owner-b@example.com")
+    client.headers["Authorization"] = f"Bearer {token}"
+    second = client.post(
+        "/api/v1/uploads/initiate", headers={"Idempotency-Key": "owner-b"}, json=_metadata()
+    )
+    assert second.status_code == 201
+    assert client.delete(f"/api/v1/uploads/{first.upload_session_id}").status_code == 404
+    assert f"upload-{first.upload_session_id}" in storage.uploads
+    assert len(storage.uploads) == 2
+
+
+def test_expiry_provider_failure_keeps_admission_closed_and_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _client_instance, service, storage, owner = _client(tmp_path)
+    service.settings.storage_max_active_uploads = 1
+    request = InitiateUploadRequest.model_validate(_metadata())
+    first = service.initiate(owner_user_id=owner, request=request, idempotency_key="old")
+    with get_persistence().session_factory.begin() as session:
+        record = session.get(UploadSession, first.upload_session_id)
+        assert record is not None
+        record.expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+
+    def fail_abort(**kwargs: Any) -> None:
+        raise ObjectStorageError("private-provider-secret")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(storage, "abort_multipart_upload", fail_abort)
+        with pytest.raises(JobStorageBackendError, match="Please retry") as error:
+            service.initiate(owner_user_id=owner, request=request, idempotency_key="new")
+        assert "private-provider-secret" not in str(error.value)
+    assert len(storage.uploads) == 1
+    service.initiate(owner_user_id=owner, request=request, idempotency_key="new")
+    assert len(storage.uploads) == 1
+
+
+def test_failed_cancel_durably_fences_completion_and_next_attempt_recovers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _client_instance, service, storage, owner = _client(tmp_path)
+    service.settings.storage_max_active_uploads = 1
+    request = InitiateUploadRequest.model_validate(_metadata())
+    first = service.initiate(owner_user_id=owner, request=request, idempotency_key="cancel")
+    assert first.upload_session_id is not None
+
+    def fail_abort(**kwargs: Any) -> None:
+        raise ObjectStorageError("provider-unavailable")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(storage, "abort_multipart_upload", fail_abort)
+        with pytest.raises(JobStorageBackendError):
+            service.abort(owner_user_id=owner, upload_session_id=first.upload_session_id)
+    with get_persistence().session_factory() as session:
+        record = session.get(UploadSession, first.upload_session_id)
+        assert record is not None and record.status == "expired"
+        assert record.failure_reason == "upload_cancel_requested"
+    with pytest.raises(JobConflictError):
+        service.complete(
+            owner_user_id=owner,
+            upload_session_id=first.upload_session_id,
+            request=CompleteUploadRequest(parts=[CompletedUploadPart(part_number=1, etag="x")]),
+        )
+    assert storage.completion_calls == 0
+    service.initiate(owner_user_id=owner, request=request, idempotency_key="next")
+    assert len(storage.uploads) == 1
 
 
 def test_initiate_requires_authentication(tmp_path: Path) -> None:

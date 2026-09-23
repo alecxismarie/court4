@@ -86,13 +86,16 @@ class DirectUploadService:
         fingerprint = self._request_fingerprint(request, filename)
         now = utc_now()
         with self.persistence.session_factory.begin() as session:
-            lock_name = f"direct-upload:{owner_user_id}:{key_hash}"
+            # Shared across workers and idempotency keys for this owner.
+            lock_name = f"direct-upload-owner:{owner_user_id}"
             session.scalar(select(func.pg_advisory_xact_lock(func.hashtextextended(lock_name, 0))))
             existing = session.scalar(
-                select(UploadSession).where(
+                select(UploadSession)
+                .where(
                     UploadSession.owner_user_id == owner_user_id,
                     UploadSession.idempotency_key_hash == key_hash,
                 )
+                .with_for_update()
             )
             if existing is not None:
                 if existing.request_fingerprint != fingerprint:
@@ -103,24 +106,39 @@ class DirectUploadService:
                 self._expire_record_if_needed(existing)
                 return self._initiate_response(existing)
 
-            session.scalar(
-                select(
-                    func.pg_advisory_xact_lock(func.hashtextextended("direct-upload-capacity", 0))
+            # Browser disappearance cannot run DELETE. Reconcile under the same
+            # owner admission lock; the row lock excludes completion/cancellation.
+            expired = session.scalars(
+                select(UploadSession)
+                .where(
+                    UploadSession.owner_user_id == owner_user_id,
+                    UploadSession.status.in_(("initiated", "uploading", "expired")),
+                    UploadSession.expires_at <= utc_now(),
+                    UploadSession.aborted_at.is_(None),
                 )
+                .order_by(UploadSession.id)
+                .with_for_update()
             )
+            for record in expired:
+                self._expire_record_if_needed(record)
+            session.flush()  # The production session factory disables autoflush.
             active_count = session.scalar(
                 select(func.count())
                 .select_from(UploadSession)
                 .where(
+                    UploadSession.owner_user_id == owner_user_id,
                     UploadSession.status.in_(
                         ("initiated", "uploading", "completing", "verifying", "analyzing")
-                    )
+                    ),
                 )
             )
             if int(active_count or 0) >= self.settings.storage_max_active_uploads:
                 raise JobStorageCapacityError(
                     "upload_capacity_busy",
-                    "Another upload is already active. Try again after it completes.",
+                    "Another upload is already active for your account. Cancel it in its "
+                    "original tab, or retry after its upload session expires "
+                    f"(up to {self.settings.direct_upload_session_ttl_seconds // 60} minutes "
+                    "from initiation). Finalizing uploads must finish first.",
                     status_code=429,
                 )
 
@@ -174,7 +192,7 @@ class DirectUploadService:
 
     def get(self, *, owner_user_id: UUID, upload_session_id: UUID) -> UploadSessionResponse:
         with self.persistence.session_factory.begin() as session:
-            record = self._load_owned(session, owner_user_id, upload_session_id)
+            record = self._load_owned(session, owner_user_id, upload_session_id, for_update=True)
             self._expire_record_if_needed(record)
             return self._status_response(record)
 
@@ -410,7 +428,9 @@ class DirectUploadService:
             self._fail(upload_session_id, "upload_finalization_failed")
 
     def abort(self, *, owner_user_id: UUID, upload_session_id: UUID) -> UploadSessionResponse:
-        self._expire_owned_if_needed(owner_user_id, upload_session_id, allow_expired=True)
+        # Durably fence completion before touching S3. A database connection can
+        # disappear while an external abort is in flight; a row lock alone is
+        # therefore insufficient. Admission must reconcile this expired claim.
         with self.persistence.session_factory.begin() as session:
             record = self._load_owned(session, owner_user_id, upload_session_id, for_update=True)
             if record.status == "aborted":
@@ -419,20 +439,20 @@ class DirectUploadService:
                 raise JobConflictError(
                     "invalid_upload_state", "Upload can no longer be aborted safely."
                 )
-            storage_key = record.storage_key
-            provider_upload_id = record.provider_upload_id
-        try:
-            self.storage.abort_multipart_upload(key=storage_key, upload_id=provider_upload_id)
-        except ObjectStorageError as exc:
-            raise JobStorageBackendError("Object storage could not abort the upload.") from exc
+            record.expires_at = min(record.expires_at, utc_now())
+            record.status = "expired"
+            record.failure_reason = "upload_cancel_requested"
+            record.updated_at = utc_now()
+            record.row_version += 1
         with self.persistence.session_factory.begin() as session:
             record = self._load_owned(session, owner_user_id, upload_session_id, for_update=True)
             if record.status == "aborted":
                 return self._status_response(record)
             if record.status not in _ACTIVE_MULTIPART_STATES and record.status != "expired":
                 raise JobConflictError(
-                    "invalid_upload_state", "Upload state changed before it could be aborted."
+                    "invalid_upload_state", "Upload can no longer be aborted safely."
                 )
+            self._abort_provider(record)
             record.status = "aborted"
             record.aborted_at = utc_now()
             record.row_version += 1
@@ -570,10 +590,22 @@ class DirectUploadService:
         if record.status == "expired":
             raise JobConflictError("upload_session_expired", "Upload session has expired.")
 
-    @staticmethod
-    def _expire_record_if_needed(record: UploadSession) -> bool:
-        if record.status not in _EXPIRABLE_STATES or record.expires_at > utc_now():
+    def _abort_provider(self, record: UploadSession) -> None:
+        try:
+            self.storage.abort_multipart_upload(
+                key=record.storage_key, upload_id=record.provider_upload_id
+            )
+        except ObjectStorageError as exc:
+            raise JobStorageBackendError(
+                "Object storage could not release the previous upload. Please retry."
+            ) from exc
+
+    def _expire_record_if_needed(self, record: UploadSession) -> bool:
+        if record.status not in _EXPIRABLE_STATES | {"expired"} or record.expires_at > utc_now():
             return False
+        if record.aborted_at is None:
+            self._abort_provider(record)
+            record.aborted_at = utc_now()
         record.status = "expired"
         record.failure_reason = "upload_session_expired"
         record.row_version += 1

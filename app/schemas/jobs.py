@@ -83,6 +83,7 @@ class AnalysisJob(BaseModel):
     status: AnalysisStatus
     current_stage: AnalysisStage
     source_video: str | None = None
+    source_media_state: Literal["available", "unavailable", "deleting", "deleted"] = "available"
     created_at: datetime
     updated_at: datetime
     error: str | None = None

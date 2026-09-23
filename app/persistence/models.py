@@ -186,7 +186,9 @@ class UploadedVideo(Base):
     __tablename__ = "uploaded_videos"
     __table_args__ = (
         UniqueConstraint("id", "owner_user_id", name="uq_uploaded_video_id_owner"),
-        CheckConstraint("state in ('pending','available','failed')", name="ck_video_state"),
+        CheckConstraint(
+            "state in ('pending','available','failed','deleting','deleted')", name="ck_video_state"
+        ),
         CheckConstraint("row_version > 0", name="ck_video_row_version"),
         CheckConstraint(
             "source_checksum is null or source_checksum ~ '^[a-f0-9]{64}$'",

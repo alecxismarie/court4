@@ -21,6 +21,7 @@ from app.persistence.errors import (
     OptimisticConcurrencyError,
     OwnershipMismatchError,
     ResourceNotFoundError,
+    SourceMediaUnavailableError,
 )
 from app.persistence.models import (
     Analysis,
@@ -942,6 +943,12 @@ class PersistenceService:
             analysis = self._owned_analysis(session.get(Analysis, analysis_id), owner_user_id)
             payload = dict(analysis.job_payload)
             payload["sport"] = analysis.sport
+            video = session.get(UploadedVideo, analysis.uploaded_video_id)
+            payload["source_media_state"] = (
+                video.state
+                if video and video.state in {"available", "deleting", "deleted"}
+                else "unavailable"
+            )
             return payload
 
     def list_analysis_ids(self, *, owner_user_id: UUID) -> list[str]:
@@ -997,6 +1004,10 @@ class PersistenceService:
                 self._add_run_event(session, initial_run, None, "processing", "run_started")
             else:
                 analysis = self._owned_analysis(analysis, owner_user_id)
+
+            video_state = session.get(UploadedVideo, analysis.uploaded_video_id)
+            if video_state is not None and video_state.state in {"deleting", "deleted"}:
+                raise SourceMediaUnavailableError("Source media has been removed from processing.")
 
             payload_sport = SportType(str(payload.get("sport", SportType.PICKLEBALL.value)))
             if analysis.sport != payload_sport.value:

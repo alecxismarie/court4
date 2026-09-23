@@ -34,6 +34,7 @@ from app.schemas.player_candidates import (
 )
 from app.services.history import HistoryProjectionService
 from app.services.jobs import AnalysisWorkflowService
+from app.services.jobs.source_media import SourceMediaService
 from app.sports import SportType
 
 router = APIRouter(prefix="/analyses", tags=["analyses"])
@@ -65,6 +66,13 @@ def get_workflow_service(
 
 
 WorkflowDependency = Annotated[AnalysisWorkflowService, Depends(get_workflow_service)]
+
+
+@router.delete("/{analysis_id}/source-video", status_code=204, responses=ERROR_RESPONSES)
+def delete_source_video(analysis_id: str, workflow: WorkflowDependency) -> Response:
+    """Delete only the original recording, retaining analysis and Progress evidence."""
+    SourceMediaService(workflow.repository).delete(analysis_id)
+    return Response(status_code=204)
 
 
 @router.get(

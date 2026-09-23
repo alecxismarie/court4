@@ -87,6 +87,7 @@ export const analysisJobSchema = z.object({
   status: z.string(),
   current_stage: z.string(),
   source_video: z.string().nullable(),
+  source_media_state: z.enum(["available", "unavailable", "deleting", "deleted"]).default("available"),
   created_at: z.string(),
   updated_at: z.string(),
   error: z.string().nullable(),

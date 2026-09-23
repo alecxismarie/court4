@@ -41,6 +41,10 @@ class InvalidStateTransitionError(PersistenceError):
     pass
 
 
+class SourceMediaUnavailableError(InvalidStateTransitionError):
+    pass
+
+
 class StaleRunConflictError(PersistenceError):
     pass
 

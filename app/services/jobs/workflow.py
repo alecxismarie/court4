@@ -83,6 +83,7 @@ from app.services.jobs.exceptions import (
     JobStorageCapacityError,
     JobTooLargeError,
 )
+from app.services.jobs.media_guard import media_operation
 from app.services.jobs.repository import AnalysisJobRepository
 from app.services.match_iq import (
     MATCH_IQ_FILENAME,
@@ -426,6 +427,7 @@ class AnalysisWorkflowService:
         artifact = self.repository.artifact_from_path(analysis_id, resolved)
         return ArtifactFile(path=resolved, content_type=artifact.content_type)
 
+    @media_operation()
     def submit_calibration(
         self,
         analysis_id: str,
@@ -494,6 +496,7 @@ class AnalysisWorkflowService:
             job=AnalysisJobResponse.model_validate(updated.model_dump(mode="json")),
         )
 
+    @media_operation()
     def detect_court(self, analysis_id: str) -> CourtDetectionResponse:
         job = self.repository.load_job(analysis_id)
         self._require_supported_interpretation(job, "automatic court detection")
@@ -559,6 +562,7 @@ class AnalysisWorkflowService:
             job=AnalysisJobResponse.model_validate(updated.model_dump(mode="json")),
         )
 
+    @media_operation()
     def start_tracking(self, analysis_id: str, request: TrackingRequest) -> TrackingResponse:
         job = self.repository.load_job(analysis_id)
         self._require_supported_interpretation(job, "court-mapped player tracking")
@@ -664,8 +668,12 @@ class AnalysisWorkflowService:
             player_candidates=candidates,
         )
 
+    @media_operation(require_source=False)
     def list_player_candidates(self, analysis_id: str) -> PlayerCandidateCollection:
         job = self.repository.load_job(analysis_id)
+        if job.source_media_state in {"deleting", "deleted"}:
+            path = self.repository.resolve_artifact(analysis_id, "tracking/player_candidates.json")
+            return load_player_candidates(path)
         self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
         tracking_path = self.repository.resolve_artifact(analysis_id, "tracking/tracking.json")
         collection = self._ensure_player_candidates(
@@ -677,6 +685,7 @@ class AnalysisWorkflowService:
         collection, _ = self._refresh_analysis_readiness(job, collection)
         return collection
 
+    @media_operation()
     def generate_player_candidates(self, analysis_id: str) -> PlayerCandidateCollection:
         job = self.repository.load_job(analysis_id)
         self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
@@ -690,6 +699,7 @@ class AnalysisWorkflowService:
         collection, _ = self._refresh_analysis_readiness(job, collection)
         return collection
 
+    @media_operation()
     def select_player_candidate(
         self,
         analysis_id: str,
@@ -724,6 +734,7 @@ class AnalysisWorkflowService:
         collection, _ = self._refresh_analysis_readiness(updated, collection)
         return collection
 
+    @media_operation()
     def reject_player_candidate(
         self,
         analysis_id: str,
@@ -762,6 +773,7 @@ class AnalysisWorkflowService:
         collection, _ = self._refresh_analysis_readiness(updated_job, collection)
         return collection
 
+    @media_operation()
     def restore_player_candidate(
         self,
         analysis_id: str,
@@ -785,6 +797,7 @@ class AnalysisWorkflowService:
         collection, _ = self._refresh_analysis_readiness(job, collection)
         return collection
 
+    @media_operation()
     def merge_player_candidates(
         self,
         analysis_id: str,
@@ -812,6 +825,7 @@ class AnalysisWorkflowService:
         collection, _ = self._refresh_analysis_readiness(job, collection)
         return collection
 
+    @media_operation()
     def unmerge_player_candidates(
         self,
         analysis_id: str,
@@ -845,13 +859,15 @@ class AnalysisWorkflowService:
         collection, _ = self._refresh_analysis_readiness(updated_job, collection)
         return collection
 
+    @media_operation(require_source=False)
     def list_players(self, analysis_id: str) -> PlayersResponse:
         job = self.repository.load_job(analysis_id)
         self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
         tracking_path = self.repository.resolve_artifact(analysis_id, "tracking/tracking.json")
         tracking = self._load_tracking(tracking_path)
-        tracking = self._refresh_player_selection_metrics(tracking_path, tracking)
-        tracking = self._ensure_player_previews(job, tracking_path, tracking)
+        if job.source_media_state not in {"deleting", "deleted"}:
+            tracking = self._refresh_player_selection_metrics(tracking_path, tracking)
+            tracking = self._ensure_player_previews(job, tracking_path, tracking)
         selection_artifact = self._optional_artifact(
             analysis_id,
             self.repository.analysis_dir(analysis_id)
@@ -865,6 +881,7 @@ class AnalysisWorkflowService:
             selected_player_track_id=tracking.selected_player_track_id,
         )
 
+    @media_operation()
     def select_player(
         self,
         analysis_id: str,
@@ -924,6 +941,7 @@ class AnalysisWorkflowService:
             job=AnalysisJobResponse.model_validate(updated.model_dump(mode="json")),
         )
 
+    @media_operation()
     def generate_analytics(self, analysis_id: str) -> AnalyticsGenerationResponse:
         job = self.repository.load_job(analysis_id)
         self._require_supported_interpretation(job, "movement analytics and Match IQ")
@@ -981,6 +999,7 @@ class AnalysisWorkflowService:
             job=AnalysisJobResponse.model_validate(updated.model_dump(mode="json")),
         )
 
+    @media_operation()
     def generate_active_play(self, analysis_id: str) -> ActivePlayReport:
         """Generate internal shadow evidence without changing job or analytics state."""
 
@@ -1006,6 +1025,7 @@ class AnalysisWorkflowService:
                 "Shadow Active Play evidence could not be generated.",
             ) from exc
 
+    @media_operation(require_source=False)
     def get_active_play(self, analysis_id: str) -> ActivePlayReport:
         """Load an existing internal shadow artifact without legacy migration."""
 
@@ -1027,6 +1047,7 @@ class AnalysisWorkflowService:
                 "Saved shadow Active Play evidence could not be read.",
             ) from exc
 
+    @media_operation(require_source=False)
     def get_analytics(self, analysis_id: str) -> AnalyticsResponse:
         job = self.repository.load_job(analysis_id)
         self._require_supported_interpretation(job, "movement analytics and Match IQ")

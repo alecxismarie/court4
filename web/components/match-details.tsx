@@ -13,6 +13,7 @@ import { Skeleton } from "@/components/skeleton";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { MatchWorkflow } from "@/components/workflow-actions";
 import { RecordingQualityCard } from "@/components/recording-quality-card";
+import { SourceVideoControls } from "@/components/source-video-controls";
 
 export function MatchDetails({ analysisId }: { analysisId: string }) {
   const jobQuery = useQuery({
@@ -87,6 +88,7 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
       </section>
 
       {job.sport === "pickleball" ? <JobStatus job={job} /> : null}
+      <SourceVideoControls job={job} />
 
       <RecordingQualityCard
         assessment={job.analysis_readiness ?? job.upload_preflight}
@@ -132,7 +134,7 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
             This analysis will never use Pickleball interpretation rules.
           </p>
         </section>
-      ) : job.inspection_completed ? (
+      ) : job.inspection_completed && job.source_media_state === "available" ? (
         <MatchWorkflow job={job} />
       ) : null}
     </div>

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createAnalysis } from "@/lib/api/analyses";
+import { createAnalysis, TerminalUploadError } from "@/lib/api/analyses";
 import type { UploadProgress } from "@/lib/api/types";
 import { makeJob } from "@/test/factories";
 
@@ -12,6 +12,7 @@ describe("direct multipart analysis uploads", () => {
     vi.unstubAllGlobals();
     FakeXMLHttpRequest.outcomes = [];
     FakeXMLHttpRequest.openedUrls = [];
+    FakeXMLHttpRequest.abortCount = 0;
   });
 
   it("uploads slices directly, retries one failed part, and waits through verification", async () => {
@@ -92,6 +93,55 @@ describe("direct multipart analysis uploads", () => {
     });
     expect(fetchMock.mock.calls.at(-1)?.[1]).toMatchObject({ method: "DELETE" });
   });
+
+  it.each([200, 503])("only confirms cleanup when DELETE succeeds (%s)", async (status) => {
+    FakeXMLHttpRequest.outcomes = [{ status: 503 }];
+    vi.stubGlobal("XMLHttpRequest", FakeXMLHttpRequest);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({
+        ...initiatePayload(), max_attempts: 1, part_count: 1, parts: [part(1)],
+      }))
+      .mockResolvedValueOnce(jsonResponse({ status: "aborted" }, status));
+    const error = await createAnalysis(new File(["abc"], "match.mp4")).catch((e: unknown) => e);
+    expect(error instanceof TerminalUploadError).toBe(status === 200);
+    expect(error).toMatchObject({ code: "upload_part_failed" });
+  });
+
+  it("cancels a known session even if cancellation arrives with initiation", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async () => {
+        controller.abort();
+        return jsonResponse(initiatePayload());
+      })
+      .mockResolvedValueOnce(jsonResponse({ status: "aborted" }));
+    await expect(createAnalysis(new File(["abcdef"], "match.mp4"), undefined, {
+      signal: controller.signal,
+    })).rejects.toBeInstanceOf(TerminalUploadError);
+    expect(fetchMock.mock.calls.at(-1)?.[1]?.method).toBe("DELETE");
+    expect(FakeXMLHttpRequest.openedUrls).toHaveLength(0);
+  });
+
+  it("retains retry ambiguity when the initiation response is lost", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("offline"));
+    const error = await createAnalysis(new File(["abc"], "match.mp4")).catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(TerminalUploadError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops sibling transfers before attempting session cleanup", async () => {
+    FakeXMLHttpRequest.outcomes = [{ status: 503 }, { status: 200, hold: true }];
+    vi.stubGlobal("XMLHttpRequest", FakeXMLHttpRequest);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ ...initiatePayload(), max_attempts: 1, max_concurrency: 2 }))
+      .mockImplementationOnce(async () => {
+        expect(FakeXMLHttpRequest.abortCount).toBe(1);
+        return jsonResponse({ status: "aborted" });
+      });
+    await expect(createAnalysis(new File(["abcdef"], "match.mp4")))
+      .rejects.toBeInstanceOf(TerminalUploadError);
+    expect(FakeXMLHttpRequest.openedUrls).toHaveLength(2);
+  });
 });
 
 function initiatePayload() {
@@ -123,11 +173,12 @@ function jsonResponse(payload: unknown, status = 200): Response {
   });
 }
 
-type XhrOutcome = { status: number; etag?: string };
+type XhrOutcome = { status: number; etag?: string; hold?: boolean };
 
 class FakeXMLHttpRequest extends EventTarget {
   static outcomes: XhrOutcome[] = [];
   static openedUrls: string[] = [];
+  static abortCount = 0;
 
   readonly upload = new EventTarget();
   status = 0;
@@ -144,6 +195,7 @@ class FakeXMLHttpRequest extends EventTarget {
   send(body: Blob): void {
     this.outcome = FakeXMLHttpRequest.outcomes.shift();
     if (!this.outcome) throw new Error("Missing fake XHR outcome");
+    if (this.outcome.hold) return;
     queueMicrotask(() => {
       this.upload.dispatchEvent(
         new ProgressEvent("progress", { lengthComputable: true, loaded: body.size, total: body.size }),
@@ -155,6 +207,7 @@ class FakeXMLHttpRequest extends EventTarget {
   }
 
   abort(): void {
+    FakeXMLHttpRequest.abortCount += 1;
     this.dispatchEvent(new Event("abort"));
     this.dispatchEvent(new Event("loadend"));
   }

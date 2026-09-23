@@ -244,6 +244,7 @@ export function makeRecordingQuality(
 
 export function makeJob(overrides: Partial<AnalysisJob> = {}): AnalysisJob {
   return {
+    source_media_state: "available",
     analysis_id: "analysis-123",
     sport: "pickleball",
     status: "processing",

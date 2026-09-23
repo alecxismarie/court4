@@ -63,26 +63,26 @@ def reconcile_expired_multipart_uploads(
     failed: list[str] = []
     for snapshot in records:
         try:
-            storage.abort_multipart_upload(
-                key=snapshot.storage_key,
-                upload_id=snapshot.provider_upload_id,
-            )
+            changed = _mark_aborted(snapshot.id, now, storage)
         except ObjectStorageError:
             failed.append(str(snapshot.id))
             continue
-        if _mark_aborted(snapshot.id, now):
+        if changed:
             aborted.append(str(snapshot.id))
     return MultipartReconciliationReport("abort", candidates, tuple(aborted), tuple(failed))
 
 
-def _mark_aborted(upload_session_id: UUID, now: datetime) -> bool:
+def _mark_aborted(upload_session_id: UUID, now: datetime, storage: MultipartObjectStorage) -> bool:
     runtime = get_persistence()
     with runtime.session_factory.begin() as session:
         record = session.scalar(
             select(UploadSession).where(UploadSession.id == upload_session_id).with_for_update()
         )
-        if record is None or record.status not in RECONCILABLE_STATES:
+        if record is None or record.status not in RECONCILABLE_STATES or record.expires_at > now:
             return False
+        # Recheck and retain the lock through provider abort: an earlier snapshot
+        # must never abort a session that has since started completion.
+        storage.abort_multipart_upload(key=record.storage_key, upload_id=record.provider_upload_id)
         record.status = "aborted"
         record.failure_reason = "expired_session_reconciled"
         record.aborted_at = now

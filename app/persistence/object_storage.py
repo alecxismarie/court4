@@ -5,13 +5,32 @@ import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Protocol
+from typing import BinaryIO, Protocol, cast
 from uuid import UUID
 
 from app.config.settings import Settings
 from app.persistence.errors import PersistenceConfigurationError
 
 logger = logging.getLogger(__name__)
+
+
+def stream_file_identity(stream: BinaryIO) -> str:
+    """Versioned whole-file commitment; fixed 8 MiB chunks, bounded memory."""
+    root = hashlib.sha256(b"court4-file-v1\n")
+    size = 0
+    while True:
+        chunk = bytearray()
+        while len(chunk) < 8_388_608:
+            block = stream.read(8_388_608 - len(chunk))
+            if not block:
+                break
+            chunk.extend(block)
+        if not chunk:
+            break
+        size += len(chunk)
+        root.update(hashlib.sha256(chunk).digest())
+    root.update(f"\n{size}".encode())
+    return f"sha256-chunks-v1:{root.hexdigest()}"
 
 
 class ObjectStorageError(RuntimeError):
@@ -40,6 +59,13 @@ class UploadObjectMetadata:
     provider_version: str | None = None
 
 
+@dataclass(frozen=True)
+class MultipartPart:
+    part_number: int
+    etag: str
+    size_bytes: int
+
+
 class ObjectStorage(Protocol):
     @property
     def provider(self) -> str: ...
@@ -65,6 +91,10 @@ class ObjectStorage(Protocol):
 
 
 class MultipartObjectStorage(ObjectStorage, Protocol):
+    def calculate_file_identity(self, *, key: str) -> str: ...
+
+    def list_multipart_parts(self, *, key: str, upload_id: str) -> list[MultipartPart]: ...
+
     def initiate_multipart_upload(
         self,
         *,
@@ -141,6 +171,12 @@ def build_object_storage(settings: Settings) -> ObjectStorage:
 class LocalObjectStorage:
     root: Path
     provider: str = "local"
+
+    def list_multipart_parts(self, *, key: str, upload_id: str) -> list[MultipartPart]:
+        raise ObjectStorageError("Local storage does not support multipart uploads.")
+
+    def calculate_file_identity(self, *, key: str) -> str:
+        raise ObjectStorageError("Local storage does not support multipart recovery.")
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "root", self.root.expanduser().resolve())
@@ -269,6 +305,50 @@ class LocalObjectStorage:
 
 class S3ObjectStorage:
     provider = "s3"
+
+    def calculate_file_identity(self, *, key: str) -> str:
+        response = self._call("get_object", Bucket=self._bucket, Key=validate_object_key(key))
+        if not isinstance(response, dict) or response.get("Body") is None:
+            raise ObjectStorageError("Object storage returned an invalid object stream.")
+        body = response["Body"]
+        try:
+            return stream_file_identity(cast(BinaryIO, body))
+        except Exception as exc:
+            raise ObjectStorageError("Private object storage verification failed.") from exc
+        finally:
+            body.close()
+
+    def list_multipart_parts(self, *, key: str, upload_id: str) -> list[MultipartPart]:
+        parts: list[MultipartPart] = []
+        marker = 0
+        # S3 permits at most 10,000 parts. Bound pagination even for a broken provider.
+        for _ in range(11):
+            response = self._call(
+                "list_parts",
+                Bucket=self._bucket,
+                Key=validate_object_key(key),
+                UploadId=upload_id,
+                PartNumberMarker=marker,
+                MaxParts=1000,
+            )
+            if not isinstance(response, dict):
+                raise ObjectStorageError("Object storage returned invalid part metadata.")
+            try:
+                for part in response.get("Parts", []):
+                    parts.append(
+                        MultipartPart(int(part["PartNumber"]), str(part["ETag"]), int(part["Size"]))
+                    )
+                if len(parts) > 10_000:
+                    break
+                if not response.get("IsTruncated"):
+                    return parts
+                next_marker = int(response["NextPartNumberMarker"])
+                if next_marker <= marker:
+                    break
+                marker = next_marker
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ObjectStorageError("Object storage returned invalid part metadata.") from exc
+        raise ObjectStorageError("Object storage returned invalid part pagination.")
 
     def __init__(self, *, client: object, bucket: str) -> None:
         self._client = client

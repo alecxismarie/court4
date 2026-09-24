@@ -17,6 +17,7 @@ class InitiateUploadRequest(BaseModel):
     sport: SportType = SportType.PICKLEBALL
     reanalyze: bool = False
     expected_sha256: str | None = None
+    file_identity: str | None = Field(default=None, pattern=r"^sha256-chunks-v1:[0-9a-f]{64}$")
     client_metadata: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("expected_sha256")
@@ -42,12 +43,14 @@ class InitiateUploadResponse(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     transport: Literal["direct", "proxy"]
+    resumed: bool = False
     upload_session_id: UUID | None = None
     status: str
     part_size: int | None = None
     part_count: int | None = None
     max_concurrency: int
     max_attempts: int
+    inactivity_seconds: int = 60
     expires_at: datetime | None = None
     parts: list[PresignedUploadPart] = Field(default_factory=list)
 
@@ -91,6 +94,31 @@ class CompleteUploadRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     parts: list[CompletedUploadPart] = Field(min_length=1, max_length=10_000)
+
+
+class StoredUploadPart(CompletedUploadPart):
+    size_bytes: int = Field(gt=0)
+
+
+class ResumeUploadRequest(BaseModel):
+    file_identity: str = Field(pattern=r"^sha256-chunks-v1:[0-9a-f]{64}$")
+    byte_size: int = Field(gt=0)
+
+
+class UploadRecoveryResponse(BaseModel):
+    upload_session_id: UUID
+    status: str
+    filename: str
+    byte_size: int
+    sport: SportType
+    file_identity: str | None
+    part_size: int
+    part_count: int
+    completed_parts: list[StoredUploadPart]
+    max_concurrency: int
+    max_attempts: int
+    inactivity_seconds: int
+    expires_at: datetime
 
 
 class UploadSessionResponse(BaseModel):

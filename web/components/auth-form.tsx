@@ -7,7 +7,7 @@ import { type FormEvent, useState } from "react";
 import { normalizeApiError } from "@/lib/api/client";
 import { useAuth } from "@/lib/auth-context";
 
-export function AuthForm({ mode }: { mode: "login" | "register" }) {
+export function AuthForm({ mode, returnTo }: { mode: "login" | "register"; returnTo?: string }) {
   const auth = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -23,7 +23,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
     setError(null);
     try {
       const user = await auth[mode](email, password);
-      const requested = searchParams.get("next");
+      const requested = returnTo ?? searchParams.get("next");
       const destination = isRegister || !user.email_verified_at
         ? "/verification-pending"
         : requested?.startsWith("/") && !requested.startsWith("//")

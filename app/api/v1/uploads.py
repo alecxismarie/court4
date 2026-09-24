@@ -11,8 +11,10 @@ from app.schemas.uploads import (
     CompleteUploadRequest,
     InitiateUploadRequest,
     InitiateUploadResponse,
+    ResumeUploadRequest,
     UploadPartUrlRequest,
     UploadPartUrlResponse,
+    UploadRecoveryResponse,
     UploadSessionResponse,
 )
 from app.services.uploads import DirectUploadService
@@ -56,6 +58,45 @@ def initiate_upload(
         owner_user_id=user.id,
         request=request,
         idempotency_key=idempotency_key,
+    )
+
+
+@router.get("/recoverable", response_model=list[UploadRecoveryResponse], responses=ERROR_RESPONSES)
+def discover_uploads(
+    user: VerifiedUser, service: UploadServiceDependency, response: Response
+) -> list[UploadRecoveryResponse]:
+    response.headers["Cache-Control"] = "no-store"
+    return service.discover(owner_user_id=user.id)
+
+
+@router.get(
+    "/{upload_session_id}/recovery",
+    response_model=UploadRecoveryResponse,
+    responses=ERROR_RESPONSES,
+)
+def recover_upload(
+    upload_session_id: UUID,
+    user: VerifiedUser,
+    service: UploadServiceDependency,
+    response: Response,
+) -> UploadRecoveryResponse:
+    response.headers["Cache-Control"] = "no-store"
+    return service.recovery(owner_user_id=user.id, upload_session_id=upload_session_id)
+
+
+@router.post(
+    "/{upload_session_id}/resume", response_model=UploadRecoveryResponse, responses=ERROR_RESPONSES
+)
+def resume_upload(
+    upload_session_id: UUID,
+    request: ResumeUploadRequest,
+    user: VerifiedUser,
+    service: UploadServiceDependency,
+    response: Response,
+) -> UploadRecoveryResponse:
+    response.headers["Cache-Control"] = "no-store"
+    return service.recovery(
+        owner_user_id=user.id, upload_session_id=upload_session_id, resume=request
     )
 
 

@@ -37,6 +37,45 @@ OWNER_A = UUID("11111111-1111-4111-8111-111111111111")
 OWNER_B = UUID("22222222-2222-4222-8222-222222222222")
 
 
+def test_s3_part_reconciliation_paginates_without_changing_storage() -> None:
+    calls: list[dict[str, object]] = []
+
+    class Client:
+        def list_parts(self, **kwargs: object) -> dict[str, object]:
+            calls.append(kwargs)
+            marker = kwargs["PartNumberMarker"]
+            if marker == 0:
+                return {
+                    "Parts": [{"PartNumber": 1, "ETag": '"one"', "Size": 8_388_608}],
+                    "IsTruncated": True,
+                    "NextPartNumberMarker": 1,
+                }
+            assert marker == 1
+            return {"Parts": [{"PartNumber": 2, "ETag": '"two"', "Size": 1}], "IsTruncated": False}
+
+    parts = S3ObjectStorage(client=Client(), bucket="private").list_multipart_parts(
+        key="users/owner/video.mp4", upload_id="private-upload"
+    )
+    assert [p.part_number for p in parts] == [1, 2]
+    assert sum(p.size_bytes for p in parts) == 8_388_609
+    assert len(calls) == 2 and all(c["MaxParts"] == 1000 for c in calls)
+
+
+def test_s3_part_reconciliation_rejects_nonadvancing_pagination() -> None:
+    class Client:
+        def list_parts(self, **kwargs: object) -> dict[str, object]:
+            return {
+                "Parts": [],
+                "IsTruncated": True,
+                "NextPartNumberMarker": kwargs["PartNumberMarker"],
+            }
+
+    with pytest.raises(ObjectStorageError, match="pagination"):
+        S3ObjectStorage(client=Client(), bucket="private").list_multipart_parts(
+            key="users/owner/video.mp4", upload_id="private-upload"
+        )
+
+
 def test_object_keys_are_deterministic_owner_scoped_and_attempt_safe() -> None:
     checksum = hashlib.sha256(b"artifact").hexdigest()
     source = source_object_key(OWNER_A, "analysis-1", ".MP4")
@@ -170,6 +209,13 @@ def test_s3_multipart_contract_presigns_completes_streams_and_aborts() -> None:
     )
     head = storage.head_upload(key=key)
     checksum = storage.calculate_sha256(key=key, chunk_size=4)
+    identity = storage.calculate_file_identity(key=key)
+    expected_identity = hashlib.sha256(
+        b"court4-file-v1\n"
+        + hashlib.sha256(client.multipart_data).digest()
+        + f"\n{len(client.multipart_data)}".encode()
+    ).hexdigest()
+    assert identity == "sha256-chunks-v1:" + expected_identity
     verified = storage.set_verified_checksum(key=key, checksum_sha256=checksum)
 
     assert url == "https://private.test/upload-part"

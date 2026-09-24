@@ -126,6 +126,7 @@ class Settings(BaseSettings):
     direct_upload_part_size_bytes: PositiveInt = Field(default=8_388_608, ge=5_242_880)
     direct_upload_max_concurrency: PositiveInt = Field(default=3, le=8)
     direct_upload_part_max_attempts: PositiveInt = Field(default=3, le=8)
+    direct_upload_part_inactivity_seconds: PositiveInt = Field(default=60, ge=10, le=300)
     direct_upload_presign_ttl_seconds: PositiveInt = Field(default=900, le=3600)
     direct_upload_session_ttl_seconds: PositiveInt = Field(default=21_600, le=86_400)
     direct_upload_verification_lease_seconds: PositiveInt = Field(default=1_800, le=7_200)

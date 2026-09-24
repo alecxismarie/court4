@@ -5,6 +5,7 @@ import { type ReactNode, useEffect } from "react";
 
 import { useAuth } from "@/lib/auth-context";
 import { landingAuthHref } from "@/lib/auth-redirect";
+import { AuthForm } from "@/components/auth-form";
 
 const PUBLIC_PATHS = new Set([
   "/",
@@ -30,6 +31,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (loading || isPublic) return;
     if (!user) {
+      if (pathname === "/upload-match") return;
       if (isVerificationPending) {
         router.replace("/");
         return;
@@ -49,6 +51,15 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, [isPublic, isVerificationPending, isVerified, loading, pathname, router, searchParams, user]);
 
   if (isPublic) return children;
+  if (!loading && !user && pathname === "/upload-match") {
+    return <section>
+      <div className="mx-auto max-w-xl p-6" role="status">
+        <h1 className="text-2xl font-semibold">Sign in again to continue</h1>
+        <p>Any uploaded parts are preserved until the upload expires. After signing in, you can recover your upload or cancel it.</p>
+      </div>
+      <AuthForm mode="login" returnTo="/upload-match" />
+    </section>;
+  }
   if (
     loading ||
     !user ||

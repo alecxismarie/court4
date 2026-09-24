@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { UploadDropzone, type UploadAnalysisFn } from "@/components/upload-dropzone";
 import { TerminalUploadError } from "@/lib/api/analyses";
+import { Court4ApiError } from "@/lib/api/client";
 import type { DuplicateUploadResponse, UploadAnalysisResponse } from "@/lib/api/types";
 import { makeJob } from "@/test/factories";
 import { renderWithQueryClient } from "@/test/render";
@@ -256,7 +257,7 @@ describe("upload dropzone", () => {
     const uploadAnalysis = vi.fn<UploadAnalysisFn>((_file, _progress, options) =>
       new Promise((_resolve, reject) => {
         options?.signal?.addEventListener("abort", () => reject(
-          new TerminalUploadError("Upload was canceled.", { code: "upload_canceled" }),
+          new Court4ApiError("Upload was canceled.", { code: "upload_canceled" }),
         ));
       }),
     );
@@ -270,6 +271,90 @@ describe("upload dropzone", () => {
     await user.click(screen.getByRole("button", { name: "Reset" }));
     expect(screen.queryByText("match.mp4")).not.toBeInTheDocument();
   });
+
+  it.each(["success", "success with retry failure", "network failure", "server failure"])(
+    "preserves the correct session and initiation key after cancellation: %s",
+    async (outcome) => {
+      const user = userEvent.setup();
+      const sessionId = "8b2ee1d1-3176-4a9e-a643-66559d667e47";
+      const onUploadComplete = vi.fn();
+      const onInterrupted = vi.fn();
+      const canceled = outcome.startsWith("success");
+      const uploadAnalysis = vi.fn<UploadAnalysisFn>()
+        .mockImplementationOnce((_file, _progress, options) => {
+          options?.onSession?.(sessionId);
+          return new Promise((_resolve, reject) => {
+            options?.signal?.addEventListener("abort", () => reject(
+              new Court4ApiError("Upload was canceled.", { code: "upload_canceled" }),
+            ));
+          });
+        })
+        // An ambiguous retry must keep the existing session reference too.
+        .mockImplementationOnce(async () => {
+          if (outcome === "success") return makeJob();
+          throw new TypeError("offline");
+        })
+        .mockResolvedValueOnce(makeJob());
+      const fetchMock = vi.spyOn(globalThis, "fetch");
+      if (outcome === "network failure") {
+        fetchMock.mockRejectedValue(new TypeError("offline"));
+      } else {
+        fetchMock.mockImplementation(async () => new Response(null, {
+          status: canceled ? 204 : 503,
+        }));
+      }
+      renderWithQueryClient(
+        <UploadDropzone
+          uploadAnalysis={uploadAnalysis}
+          onUploadComplete={onUploadComplete}
+          onInterrupted={onInterrupted}
+        />,
+      );
+      await user.upload(screen.getByLabelText("Match video file"), new File(["video"], "match.mp4"));
+      await user.click(screen.getByRole("button", { name: /upload selected video/i }));
+      await user.click(await screen.findByRole("button", { name: "Cancel upload" }));
+      await waitFor(() => expect(onInterrupted).toHaveBeenCalled());
+      await waitFor(() => expect(screen.getByRole("button", {
+        name: /upload selected video/i,
+      })).toBeEnabled());
+      onInterrupted.mockClear();
+      expect(fetchMock).toHaveBeenCalledWith(
+        `http://localhost:8000/api/v1/uploads/${sessionId}`,
+        expect.objectContaining({ method: "DELETE" }),
+      );
+      expect(uploadAnalysis.mock.calls[0][2]?.signal?.aborted).toBe(true);
+
+      // Submit immediately, without Reset, reselection, or remounting.
+      await user.click(screen.getByRole("button", { name: /upload selected video/i }));
+      if (outcome === "success") {
+        await waitFor(() => expect(onUploadComplete).toHaveBeenCalledWith(makeJob()));
+      } else {
+        await screen.findByText("Court4 backend is unavailable.");
+      }
+      const firstKey = uploadAnalysis.mock.calls[0][2]?.idempotencyKey;
+      const nextKey = uploadAnalysis.mock.calls[1][2]?.idempotencyKey;
+      expect(firstKey).toEqual(expect.any(String));
+      expect(nextKey).toEqual(expect.any(String));
+      if (canceled) {
+        expect(nextKey).not.toBe(firstKey);
+        // No session callback on retry: interruption here would expose a stale ref.
+        expect(onInterrupted).not.toHaveBeenCalled();
+        if (outcome === "success with retry failure") {
+          await user.click(screen.getByRole("button", { name: /upload selected video/i }));
+          await waitFor(() => expect(onUploadComplete).toHaveBeenCalledWith(makeJob()));
+          expect(uploadAnalysis.mock.calls[2][2]?.idempotencyKey).toBe(nextKey);
+        }
+      } else {
+        expect(nextKey).toBe(firstKey);
+        expect(onInterrupted).toHaveBeenCalledTimes(1);
+        // A failed cancellation must still target the original session on Reset.
+        await user.click(screen.getByRole("button", { name: "Reset" }));
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        expect(fetchMock.mock.calls[1][0]).toBe(fetchMock.mock.calls[0][0]);
+        expect(screen.getByText("match.mp4")).toBeInTheDocument();
+      }
+    },
+  );
 
   it.each(["reset", "replacement"])("%s retries abort of a known session", async (action) => {
     const user = userEvent.setup();

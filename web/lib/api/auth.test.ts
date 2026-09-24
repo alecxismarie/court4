@@ -55,7 +55,7 @@ describe("authentication API client", () => {
       user,
     });
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:8000/api/v1/auth/register",
+      "http://localhost:3000/api/v1/auth/register",
       expect.objectContaining({ credentials: "include", method: "POST" }),
     );
     expect(getAccessToken()).toBe("memory-only-token");
@@ -144,9 +144,9 @@ describe("authentication API client", () => {
     });
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
-      "http://localhost:8000/api/v1/auth/resend-verification",
-      "http://localhost:8000/api/v1/auth/refresh",
-      "http://localhost:8000/api/v1/auth/resend-verification",
+      "http://localhost:3000/api/v1/auth/resend-verification",
+      "http://localhost:3000/api/v1/auth/refresh",
+      "http://localhost:3000/api/v1/auth/resend-verification",
     ]);
   });
 
@@ -197,7 +197,7 @@ describe("authentication API client", () => {
     );
     await logout();
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://localhost:8000/api/v1/auth/logout",
+      "http://localhost:3000/api/v1/auth/logout",
       expect.objectContaining({ credentials: "include", method: "POST" }),
     );
     expect(getAccessToken()).toBeNull();

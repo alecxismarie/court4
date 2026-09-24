@@ -38,6 +38,16 @@ describe("protected route gate", () => {
     );
   });
 
+  it("keeps the upload route available for reauthentication and recovery", () => {
+    navigationState.pathname = "/upload-match";
+    const view = render(<AuthGate>Recover upload</AuthGate>);
+    expect(screen.getByText("Sign in again to continue")).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalled();
+    authState.user = { email: "player@example.com", email_verified_at: "2026-09-24T00:00:00Z" };
+    view.rerender(<AuthGate>Recover upload</AuthGate>);
+    expect(screen.getByText("Recover upload")).toBeInTheDocument();
+  });
+
   it("renders protected content only for a verified authenticated user", () => {
     authState.user = {
       email: "player@example.com",

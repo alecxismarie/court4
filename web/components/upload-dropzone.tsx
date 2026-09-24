@@ -50,9 +50,11 @@ type UploadCommand = {
 export function UploadDropzone({
   uploadAnalysis = createAnalysis,
   onUploadComplete,
+  onInterrupted,
 }: {
   uploadAnalysis?: UploadAnalysisFn;
   onUploadComplete?: (job: AnalysisJob) => void;
+  onInterrupted?: () => void;
 }) {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -109,7 +111,10 @@ export function UploadDropzone({
     onError: (error) => {
       const normalized = normalizeApiError(error);
       setApiError(normalized.message);
-      setProgress(null);
+      if (!uploadSessionRef.current) setProgress(null);
+      if (!cleanupPendingRef.current && (uploadSessionRef.current || normalized.status === 429)) {
+        onInterrupted?.();
+      }
       // Preserve the key after an ambiguous network failure so retry can recover
       // a committed initiation. Only confirmed terminal sessions get a new key.
       if (error instanceof TerminalUploadError) {
@@ -135,6 +140,7 @@ export function UploadDropzone({
         return false;
       }
       uploadSessionRef.current = null;
+      uploadIdempotencyKeyRef.current = null;
       return true;
     } finally {
       cleanupPendingRef.current = false;
@@ -172,6 +178,8 @@ export function UploadDropzone({
   const reset = async () => {
     if (uploadMutation.isPending) {
       uploadAbortControllerRef.current?.abort();
+      await releasePreviousUpload();
+      onInterrupted?.();
       return;
     }
     if (!await releasePreviousUpload()) return;

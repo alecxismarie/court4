@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -18,10 +19,12 @@ from app.config.settings import Settings
 from app.main import create_app
 from app.persistence.models import Analysis, UploadedVideo, UploadSession, User
 from app.persistence.object_storage import (
+    MultipartPart,
     ObjectMetadata,
     ObjectNotFoundError,
     ObjectStorageError,
     UploadObjectMetadata,
+    stream_file_identity,
 )
 from app.persistence.runtime import get_persistence
 from app.schemas.uploads import CompletedUploadPart, CompleteUploadRequest, InitiateUploadRequest
@@ -451,9 +454,12 @@ def test_repeated_completion_returns_the_existing_result(
     initiated = client.post(
         "/api/v1/uploads/initiate",
         headers={"Idempotency-Key": "repeated-completion"},
-        json=_metadata(
-            filename="repeated.avi", content_type="video/x-msvideo", byte_size=len(data)
-        ),
+        json={
+            **_metadata(
+                filename="repeated.avi", content_type="video/x-msvideo", byte_size=len(data)
+            ),
+            "file_identity": stream_file_identity(io.BytesIO(data)),
+        },
     ).json()
     storage.completed_data = data
     completion_body = {"parts": [{"part_number": 1, "etag": '"etag"'}]}
@@ -658,6 +664,219 @@ def _direct_round_trip(
     )
 
 
+def test_recovery_reconciles_parts_and_preserves_admission(tmp_path: Path) -> None:
+    client, service, storage, owner = _client(tmp_path)
+    service.settings.storage_max_active_uploads = 1
+    identity = "sha256-chunks-v1:" + "a" * 64
+    metadata = {**_metadata(byte_size=8_388_609), "file_identity": identity}
+    initiated = client.post(
+        "/api/v1/uploads/initiate", headers={"Idempotency-Key": "recovery"}, json=metadata
+    ).json()
+    upload_id = initiated["upload_session_id"]
+    storage.uploads[f"upload-{upload_id}"]["parts"] = [MultipartPart(1, '"first"', 8_388_608)]
+    recovered = client.get("/api/v1/uploads/recoverable")
+    assert recovered.status_code == 200
+    assert recovered.headers["Cache-Control"] == "no-store"
+    row = recovered.json()[0]
+    assert row["completed_parts"] == [
+        {"part_number": 1, "etag": '"first"', "size_bytes": 8_388_608}
+    ]
+    assert row["file_identity"] == identity
+    assert "provider_upload_id" not in row and "storage_key" not in row and "parts" not in row
+    resume = client.post(
+        f"/api/v1/uploads/{upload_id}/resume",
+        json={"file_identity": identity, "byte_size": 8_388_609},
+    )
+    assert resume.status_code == 200
+    assert resume.json()["completed_parts"] == row["completed_parts"]
+    repeated = client.post(
+        "/api/v1/uploads/initiate", headers={"Idempotency-Key": "recovery"}, json=metadata
+    )
+    assert repeated.status_code == 201 and repeated.json()["resumed"] is True
+    denied = client.post(
+        "/api/v1/uploads/initiate", headers={"Idempotency-Key": "new"}, json=metadata
+    )
+    assert denied.status_code == 429
+    assert len(service.discover(owner_user_id=owner)) == 1
+    assert client.delete(f"/api/v1/uploads/{upload_id}").status_code == 200
+    assert client.get("/api/v1/uploads/recoverable").json() == []
+    assert (
+        client.post(
+            "/api/v1/uploads/initiate", headers={"Idempotency-Key": "new"}, json=metadata
+        ).status_code
+        == 201
+    )
+
+
+@pytest.mark.parametrize("mismatch", ["content", "size", "legacy"])
+def test_resume_rejects_wrong_file_without_touching_parts(tmp_path: Path, mismatch: str) -> None:
+    client, _service, storage, _owner = _client(tmp_path)
+    identity = "sha256-chunks-v1:" + "a" * 64
+    metadata = _metadata()
+    if mismatch != "legacy":
+        metadata["file_identity"] = identity
+    initiated = client.post(
+        "/api/v1/uploads/initiate", headers={"Idempotency-Key": "wrong-file"}, json=metadata
+    ).json()
+    upload_id = initiated["upload_session_id"]
+    response = client.post(
+        f"/api/v1/uploads/{upload_id}/resume",
+        json={
+            "file_identity": "sha256-chunks-v1:" + "b" * 64 if mismatch == "content" else identity,
+            "byte_size": 999 if mismatch == "size" else 1000,
+        },
+    )
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "upload_file_mismatch"
+    assert len(storage.uploads) == 1
+    assert storage.completion_calls == 0
+
+
+def test_recovery_owner_isolation_and_reauthentication(tmp_path: Path) -> None:
+    client, _service, storage, _owner = _client(tmp_path)
+    initiated = client.post(
+        "/api/v1/uploads/initiate", headers={"Idempotency-Key": "private"}, json=_metadata()
+    ).json()
+    upload_id = initiated["upload_session_id"]
+    client.headers.pop("Authorization")
+    assert client.get("/api/v1/uploads/recoverable").status_code == 401
+    other_token = _register_verified_user(client, "recovery-other@example.com")
+    client.headers["Authorization"] = f"Bearer {other_token}"
+    assert client.get("/api/v1/uploads/recoverable").json() == []
+    assert client.get(f"/api/v1/uploads/{upload_id}/recovery").status_code == 404
+    assert (
+        client.post(
+            f"/api/v1/uploads/{upload_id}/resume",
+            json={"file_identity": "sha256-chunks-v1:" + "a" * 64, "byte_size": 1000},
+        ).status_code
+        == 404
+    )
+    login = client.post(
+        "/api/v1/auth/login",
+        json={
+            "email": "direct-upload@example.com",
+            "password": "a sufficiently long password",
+        },
+    )
+    assert login.status_code == 200
+    client.headers["Authorization"] = f"Bearer {login.json()['access_token']}"
+    assert client.get("/api/v1/uploads/recoverable").json()[0]["upload_session_id"] == upload_id
+    assert len(storage.uploads) == 1
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        [MultipartPart(2, '"wrong-number"', 1000)],
+        [MultipartPart(1, '"wrong-size"', 999)],
+        [MultipartPart(1, "bad\nreceipt", 1000)],
+        [MultipartPart(1, '"one"', 1000), MultipartPart(1, '"duplicate"', 1000)],
+    ],
+)
+def test_recovery_rejects_invalid_provider_parts(
+    tmp_path: Path, parts: list[MultipartPart]
+) -> None:
+    client, _service, storage, _owner = _client(tmp_path)
+    initiated = client.post(
+        "/api/v1/uploads/initiate", headers={"Idempotency-Key": "bad-provider"}, json=_metadata()
+    ).json()
+    upload_id = initiated["upload_session_id"]
+    storage.uploads[f"upload-{upload_id}"]["parts"] = parts
+    response = client.get(f"/api/v1/uploads/{upload_id}/recovery")
+    assert response.status_code == 503
+    assert (
+        response.json()["error"]["message"] == "Uploaded parts could not be checked. Please retry."
+    )
+    assert len(storage.uploads) == 1
+
+
+def test_recovery_does_not_expire_or_destroy_provider_state(tmp_path: Path) -> None:
+    client, _service, storage, _owner = _client(tmp_path)
+    initiated = client.post(
+        "/api/v1/uploads/initiate",
+        headers={"Idempotency-Key": "expired-recovery"},
+        json=_metadata(),
+    ).json()
+    upload_id = UUID(initiated["upload_session_id"])
+    storage.uploads[f"upload-{upload_id}"]["parts"] = [MultipartPart(1, '"received"', 1000)]
+    with get_persistence().session_factory.begin() as session:
+        record = session.get(UploadSession, upload_id)
+        assert record is not None
+        record.expires_at = datetime.now(tz=UTC) - timedelta(seconds=1)
+    snapshot = client.get("/api/v1/uploads/recoverable").json()[0]
+    assert snapshot["status"] == "expired"
+    assert snapshot["completed_parts"][0]["size_bytes"] == 1000
+    assert len(storage.uploads) == 1
+    with get_persistence().session_factory() as session:
+        record = session.get(UploadSession, upload_id)
+        assert record is not None and record.status == "initiated"
+
+
+def test_recovery_and_cancel_cannot_interrupt_committed_completion(tmp_path: Path) -> None:
+    _client_instance, service, storage, owner = _client(tmp_path)
+    initiated = service.initiate(
+        owner_user_id=owner,
+        request=InitiateUploadRequest.model_validate(_metadata(byte_size=4)),
+        idempotency_key="recovery-race",
+    )
+    assert initiated.upload_session_id is not None
+    storage.completed_data = b"data"
+    storage.block_completion = True
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            service.complete,
+            owner_user_id=owner,
+            upload_session_id=initiated.upload_session_id,
+            request=CompleteUploadRequest(
+                parts=[CompletedUploadPart(part_number=1, etag='"etag"')]
+            ),
+        )
+        assert storage.completion_entered.wait(timeout=5)
+        try:
+            snapshot = service.recovery(
+                owner_user_id=owner, upload_session_id=initiated.upload_session_id
+            )
+            assert snapshot.status == "completing"
+            with pytest.raises(JobConflictError):
+                service.abort(owner_user_id=owner, upload_session_id=initiated.upload_session_id)
+        finally:
+            storage.completion_release.set()
+        assert future.result(timeout=5).status == "verifying"
+    assert storage.completion_calls == 1 and len(storage.uploads) == 1
+
+
+def test_content_identity_checked_before_analysis(tmp_path: Path) -> None:
+    client, _service, storage, _owner = _client(tmp_path)
+    initiated = client.post(
+        "/api/v1/uploads/initiate",
+        headers={"Idempotency-Key": "identity-mismatch"},
+        json={**_metadata(byte_size=4), "file_identity": stream_file_identity(io.BytesIO(b"good"))},
+    ).json()
+    storage.completed_data = b"evil"
+    client.post(
+        f"/api/v1/uploads/{initiated['upload_session_id']}/complete",
+        json={"parts": [{"part_number": 1, "etag": '"etag"'}]},
+    )
+    status = client.get(f"/api/v1/uploads/{initiated['upload_session_id']}").json()
+    assert status["status"] == "failed" and status["failure_code"] == "checksum_mismatch"
+
+
+def test_file_identity_covers_every_byte_and_short_reads() -> None:
+    class ShortReads(io.BytesIO):
+        def read(self, size: int | None = -1) -> bytes:
+            return super().read(min(size or 8192, 8192))
+
+    data = b"x" * 8_388_608 + b"last"
+    expected = hashlib.sha256(
+        b"court4-file-v1\n"
+        + hashlib.sha256(data[:8_388_608]).digest()
+        + hashlib.sha256(b"last").digest()
+        + b"\n8388612"
+    ).hexdigest()
+    assert stream_file_identity(ShortReads(data)) == "sha256-chunks-v1:" + expected
+    assert stream_file_identity(io.BytesIO(data[:-1] + b"!")) != "sha256-chunks-v1:" + expected
+
+
 def _metadata(
     *,
     filename: str = "match.mp4",
@@ -736,6 +955,14 @@ class FakeMultipartStorage:
 
     def ready(self) -> bool:
         return True
+
+    def list_multipart_parts(self, *, key: str, upload_id: str) -> list[MultipartPart]:
+        upload = self.uploads[upload_id]
+        assert upload["key"] == key
+        return cast(list[MultipartPart], upload.get("parts", []))
+
+    def calculate_file_identity(self, *, key: str) -> str:
+        return stream_file_identity(io.BytesIO(self.objects[key]["data"]))
 
     def initiate_multipart_upload(
         self,

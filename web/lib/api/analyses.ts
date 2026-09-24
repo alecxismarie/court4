@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { fileIdentity } from "@/lib/file-identity";
 
 import {
   Court4ApiError,
@@ -42,20 +43,33 @@ import {
   trackingResponseSchema,
   uploadPartUrlResponseSchema,
   uploadSessionResponseSchema,
+  uploadRecoverySchema,
+  type UploadRecovery,
 } from "@/lib/api/types";
 
 export class TerminalUploadError extends Court4ApiError {}
 
+export type UploadOptions = {
+  idempotencyKey?: string;
+  reanalyze?: boolean;
+  sport?: SportType;
+  signal?: AbortSignal;
+  onSession?: (sessionId: string) => void;
+  resumeSessionId?: string;
+};
+
+export function discoverUploads(): Promise<UploadRecovery[]> {
+  return requestJson("/api/v1/uploads/recoverable", z.array(uploadRecoverySchema));
+}
+
+export function recoverUpload(sessionId: string): Promise<UploadRecovery> {
+  return requestJson(`/api/v1/uploads/${encodeURIComponent(sessionId)}/recovery`, uploadRecoverySchema);
+}
+
 export function createAnalysis(
   file: File,
   onProgress?: (progress: UploadProgress) => void,
-  options?: {
-    idempotencyKey?: string;
-    reanalyze?: boolean;
-    sport?: SportType;
-    signal?: AbortSignal;
-    onSession?: (sessionId: string) => void;
-  },
+  options?: UploadOptions,
 ): Promise<UploadAnalysisResponse> {
   return createAnalysisDirect(file, onProgress, options);
 }
@@ -63,16 +77,16 @@ export function createAnalysis(
 async function createAnalysisDirect(
   file: File,
   onProgress?: (progress: UploadProgress) => void,
-  options?: {
-    idempotencyKey?: string;
-    reanalyze?: boolean;
-    sport?: SportType;
-    signal?: AbortSignal;
-    onSession?: (sessionId: string) => void;
-  },
+  options?: UploadOptions,
 ): Promise<UploadAnalysisResponse> {
   const idempotencyKey = options?.idempotencyKey ?? crypto.randomUUID();
   throwIfAborted(options?.signal);
+  const identity = await fileIdentity(file, options?.signal);
+  if (options?.resumeSessionId) {
+    const recovery = await postJson(`/api/v1/uploads/${encodeURIComponent(options.resumeSessionId)}/resume`,
+      uploadRecoverySchema, { file_identity: identity, byte_size: file.size });
+    return resumeTransfer(file, recovery, onProgress, options);
+  }
   const initiatedResponse = await authenticatedFetch(toApiUrl("/api/v1/uploads/initiate"), {
     method: "POST",
     headers: {
@@ -86,6 +100,7 @@ async function createAnalysisDirect(
       byte_size: file.size,
       sport: options?.sport ?? "pickleball",
       reanalyze: options?.reanalyze ?? false,
+      file_identity: identity,
     }),
     signal: options?.signal,
   });
@@ -104,6 +119,10 @@ async function createAnalysisDirect(
 
   const sessionId = initiated.upload_session_id;
   options?.onSession?.(sessionId);
+  if (initiated.resumed) {
+    const recovery = await recoverUpload(sessionId);
+    return resumeTransfer(file, recovery, onProgress, options);
+  }
   if (initiated.status === "completed") {
     return waitForUploadResult(sessionId, file, onProgress, options?.signal);
   }
@@ -111,6 +130,24 @@ async function createAnalysisDirect(
     return waitForUploadResult(sessionId, file, onProgress, options?.signal);
   }
 
+  return transferDirect(file, sessionId, initiated.parts, [], initiated.part_size,
+    initiated.max_concurrency, initiated.max_attempts, initiated.inactivity_seconds, onProgress, options);
+}
+
+function resumeTransfer(file: File, recovery: UploadRecovery, onProgress?: (p: UploadProgress) => void, options?: UploadOptions) {
+  options?.onSession?.(recovery.upload_session_id);
+  if (!["initiated", "uploading"].includes(recovery.status)) {
+    return waitForUploadResult(recovery.upload_session_id, file, onProgress, options?.signal);
+  }
+  return transferDirect(file, recovery.upload_session_id, [], recovery.completed_parts,
+    recovery.part_size, recovery.max_concurrency, recovery.max_attempts, recovery.inactivity_seconds,
+    onProgress, options);
+}
+
+async function transferDirect(file: File, sessionId: string, initialParts: PresignedUploadPart[],
+  existingParts: CompletedPart[], partSize: number, concurrency: number, maxAttempts: number,
+  inactivitySeconds: number, onProgress?: (p: UploadProgress) => void, options?: UploadOptions,
+): Promise<UploadAnalysisResponse> {
   const transferController = new AbortController();
   const cancelTransfer = () => transferController.abort();
   options?.signal?.addEventListener("abort", cancelTransfer, { once: true });
@@ -119,26 +156,32 @@ async function createAnalysisDirect(
     const completedParts = await uploadParts({
       file,
       sessionId,
-      initialParts: initiated.parts,
-      partSize: initiated.part_size,
-      concurrency: initiated.max_concurrency,
-      maxAttempts: initiated.max_attempts,
+      initialParts, existingParts, partSize, concurrency, maxAttempts, inactivitySeconds,
       onProgress,
       signal: transferController.signal,
     });
-    onProgress?.({
-      loaded: file.size,
-      total: file.size,
-      percent: 100,
-      phase: "verifying",
-    });
+    return await completeDirectUpload(sessionId, completedParts, file.size, onProgress, options?.signal);
+  } catch (error) {
+    // Network/auth failures and unmounts pause transfers. Only an explicit user
+    // cancellation may destroy the durable session and its completed parts.
+    transferController.abort();
+    throw normalizeDirectUploadError(error);
+  } finally {
+    options?.signal?.removeEventListener("abort", cancelTransfer);
+  }
+}
+
+export async function completeDirectUpload(sessionId: string, completedParts: CompletedPart[],
+  byteSize: number, onProgress?: (p: UploadProgress) => void, signal?: AbortSignal,
+): Promise<UploadAnalysisResponse> {
+    onProgress?.({ loaded: byteSize, total: byteSize, percent: 100, phase: "verifying" });
     const completion = await authenticatedFetch(
       toApiUrl(`/api/v1/uploads/${encodeURIComponent(sessionId)}/complete`),
       {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify({ parts: completedParts }),
-        signal: options?.signal,
+        signal,
       },
     );
     if (!completion.ok) {
@@ -148,18 +191,7 @@ async function createAnalysisDirect(
     if (status.status === "completed" && status.result) {
       return status.result;
     }
-    return await waitForUploadResult(sessionId, file, onProgress, options?.signal);
-  } catch (error) {
-    transferController.abort();
-    const aborted = await abortDirectUpload(sessionId);
-    const normalized = normalizeDirectUploadError(error);
-    if (aborted) {
-      throw new TerminalUploadError(normalized.message, normalized);
-    }
-    throw normalized;
-  } finally {
-    options?.signal?.removeEventListener("abort", cancelTransfer);
-  }
+    return await waitForUploadResult(sessionId, { size: byteSize }, onProgress, signal);
 }
 
 function createAnalysisProxy(
@@ -254,6 +286,8 @@ async function uploadParts({
   file,
   sessionId,
   initialParts,
+  existingParts,
+  inactivitySeconds,
   partSize,
   concurrency,
   maxAttempts,
@@ -263,21 +297,20 @@ async function uploadParts({
   file: File;
   sessionId: string;
   initialParts: PresignedUploadPart[];
+  existingParts: CompletedPart[];
+  inactivitySeconds: number;
   partSize: number;
   concurrency: number;
   maxAttempts: number;
   onProgress?: (progress: UploadProgress) => void;
   signal?: AbortSignal;
 }): Promise<CompletedPart[]> {
-  const urls = new Map(initialParts.map((part) => [part.part_number, part.url]));
+  const urls = new Map(initialParts.map((part) => [part.part_number, part]));
   const partCount = Math.ceil(file.size / partSize);
-  if (urls.size !== partCount) {
-    throw new Court4ApiError("Court4 returned an incomplete multipart upload plan.", {
-      code: "missing_upload_part_url",
-    });
-  }
   const loadedByPart = new Map<number, number>();
-  const results: CompletedPart[] = [];
+  const results: CompletedPart[] = [...existingParts];
+  const completed = new Set(existingParts.map((p) => p.part_number));
+  for (const number of completed) loadedByPart.set(number, Math.min(partSize, file.size - (number - 1) * partSize));
   let nextPart = 1;
 
   const reportProgress = () => {
@@ -294,19 +327,22 @@ async function uploadParts({
   const worker = async () => {
     while (nextPart <= partCount) {
       const partNumber = nextPart++;
+      if (completed.has(partNumber)) continue;
       const start = (partNumber - 1) * partSize;
       const body = file.slice(start, Math.min(start + partSize, file.size));
       let lastError: unknown;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         throwIfAborted(signal);
         loadedByPart.set(partNumber, 0);
+        reportProgress();
         try {
-          let url = urls.get(partNumber);
-          if (!url || (attempt > 1 && isAuthorizationFailure(lastError))) {
-            url = await refreshPartUrl(sessionId, partNumber, signal);
-            urls.set(partNumber, url);
+          let part = urls.get(partNumber);
+          if (!part || Date.parse(part.expires_at) <= Date.now() + 30_000 ||
+              (attempt > 1 && isAuthorizationFailure(lastError))) {
+            part = await refreshPartUrl(sessionId, partNumber, signal);
+            urls.set(partNumber, part);
           }
-          const etag = await uploadPart(url, body, signal, (loaded) => {
+          const etag = await uploadPart(part.url, body, signal, inactivitySeconds, (loaded) => {
             loadedByPart.set(partNumber, loaded);
             reportProgress();
           });
@@ -317,6 +353,10 @@ async function uploadParts({
           break;
         } catch (error) {
           lastError = error;
+          loadedByPart.set(partNumber, 0);
+          reportProgress();
+          if (signal?.aborted || (error instanceof Court4ApiError && error.status === 401 &&
+              error.code !== "upload_part_failed")) throw error;
           if (attempt < maxAttempts) {
             await abortableDelay(250 * 2 ** (attempt - 1), signal);
           }
@@ -328,6 +368,7 @@ async function uploadParts({
     }
   };
 
+  reportProgress();
   await Promise.all(
     Array.from({ length: Math.min(Math.max(1, concurrency), partCount) }, () => worker()),
   );
@@ -338,12 +379,23 @@ function uploadPart(
   url: string,
   body: Blob,
   signal: AbortSignal | undefined,
+  inactivitySeconds: number,
   onProgress: (loaded: number) => void,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
+    let watchdog: ReturnType<typeof setTimeout>;
+    let lastLoaded = 0;
+    let stalled = false;
+    const armWatchdog = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => { stalled = true; xhr.abort(); }, inactivitySeconds * 1000);
+    };
     const abort = () => xhr.abort();
-    xhr.upload.addEventListener("progress", (event) => onProgress(event.loaded));
+    xhr.upload.addEventListener("progress", (event) => {
+      if (event.loaded > lastLoaded) { lastLoaded = event.loaded; armWatchdog(); }
+      onProgress(event.loaded);
+    });
     xhr.addEventListener("load", () => {
       if (xhr.status < 200 || xhr.status >= 300) {
         reject(
@@ -373,9 +425,10 @@ function uploadPart(
       );
     });
     xhr.addEventListener("abort", () => {
-      reject(new Court4ApiError("Upload was canceled.", { code: "upload_canceled" }));
+      reject(new Court4ApiError(stalled ? "A video part stopped responding. Please resume the upload." : "Upload interrupted. Your uploaded parts are preserved.",
+        { code: stalled ? "upload_part_stalled" : "upload_canceled" }));
     });
-    xhr.addEventListener("loadend", () => signal?.removeEventListener("abort", abort));
+    xhr.addEventListener("loadend", () => { clearTimeout(watchdog); signal?.removeEventListener("abort", abort); });
     signal?.addEventListener("abort", abort, { once: true });
     xhr.open("PUT", url);
     if (signal?.aborted) {
@@ -383,6 +436,7 @@ function uploadPart(
       reject(new Court4ApiError("Upload was canceled.", { code: "upload_canceled" }));
       return;
     }
+    armWatchdog();
     xhr.send(body);
   });
 }
@@ -391,7 +445,7 @@ async function refreshPartUrl(
   sessionId: string,
   partNumber: number,
   signal?: AbortSignal,
-): Promise<string> {
+): Promise<PresignedUploadPart> {
   const response = await authenticatedFetch(
     toApiUrl(`/api/v1/uploads/${encodeURIComponent(sessionId)}/parts`),
     {
@@ -409,12 +463,12 @@ async function refreshPartUrl(
       code: "missing_upload_part_url",
     });
   }
-  return part.url;
+  return part;
 }
 
-async function waitForUploadResult(
+export async function waitForUploadResult(
   sessionId: string,
-  file: File,
+  file: Pick<File, "size">,
   onProgress?: (progress: UploadProgress) => void,
   signal?: AbortSignal,
 ): Promise<UploadAnalysisResponse> {

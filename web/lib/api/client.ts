@@ -172,6 +172,11 @@ function invalidateAuthenticatedSession(): void {
 export function toApiUrl(path: string): string {
   const { apiUrl } = getPublicEnv();
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  // Auth cookies belong to the first-party web host. Large video parts and
+  // bearer-authenticated API calls continue to use their existing direct paths.
+  if (typeof window !== "undefined" && normalizedPath.startsWith("/api/v1/auth/")) {
+    return `${window.location.origin}${normalizedPath}`;
+  }
   return `${apiUrl}${normalizedPath}`;
 }
 

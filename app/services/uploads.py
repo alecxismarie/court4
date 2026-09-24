@@ -30,7 +30,10 @@ from app.schemas.uploads import (
     InitiateUploadRequest,
     InitiateUploadResponse,
     PresignedUploadPart,
+    ResumeUploadRequest,
+    StoredUploadPart,
     UploadPartUrlResponse,
+    UploadRecoveryResponse,
     UploadSessionResponse,
 )
 from app.services.jobs import AnalysisWorkflowService
@@ -104,7 +107,7 @@ class DirectUploadService:
                         "Idempotency key was already used for different upload metadata.",
                     )
                 self._expire_record_if_needed(existing)
-                return self._initiate_response(existing)
+                return self._initiate_response(existing, resumed=True)
 
             # Browser disappearance cannot run DELETE. Reconcile under the same
             # owner admission lock; the row lock excludes completion/cancellation.
@@ -176,7 +179,14 @@ class DirectUploadService:
                 idempotency_key_hash=key_hash,
                 request_fingerprint=fingerprint,
                 reanalyze=request.reanalyze,
-                client_metadata=request.client_metadata,
+                client_metadata={
+                    **{
+                        k: v
+                        for k, v in request.client_metadata.items()
+                        if k != "court4_file_identity"
+                    },
+                    "court4_file_identity": request.file_identity,
+                },
                 created_at=now,
                 updated_at=now,
                 expires_at=expires_at,
@@ -189,6 +199,97 @@ class DirectUploadService:
                     "upload_session_conflict", "Upload session could not be created safely."
                 ) from exc
         return self._initiate_response(created)
+
+    def discover(self, *, owner_user_id: UUID) -> list[UploadRecoveryResponse]:
+        with self.persistence.session_factory() as session:
+            ids = list(
+                session.scalars(
+                    select(UploadSession.id)
+                    .where(
+                        UploadSession.owner_user_id == owner_user_id,
+                        UploadSession.status.in_(
+                            ("initiated", "uploading", "completing", "verifying", "analyzing")
+                        ),
+                    )
+                    .order_by(UploadSession.created_at)
+                )
+            )
+        return [self.recovery(owner_user_id=owner_user_id, upload_session_id=id) for id in ids]
+
+    def recovery(
+        self,
+        *,
+        owner_user_id: UUID,
+        upload_session_id: UUID,
+        resume: ResumeUploadRequest | None = None,
+    ) -> UploadRecoveryResponse:
+        # Lock before provider inspection so completion/cancel cannot invalidate
+        # the snapshot mid-read. Ownership is checked before any storage access.
+        with self.persistence.session_factory.begin() as session:
+            record = self._load_owned(session, owner_user_id, upload_session_id, for_update=True)
+            identity = record.client_metadata.get("court4_file_identity")
+            identity = identity if isinstance(identity, str) else None
+            if resume is not None and (
+                identity is None
+                or resume.file_identity != identity
+                or resume.byte_size != record.declared_size
+            ):
+                raise JobConflictError(
+                    "upload_file_mismatch", "Select the original video to resume this upload."
+                )
+            parts: list[StoredUploadPart] = []
+            status = record.status
+            if status in _ACTIVE_MULTIPART_STATES:
+                if record.expires_at <= utc_now():
+                    status = "expired"
+                try:
+                    stored = self.storage.list_multipart_parts(
+                        key=record.storage_key,
+                        upload_id=record.provider_upload_id,
+                    )
+                    seen: set[int] = set()
+                    for part in stored:
+                        expected_size = min(
+                            record.part_size,
+                            record.declared_size - (part.part_number - 1) * record.part_size,
+                        )
+                        if (
+                            part.part_number in seen
+                            or not 1 <= part.part_number <= record.part_count
+                            or part.size_bytes != expected_size
+                            or not part.etag.strip()
+                            or len(part.etag) > 512
+                            or "\r" in part.etag
+                            or "\n" in part.etag
+                        ):
+                            raise ObjectStorageError("Invalid multipart part metadata.")
+                        seen.add(part.part_number)
+                        parts.append(
+                            StoredUploadPart(
+                                part_number=part.part_number,
+                                etag=part.etag,
+                                size_bytes=part.size_bytes,
+                            )
+                        )
+                except ObjectStorageError as exc:
+                    raise JobStorageBackendError(
+                        "Uploaded parts could not be checked. Please retry."
+                    ) from exc
+            return UploadRecoveryResponse(
+                upload_session_id=record.id,
+                status=status,
+                filename=record.original_filename,
+                byte_size=record.declared_size,
+                sport=SportType(record.sport),
+                file_identity=identity,
+                part_size=record.part_size,
+                part_count=record.part_count,
+                completed_parts=sorted(parts, key=lambda p: p.part_number),
+                max_concurrency=self.settings.direct_upload_max_concurrency,
+                max_attempts=self.settings.direct_upload_part_max_attempts,
+                inactivity_seconds=self.settings.direct_upload_part_inactivity_seconds,
+                expires_at=record.expires_at,
+            )
 
     def get(self, *, owner_user_id: UUID, upload_session_id: UUID) -> UploadSessionResponse:
         with self.persistence.session_factory.begin() as session:
@@ -333,6 +434,7 @@ class DirectUploadService:
             owner_user_id = record.owner_user_id
             storage_key = record.storage_key
             expected_sha256 = record.expected_sha256
+            expected_identity = record.client_metadata.get("court4_file_identity")
             resumed_analysis = record.status == "analyzing"
             resumed_checksum = record.verified_sha256
 
@@ -348,6 +450,12 @@ class DirectUploadService:
                         return
                     snapshot = self._snapshot(record)
             else:
+                if (
+                    expected_identity is not None
+                    and self.storage.calculate_file_identity(key=storage_key) != expected_identity
+                ):
+                    self._fail(upload_session_id, "checksum_mismatch")
+                    return
                 checksum = self.storage.calculate_sha256(
                     key=storage_key,
                     chunk_size=self.settings.direct_upload_checksum_chunk_size_bytes,
@@ -459,7 +567,9 @@ class DirectUploadService:
             record.updated_at = utc_now()
             return self._status_response(record)
 
-    def _initiate_response(self, record: UploadSession) -> InitiateUploadResponse:
+    def _initiate_response(
+        self, record: UploadSession, *, resumed: bool = False
+    ) -> InitiateUploadResponse:
         parts = (
             self._presigned_parts(record, list(range(1, record.part_count + 1)))
             if record.status in _ACTIVE_MULTIPART_STATES
@@ -467,12 +577,14 @@ class DirectUploadService:
         )
         return InitiateUploadResponse(
             transport="direct",
+            resumed=resumed,
             upload_session_id=record.id,
             status=record.status,
             part_size=record.part_size,
             part_count=record.part_count,
             max_concurrency=self.settings.direct_upload_max_concurrency,
             max_attempts=self.settings.direct_upload_part_max_attempts,
+            inactivity_seconds=self.settings.direct_upload_part_inactivity_seconds,
             expires_at=record.expires_at,
             parts=parts,
         )
@@ -582,6 +694,8 @@ class DirectUploadService:
             "expected_sha256": request.expected_sha256,
             "client_metadata": request.client_metadata,
         }
+        if request.file_identity is not None:
+            payload["file_identity"] = request.file_identity
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
 

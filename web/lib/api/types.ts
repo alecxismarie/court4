@@ -130,12 +130,14 @@ export const presignedUploadPartSchema = z.object({
 
 export const initiateUploadResponseSchema = z.object({
   transport: z.enum(["direct", "proxy"]),
+  resumed: z.boolean().default(false),
   upload_session_id: z.string().uuid().nullable(),
   status: z.string(),
   part_size: z.number().int().positive().nullable(),
   part_count: z.number().int().positive().nullable(),
   max_concurrency: z.number().int().positive(),
   max_attempts: z.number().int().positive(),
+  inactivity_seconds: z.number().int().min(10).max(300).default(60),
   expires_at: z.string().nullable(),
   parts: z.array(presignedUploadPartSchema),
 });
@@ -158,6 +160,25 @@ export const uploadPartUrlResponseSchema = z.object({
 export type PresignedUploadPart = z.infer<typeof presignedUploadPartSchema>;
 export type InitiateUploadResponse = z.infer<typeof initiateUploadResponseSchema>;
 export type UploadSessionResponse = z.infer<typeof uploadSessionResponseSchema>;
+
+export const uploadRecoverySchema = z.object({
+  upload_session_id: z.string().uuid(),
+  status: z.string(),
+  filename: z.string(),
+  byte_size: z.number().int().positive(),
+  sport: z.enum(["pickleball", "padel"]),
+  file_identity: z.string().nullable(),
+  part_size: z.number().int().positive(),
+  part_count: z.number().int().positive(),
+  completed_parts: z.array(z.object({
+    part_number: z.number().int().positive(), etag: z.string().min(1), size_bytes: z.number().int().positive(),
+  })),
+  max_concurrency: z.number().int().positive(),
+  max_attempts: z.number().int().positive(),
+  inactivity_seconds: z.number().int().min(10).max(300),
+  expires_at: z.string(),
+});
+export type UploadRecovery = z.infer<typeof uploadRecoverySchema>;
 
 export const sampledFrameSchema = z.object({
   frame_number: z.number().int().positive(),

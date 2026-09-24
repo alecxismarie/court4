@@ -149,11 +149,20 @@ class AuthenticationService:
     def refresh(
         self, raw_token: str | None, *, user_agent: str | None
     ) -> tuple[User, SessionTokens]:
-        session_id = self._parse_refresh_session_id(raw_token)
+        try:
+            session_id = self._parse_refresh_session_id(raw_token)
+        except AuthenticationError:
+            logger.info(
+                "auth_refresh_rejected",
+                extra={"reason": "cookie_missing" if raw_token is None else "token_invalid"},
+            )
+            raise
         now = datetime.now(tz=UTC)
         user: User | None = None
         tokens: SessionTokens | None = None
         failed = False
+        # Fixed internal categories only; never include cookie contents or hashes.
+        rejection_reason = "session_not_found"
         with self._session_factory.begin() as session:
             candidate = session.scalar(
                 select(RefreshSession).where(RefreshSession.id == session_id)
@@ -165,6 +174,8 @@ class AuthenticationService:
             ):
                 failed = True
                 refresh_session = candidate
+                if candidate is not None:
+                    rejection_reason = "token_mismatch"
             else:
                 self._lock_user_security(session, candidate.user_id)
                 user = session.scalar(
@@ -185,12 +196,15 @@ class AuthenticationService:
                 )
             ):
                 failed = True
+                rejection_reason = "token_mismatch"
             elif (
                 not failed
                 and refresh_session is not None
                 and refresh_session.revoked_at is not None
             ):
+                rejection_reason = "session_revoked"
                 if refresh_session.revocation_reason == "rotated":
+                    rejection_reason = "token_reuse"
                     self._revoke_family(
                         session, refresh_session.token_family_id, "refresh_token_reuse", now
                     )
@@ -200,6 +214,7 @@ class AuthenticationService:
                     )
                 failed = True
             elif not failed and refresh_session is not None and refresh_session.expires_at <= now:
+                rejection_reason = "session_expired"
                 refresh_session.revoked_at = now
                 refresh_session.revocation_reason = "expired"
                 failed = True
@@ -208,6 +223,7 @@ class AuthenticationService:
                 and refresh_session is not None
                 and (user is None or user.account_status != "active")
             ):
+                rejection_reason = "account_missing" if user is None else "account_inactive"
                 self._revoke_family(
                     session, refresh_session.token_family_id, "account_unavailable", now
                 )
@@ -224,6 +240,10 @@ class AuthenticationService:
                 )
                 refresh_session.replaced_by_session_id = replacement_id
         if failed or user is None or tokens is None:
+            # Log after transaction exit: failures to commit remain server errors,
+            # not misleading 401 diagnostics. Reuse already has a dedicated event.
+            if rejection_reason != "token_reuse":
+                logger.info("auth_refresh_rejected", extra={"reason": rejection_reason})
             self._refresh_failed()
         logger.info("auth_refresh_rotated", extra={"user_id": str(user.id)})
         return user, tokens

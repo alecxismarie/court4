@@ -35,6 +35,27 @@ describe("analysis history workspace", () => {
     ).toBeInTheDocument();
   });
 
+  it("pages beyond 100 and resets the server filter to its first page", async () => {
+    historyMock.mockImplementation((options) => query({
+      ...makeAnalysisHistoryResponse([makeAnalysisHistoryItem({ title: `Record ${options.offset}` })]),
+      total: 101,
+      offset: options.offset,
+    }));
+    const user = userEvent.setup();
+    renderWithQueryClient(<AnalysisHistoryWorkspace />);
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+    expect(screen.getByText("Record 100")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Ready" }));
+    expect(historyMock).toHaveBeenLastCalledWith({ limit: 100, offset: 0, status: "READY" });
+  });
+
+  it("does not offer another page for exactly 100 records", () => {
+    historyMock.mockReturnValue(query({ ...makeAnalysisHistoryResponse(), total: 100 }));
+    renderWithQueryClient(<AnalysisHistoryWorkspace />);
+    expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
+  });
+
   it("shows processing, ready, limited, unsuitable, failed, and legacy analyses", () => {
     const items = [
       makeAnalysisHistoryItem({ analysis_id: "ready", title: "Ready recording" }),

@@ -1046,7 +1046,7 @@ function WorkflowError({
       ? "These candidates cannot be merged safely"
     : title ?? "Court4 could not complete this step";
   const visibleMessage = isBackendUnavailable
-    ? "Make sure the Court4 backend is running, then try again."
+    ? "Court4 is temporarily unavailable. Check your connection and try again."
     : isDetectorModelMissing
       ? "Player detection is not available because the detector model is missing."
     : isImpossibleMerge

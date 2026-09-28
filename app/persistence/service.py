@@ -354,6 +354,7 @@ class PersistenceService:
                 UploadedVideo.source_checksum == checksum_sha256,
                 Analysis.owner_user_id == owner_user_id,
                 Analysis.sport == sport.value,
+                Analysis.lifecycle_state == "live",
             )
             .order_by(Analysis.created_at.desc(), Analysis.id.desc())
             .limit(1)
@@ -406,6 +407,7 @@ class PersistenceService:
     ) -> ReservationResult:
         if record.resource_id is None:
             raise OperationInProgressError("The original upload is still in progress.")
+        self._owned_analysis(session.get(Analysis, record.resource_id), owner_user_id)
         duplicate = None
         if record.resource_type == "exact_duplicate_analysis":
             duplicate = self._duplicate_match_for_analysis(
@@ -456,10 +458,18 @@ class PersistenceService:
                     )
                 )
                 if existing is not None:
+                    self._owned_analysis(session.get(Analysis, analysis_id), owner_user_id)
                     return self._resolve_run_record(existing, request_fingerprint)
                 analysis = self._owned_analysis(session.get(Analysis, analysis_id), owner_user_id)
                 if synchronization_hook is not None:
                     synchronization_hook(backend_pid)
+                # Serialize admission with deletion intent, and refresh after waiting.
+                analysis = self._owned_analysis(
+                    session.get(
+                        Analysis, analysis_id, with_for_update=True, populate_existing=True
+                    ),
+                    owner_user_id,
+                )
                 record = IdempotencyRecord(
                     owner_user_id=owner_user_id,
                     scope="run_start",
@@ -678,7 +688,9 @@ class PersistenceService:
         ]
         try:
             with self._session_factory.begin() as session:
-                analysis = self._owned_analysis(session.get(Analysis, analysis_id), owner_user_id)
+                analysis = self._owned_analysis(
+                    session.get(Analysis, analysis_id, with_for_update=True), owner_user_id
+                )
                 run = session.scalar(
                     select(AnalysisRun).where(
                         AnalysisRun.id == analysis_run_id,
@@ -956,7 +968,9 @@ class PersistenceService:
             return list(
                 session.scalars(
                     select(Analysis.id)
-                    .where(Analysis.owner_user_id == owner_user_id)
+                    .where(
+                        Analysis.owner_user_id == owner_user_id, Analysis.lifecycle_state == "live"
+                    )
                     .order_by(Analysis.created_at, Analysis.id)
                 )
             )
@@ -973,7 +987,7 @@ class PersistenceService:
         analysis_id = str(payload["analysis_id"])
         now = utc_now()
         with self._session_factory.begin() as session:
-            analysis = session.get(Analysis, analysis_id)
+            analysis = session.get(Analysis, analysis_id, with_for_update=True)
             if analysis is None:
                 if not compatibility_import:
                     raise ResourceNotFoundError("Analysis was not reserved.")
@@ -1120,6 +1134,7 @@ class PersistenceService:
         self, *, owner_user_id: UUID, analysis_id: str, logical_key: str
     ) -> AnalysisArtifact:
         with self._session_factory() as session:
+            self._owned_analysis(session.get(Analysis, analysis_id), owner_user_id)
             artifact = session.scalar(
                 select(AnalysisArtifact).where(
                     AnalysisArtifact.owner_user_id == owner_user_id,
@@ -1330,6 +1345,8 @@ class PersistenceService:
             raise ResourceNotFoundError("Analysis was not found.")
         if analysis.owner_user_id != owner_user_id:
             raise OwnershipMismatchError("Analysis is owned by another user.")
+        if analysis.lifecycle_state != "live":
+            raise ResourceNotFoundError("Analysis was not found.")
         return analysis
 
     @staticmethod

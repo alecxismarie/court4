@@ -267,7 +267,7 @@ export function ManualCalibrationWorkspace({ analysisId }: { analysisId: string 
           <section className="rounded-md border border-court-line bg-white p-5 shadow-panel">
             <h2 className="text-lg font-semibold text-court-ink">Review and submit</h2>
             <p className="mt-2 text-sm leading-6 text-court-muted">
-              Court4 will submit the points to the backend in near-left, near-right,
+              Court4 uses your marked corners in near-left, near-right,
               far-right, far-left order.
             </p>
             {!validation.valid ? (

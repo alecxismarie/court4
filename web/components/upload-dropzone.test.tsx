@@ -132,8 +132,8 @@ describe("upload dropzone", () => {
 
     await user.upload(screen.getByLabelText("Match video file"), file);
     await user.click(screen.getByRole("button", { name: /upload selected video/i }));
-    await waitFor(() => expect(screen.getByRole("button", { name: /uploading/i })).toBeDisabled());
-    await user.click(screen.getByRole("button", { name: /uploading/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /preparing video/i })).toBeDisabled());
+    await user.click(screen.getByRole("button", { name: /preparing video/i }));
 
     expect(uploadAnalysis).toHaveBeenCalledTimes(1);
     resolveUpload(makeJob({ analysis_id: "analysis-pending" }));
@@ -225,7 +225,7 @@ describe("upload dropzone", () => {
 
     await user.upload(screen.getByLabelText("Match video file"), file);
     await user.click(screen.getByRole("button", { name: /upload selected video/i }));
-    expect(await screen.findByText("Court4 backend is unavailable.")).toBeInTheDocument();
+    expect(await screen.findByText("Court4 is temporarily unavailable. Please check your connection and try again.")).toBeInTheDocument();
     expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /upload selected video/i }));
 
@@ -329,7 +329,7 @@ describe("upload dropzone", () => {
       if (outcome === "success") {
         await waitFor(() => expect(onUploadComplete).toHaveBeenCalledWith(makeJob()));
       } else {
-        await screen.findByText("Court4 backend is unavailable.");
+        await screen.findByText("Court4 is temporarily unavailable. Please check your connection and try again.");
       }
       const firstKey = uploadAnalysis.mock.calls[0][2]?.idempotencyKey;
       const nextKey = uploadAnalysis.mock.calls[1][2]?.idempotencyKey;
@@ -369,7 +369,7 @@ describe("upload dropzone", () => {
     renderWithQueryClient(<UploadDropzone uploadAnalysis={uploadAnalysis} />);
     await user.upload(screen.getByLabelText("Match video file"), new File(["video"], "match.mp4"));
     await user.click(screen.getByRole("button", { name: /upload selected video/i }));
-    await screen.findByText("Court4 backend is unavailable.");
+    await screen.findByText("Court4 is temporarily unavailable. Please check your connection and try again.");
     if (action === "reset") {
       await user.click(screen.getByRole("button", { name: "Reset" }));
     } else {

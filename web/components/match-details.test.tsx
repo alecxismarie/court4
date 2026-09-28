@@ -32,6 +32,11 @@ import { renderWithQueryClient } from "@/test/render";
 
 const pushMock = vi.hoisted(() => vi.fn());
 
+vi.mock("@/lib/api/source-media", () => ({
+  getMatchLifecycle: vi.fn(async () => ({ analysis_id: "analysis-123", state: "live" })),
+  deleteMatch: vi.fn(), deleteSourceVideo: vi.fn(),
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
 }));
@@ -132,7 +137,7 @@ describe("match details workflow", () => {
       await screen.findByText("Court4 cannot connect to the analysis service"),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Make sure the Court4 backend is running, then try again."),
+      screen.getByText("Court4 is temporarily unavailable. Check your connection and try again."),
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /try again/i }));

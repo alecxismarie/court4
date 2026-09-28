@@ -23,7 +23,7 @@ describe("API error normalization", () => {
   it("normalizes browser and schema failures", () => {
     expect(normalizeApiError(new TypeError("Failed to fetch"))).toMatchObject({
       code: "backend_unavailable",
-      message: "Court4 backend is unavailable.",
+      message: "Court4 is temporarily unavailable. Please check your connection and try again.",
       status: null,
     });
 

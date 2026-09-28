@@ -18,6 +18,7 @@ from app.schemas.analytics import (
     ZoneOccupancyReport,
 )
 from app.schemas.history import (
+    AnalysisHistoryStatus,
     ContributionStatus,
     ProgressEligibilityDecision,
     ProgressEligibilityStatus,
@@ -51,6 +52,32 @@ from app.services.history.progress_policy import evaluate_trend_eligibility
 from app.services.jobs import AnalysisJobRepository
 
 NOW = datetime(2026, 7, 28, 10, 0, tzinfo=UTC)
+
+
+def test_history_pages_filter_before_slicing_and_count_all_metadata(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    for index in range(101):
+        repository.save_job(
+            _job(
+                f"page-{index:03}",
+                status=AnalysisStatus.completed,
+                analytics_completed=True,
+            )
+        )
+    repository.save_job(_job("waiting", status=AnalysisStatus.processing))
+    service = HistoryProjectionService(repository=repository)
+    first = service.analysis_history(limit=100, offset=0, status=AnalysisHistoryStatus.ready)
+    last = service.analysis_history(limit=100, offset=100, status=AnalysisHistoryStatus.ready)
+    assert first.total == last.total == first.completed_total == 101
+    assert len(first.items) == 100 and len(last.items) == 1
+    ids = [item.analysis_id for item in first.items + last.items]
+    assert ids == sorted(ids, reverse=True) and len(set(ids)) == 101
+    all_rows = service.analysis_history(limit=1, offset=0)
+    assert all_rows.total == 102 and all_rows.completed_total == 101
+    processing = service.analysis_history(
+        limit=100, offset=0, status=AnalysisHistoryStatus.processing
+    )
+    assert [item.analysis_id for item in processing.items] == ["waiting"]
 
 
 def test_analysis_history_includes_every_persisted_analysis(tmp_path: Path) -> None:

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
+import { ConfirmationDialog } from "@/components/confirmation-dialog";
 import { deleteSourceVideo } from "@/lib/api/source-media";
 import { normalizeApiError } from "@/lib/api/client";
 import type { AnalysisJob } from "@/lib/api/types";
@@ -16,7 +17,7 @@ export function SourceVideoControls({ job }: { job: AnalysisJob }) {
       queryClient.setQueryData(["analysis", job.analysis_id], {
         ...job,
         source_media_state: "deleted",
-        available_artifacts: job.available_artifacts.filter((item) => item.path !== job.source_video),
+        available_artifacts: job.available_artifacts.filter((item) => item.path !== job.source_video && !item.content_type.startsWith("video/")),
       });
       setConfirming(false);
     },
@@ -39,18 +40,16 @@ export function SourceVideoControls({ job }: { job: AnalysisJob }) {
           Video deletion is unfinished. Retry to complete it. Your analysis and Progress history remain available.
         </p>
       ) : null}
-      {!confirming ? (
+      {(
         <Button type="button" variant="secondary" onClick={() => setConfirming(true)}>
-          Delete video
+          Delete original video
         </Button>
-      ) : (
-        <div role="dialog" aria-modal="true" aria-labelledby="delete-video-title">
-          <h2 id="delete-video-title" className="font-semibold text-court-ink">
-            Delete original video?
-          </h2>
+      )}
+      {confirming ? (
+        <ConfirmationDialog title="Delete original video?" busy={mutation.isPending} onClose={() => setConfirming(false)}>
           <p className="mt-2 text-sm text-court-muted">
-            The uploaded recording will be permanently removed to free storage.
-            Your completed analysis and Progress history will remain, but Court4 will
+            The original recording and large derived playback videos will be permanently removed to free storage.
+            Your completed analysis, Match IQ, Analysis History and Progress history will remain, but Court4 will
             no longer be able to reanalyze this match from the original video.
           </p>
           {mutation.isError ? (
@@ -66,8 +65,8 @@ export function SourceVideoControls({ job }: { job: AnalysisJob }) {
               {mutation.isPending ? "Deleting video…" : "Permanently delete video"}
             </Button>
           </div>
-        </div>
-      )}
+        </ConfirmationDialog>
+      ) : null}
     </section>
   );
 }

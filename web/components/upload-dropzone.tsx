@@ -89,7 +89,7 @@ export function UploadDropzone({
     onMutate: (command) => {
       uploadAbortControllerRef.current = new AbortController();
       setApiError(null);
-      setProgress({ loaded: 0, total: command.file.size, percent: 0 });
+      setProgress({ loaded: 0, total: command.file.size, percent: null, phase: "preparing" });
     },
     onSuccess: (result) => {
       uploadSessionRef.current = null;
@@ -352,7 +352,7 @@ export function UploadDropzone({
                 });
               }}
             >
-              {uploadMutation.isPending ? "Uploading" : "Analyze Again"}
+              {uploadMutation.isPending ? progress?.phase === "preparing" ? "Preparing video" : progress?.phase === "verifying" ? "Finalizing" : "Uploading" : "Analyze Again"}
             </Button>
             <Button
               type="button"
@@ -372,7 +372,7 @@ export function UploadDropzone({
           <Button type="submit" disabled={!selectedFile || uploadMutation.isPending || cleanupPending}>
             <Upload aria-hidden="true" className="h-4 w-4" />
             {uploadMutation.isPending
-              ? progress?.phase === "verifying"
+              ? progress?.phase === "preparing" ? "Preparing video" : progress?.phase === "verifying"
                 ? "Finalizing"
                 : "Uploading"
               : "Upload selected video"}

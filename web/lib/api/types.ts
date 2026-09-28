@@ -162,6 +162,7 @@ export type InitiateUploadResponse = z.infer<typeof initiateUploadResponseSchema
 export type UploadSessionResponse = z.infer<typeof uploadSessionResponseSchema>;
 
 export const uploadRecoverySchema = z.object({
+  duplicate_cleanup_pending: z.boolean().optional(),
   upload_session_id: z.string().uuid(),
   status: z.string(),
   filename: z.string(),
@@ -564,6 +565,7 @@ export const analysisHistoryItemSchema = z.object({
 });
 
 export const analysisHistoryResponseSchema = z.object({
+  completed_total: z.number().int().nonnegative().optional(),
   items: z.array(analysisHistoryItemSchema),
   total: z.number().int().nonnegative(),
   limit: z.number().int().positive(),
@@ -767,5 +769,5 @@ export type UploadProgress = {
   loaded: number;
   total: number | null;
   percent: number | null;
-  phase?: "uploading" | "verifying";
+  phase?: "preparing" | "uploading" | "verifying";
 };

@@ -14,7 +14,7 @@ import type { ReactNode } from "react";
 import { RecordingQualityCard } from "@/components/recording-quality-card";
 import { ShareCardPanel } from "@/components/share-card-panel";
 import { Skeleton } from "@/components/skeleton";
-import { Button } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { getAnalysis, getAnalytics } from "@/lib/api/analyses";
 import { getArtifactUrl, normalizeApiError } from "@/lib/api/client";
 import { AuthenticatedImage } from "@/components/authenticated-image";
@@ -69,11 +69,18 @@ export function AnalyticsDetails({ analysisId }: { analysisId: string }) {
   }
 
   return (
+    <div className="space-y-4">
+      <nav aria-label="Match management" className="flex flex-wrap justify-end gap-3">
+        <ButtonLink href={`/matches/${encodeURIComponent(analysisId)}`} variant="secondary">
+          Manage match
+        </ButtonLink>
+      </nav>
     <AnalyticsReportView
       report={analyticsQuery.data.analytics}
       matchIQ={analyticsQuery.data.match_iq}
       job={jobQuery.data ?? null}
     />
+    </div>
   );
 }
 
@@ -115,7 +122,7 @@ function AnalyticsReportView({
           Movement Measurements
         </h2>
         <p className="mt-2 text-sm leading-6 text-court-muted">
-          Continuity-safe movement facts from the player you selected. These values
+          Movement measured during reliably tracked stretches of the player you selected. These values
           describe the reliably tracked sample, not necessarily the full video.
         </p>
         <dl className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -352,7 +359,7 @@ function MatchIQSummary({ matchIQ }: { matchIQ: MatchIQReport | null }) {
             were not reliable enough to generate a trustworthy movement insight.
           </p>
           <p className="mt-2 text-sm leading-6 text-court-muted">
-            Your continuity-safe measurements are still available in Movement
+            Your measurements from reliably tracked stretches are still available in Movement
             Measurements.
           </p>
         </div>

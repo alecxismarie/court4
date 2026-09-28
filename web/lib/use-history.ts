@@ -4,10 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 
 import { getAnalysisHistory, getPlayHistory } from "@/lib/api/history";
 
-export function useAnalysisHistory() {
+export function useAnalysisHistory(options: { limit?: number; offset?: number; status?: string } = {}) {
   return useQuery({
-    queryKey: ["analysis-history"],
-    queryFn: () => getAnalysisHistory(),
+    queryKey: ["analysis-history", options],
+    queryFn: () => getAnalysisHistory(options),
   });
 }
 

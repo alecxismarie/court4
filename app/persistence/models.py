@@ -250,6 +250,9 @@ class Analysis(Base):
             name="ck_analysis_stage",
         ),
         CheckConstraint("sport in ('pickleball','padel')", name="ck_analysis_sport"),
+        CheckConstraint(
+            "lifecycle_state in ('live','deletion_pending','deleted')", name="ck_analysis_lifecycle"
+        ),
         Index("ix_analysis_owner_created", "owner_user_id", "created_at"),
     )
 
@@ -258,6 +261,11 @@ class Analysis(Base):
         Uuid, ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     uploaded_video_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    lifecycle_state: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="live", server_default="live"
+    )
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     sport: Mapped[str] = mapped_column(String(24), nullable=False, default="pickleball")
     state: Mapped[str] = mapped_column(String(24), nullable=False)
     current_stage: Mapped[str] = mapped_column(String(32), nullable=False)

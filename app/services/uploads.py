@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import re
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config.settings import Settings
-from app.persistence.models import UploadSession, utc_now
+from app.persistence.models import Analysis, UploadedVideo, UploadSession, utc_now
 from app.persistence.object_storage import (
     MultipartObjectStorage,
     ObjectStorageError,
@@ -101,6 +102,11 @@ class DirectUploadService:
                 .with_for_update()
             )
             if existing is not None:
+                previous_analysis = session.get(Analysis, existing.analysis_id)
+                if previous_analysis is not None and previous_analysis.lifecycle_state != "live":
+                    raise JobConflictError(
+                        "match_deleted", "This match was removed. Start a new upload."
+                    )
                 if existing.request_fingerprint != fingerprint:
                     raise JobConflictError(
                         "upload_idempotency_conflict",
@@ -276,6 +282,7 @@ class DirectUploadService:
                         "Uploaded parts could not be checked. Please retry."
                     ) from exc
             return UploadRecoveryResponse(
+                duplicate_cleanup_pending=record.failure_reason == "duplicate_cleanup_pending",
                 upload_session_id=record.id,
                 status=status,
                 filename=record.original_filename,
@@ -413,6 +420,20 @@ class DirectUploadService:
         return response
 
     def verify_and_analyze(self, upload_session_id: UUID) -> None:
+        with self.persistence.session_factory() as session:
+            pending = session.get(UploadSession, upload_session_id)
+            cleanup_owner = (
+                pending.owner_user_id
+                if pending is not None and pending.failure_reason == "duplicate_cleanup_pending"
+                else None
+            )
+        if cleanup_owner is not None:
+            # Durable intent stays discoverable and explicitly retryable.
+            with suppress(JobStorageBackendError):
+                self.cleanup_duplicate(
+                    owner_user_id=cleanup_owner, upload_session_id=upload_session_id
+                )
+            return
         now = utc_now()
         lease_cutoff = now - timedelta(
             seconds=self.settings.direct_upload_verification_lease_seconds
@@ -511,6 +532,21 @@ class DirectUploadService:
                 )
             finally:
                 workflow.close()
+            if result.status == "duplicate":
+                # Commit intent before provider IO. A crash after deletion can
+                # retry the same exact key without recreating/reanalyzing it.
+                with self.persistence.session_factory.begin() as session:
+                    record = session.get(UploadSession, upload_session_id, with_for_update=True)
+                    if record is None or record.status != "analyzing":
+                        return
+                    record.result_payload = result.model_dump(mode="json")
+                    record.failure_reason = "duplicate_cleanup_pending"
+                    record.row_version += 1
+                    record.updated_at = utc_now()
+                self.cleanup_duplicate(
+                    owner_user_id=owner_user_id, upload_session_id=upload_session_id
+                )
+                return
             with self.persistence.session_factory.begin() as session:
                 record = session.scalar(
                     select(UploadSession)
@@ -639,7 +675,7 @@ class DirectUploadService:
     def _status_response(record: UploadSession) -> UploadSessionResponse:
         result = (
             _UPLOAD_RESPONSE_ADAPTER.validate_python(record.result_payload)
-            if record.result_payload is not None
+            if record.result_payload is not None and record.status == "completed"
             else None
         )
         return UploadSessionResponse(
@@ -755,12 +791,59 @@ class DirectUploadService:
             record = session.scalar(
                 select(UploadSession).where(UploadSession.id == upload_session_id).with_for_update()
             )
-            if record is None or record.status in {"completed", "aborted"}:
+            if (
+                record is None
+                or record.status in {"completed", "aborted"}
+                or record.failure_reason == "duplicate_cleanup_pending"
+            ):
                 return
             record.status = "failed"
             record.failure_reason = reason[:256]
             record.row_version += 1
             record.updated_at = utc_now()
+
+    def cleanup_duplicate(
+        self, *, owner_user_id: UUID, upload_session_id: UUID
+    ) -> UploadSessionResponse:
+        with self.persistence.session_factory.begin() as session:
+            record = self._load_owned(session, owner_user_id, upload_session_id, for_update=True)
+            if record.status == "completed":
+                return self._status_response(record)
+            if record.failure_reason != "duplicate_cleanup_pending" or record.reanalyze:
+                raise JobConflictError(
+                    "invalid_upload_state", "This upload has no pending cleanup."
+                )
+            result = record.result_payload or {}
+            expected_key = source_object_key(
+                owner_user_id, record.analysis_id, Path(record.original_filename).suffix
+            )
+            # Never accept a caller's key, an existing analysis's source, or a
+            # registered video. The duplicate has its own unused allocation.
+            if (
+                result.get("status") != "duplicate"
+                or result.get("existing_analysis_id") == record.analysis_id
+                or record.storage_key != expected_key
+                or session.get(Analysis, record.analysis_id) is not None
+                or session.scalar(
+                    select(UploadedVideo.id)
+                    .where(UploadedVideo.storage_key == record.storage_key)
+                    .limit(1)
+                )
+                is not None
+            ):
+                raise JobConflictError("invalid_upload_state", "Upload cleanup needs review.")
+            try:
+                self.storage.delete(key=record.storage_key)
+            except ObjectStorageError as exc:
+                raise JobStorageBackendError(
+                    "Duplicate video cleanup is unfinished. Please retry."
+                ) from exc
+            record.status = "completed"
+            record.failure_reason = None
+            record.completed_at = utc_now()
+            record.updated_at = utc_now()
+            record.row_version += 1
+            return self._status_response(record)
 
     @staticmethod
     def _snapshot(record: UploadSession) -> _UploadSnapshot:

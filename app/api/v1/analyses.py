@@ -8,7 +8,7 @@ from app.auth import VerifiedUser
 from app.config import get_settings
 from app.config.settings import Settings
 from app.schemas.active_play import ActivePlayReport
-from app.schemas.history import AnalysisHistoryResponse
+from app.schemas.history import AnalysisHistoryResponse, AnalysisHistoryStatus
 from app.schemas.jobs import (
     AnalysisJobResponse,
     AnalyticsGenerationResponse,
@@ -34,6 +34,7 @@ from app.schemas.player_candidates import (
 )
 from app.services.history import HistoryProjectionService
 from app.services.jobs import AnalysisWorkflowService
+from app.services.jobs.match_lifecycle import MatchLifecycleService
 from app.services.jobs.source_media import SourceMediaService
 from app.sports import SportType
 
@@ -68,6 +69,17 @@ def get_workflow_service(
 WorkflowDependency = Annotated[AnalysisWorkflowService, Depends(get_workflow_service)]
 
 
+@router.get("/{analysis_id}/lifecycle", responses=ERROR_RESPONSES)
+def match_lifecycle(analysis_id: str, workflow: WorkflowDependency) -> dict[str, str]:
+    return MatchLifecycleService(workflow.repository).status(analysis_id)
+
+
+@router.delete("/{analysis_id}", status_code=204, responses=ERROR_RESPONSES)
+def delete_match(analysis_id: str, workflow: WorkflowDependency) -> Response:
+    MatchLifecycleService(workflow.repository).delete(analysis_id)
+    return Response(status_code=204)
+
+
 @router.delete("/{analysis_id}/source-video", status_code=204, responses=ERROR_RESPONSES)
 def delete_source_video(analysis_id: str, workflow: WorkflowDependency) -> Response:
     """Delete only the original recording, retaining analysis and Progress evidence."""
@@ -89,10 +101,12 @@ def list_analyses(
     workflow: WorkflowDependency,
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
+    status: AnalysisHistoryStatus | None = None,
 ) -> AnalysisHistoryResponse:
     return HistoryProjectionService(repository=workflow.repository).analysis_history(
         limit=limit,
         offset=offset,
+        status=status,
     )
 
 

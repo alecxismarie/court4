@@ -106,6 +106,7 @@ class ResumeUploadRequest(BaseModel):
 
 
 class UploadRecoveryResponse(BaseModel):
+    duplicate_cleanup_pending: bool = False
     upload_session_id: UUID
     status: str
     filename: str

@@ -81,6 +81,7 @@ async function createAnalysisDirect(
 ): Promise<UploadAnalysisResponse> {
   const idempotencyKey = options?.idempotencyKey ?? crypto.randomUUID();
   throwIfAborted(options?.signal);
+  onProgress?.({ loaded: 0, total: file.size, percent: null, phase: "preparing" });
   const identity = await fileIdentity(file, options?.signal);
   if (options?.resumeSessionId) {
     const recovery = await postJson(`/api/v1/uploads/${encodeURIComponent(options.resumeSessionId)}/resume`,
@@ -482,11 +483,18 @@ export async function waitForUploadResult(
     if (!response.ok) throw await apiErrorFromResponse(response);
     const status = uploadSessionResponseSchema.parse(await response.json());
     if (status.status === "completed" && status.result) return status.result;
+    if (status.failure_code === "duplicate_cleanup_pending") {
+      throw new Court4ApiError("Duplicate video cleanup is unfinished. Return to your upload to retry.", { code: "duplicate_cleanup_pending" });
+    }
     if (["failed", "aborted", "expired"].includes(status.status)) {
       throw uploadTerminalError(status.status, status.failure_code);
     }
     await abortableDelay(1_000, signal);
   }
+}
+
+export function retryDuplicateCleanup(sessionId: string) {
+  return postJson(`/api/v1/uploads/${encodeURIComponent(sessionId)}/retry-cleanup`, uploadSessionResponseSchema);
 }
 
 export async function abortDirectUpload(sessionId: string): Promise<boolean> {

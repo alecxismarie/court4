@@ -513,6 +513,66 @@ def test_duplicate_completion_preserves_existing_duplicate_semantics(
     assert "analysis_id" in first
     assert second["status"] == "duplicate"
     assert second["existing_analysis_id"] == first["analysis_id"]
+    with get_persistence().session_factory() as session:
+        uploads = list(session.scalars(select(UploadSession).order_by(UploadSession.created_at)))
+    assert uploads[0].storage_key in storage.objects
+    assert uploads[1].storage_key not in storage.objects
+    for _ in range(2):
+        assert client.post(f"/api/v1/uploads/{uploads[1].id}/retry-cleanup").status_code == 200
+    assert uploads[0].storage_key in storage.objects
+
+
+def test_duplicate_cleanup_failure_is_discoverable_retryable_and_owner_safe(
+    tmp_path: Path,
+    synthetic_video_factory: Any,
+) -> None:
+    client, service, storage, owner = _client(tmp_path)
+    data = synthetic_video_factory(tmp_path / "duplicate.avi", frame_count=5).read_bytes()
+    first = _direct_round_trip(client, storage, data, "first")
+    storage.fail_delete = True
+    assert _direct_round_trip(client, storage, data, "second") is None
+    recovery = client.get("/api/v1/uploads/recoverable").json()
+    assert len(recovery) == 1 and recovery[0]["duplicate_cleanup_pending"]
+    upload_id = recovery[0]["upload_session_id"]
+    status = client.get(f"/api/v1/uploads/{upload_id}").json()
+    assert status["status"] == "analyzing" and status["result"] is None
+    assert client.post(f"/api/v1/uploads/{upload_id}/retry-cleanup").status_code == 503
+    storage.fail_delete = False
+    other_token = _register_verified_user(client, "other-cleanup@example.com")
+    client.headers["Authorization"] = f"Bearer {other_token}"
+    before = set(storage.objects)
+    assert client.post(f"/api/v1/uploads/{upload_id}/retry-cleanup").status_code == 404
+    assert set(storage.objects) == before
+    cleaned = service.cleanup_duplicate(owner_user_id=owner, upload_session_id=UUID(upload_id))
+    assert cleaned.status == "completed"
+    assert (
+        cleaned.result is not None
+        and cleaned.result.model_dump()["existing_analysis_id"] == first["analysis_id"]
+    )
+    assert len(before - set(storage.objects)) == 1
+    service.verify_and_analyze(UUID(upload_id))
+    assert (
+        service.cleanup_duplicate(owner_user_id=owner, upload_session_id=UUID(upload_id)).status
+        == "completed"
+    )
+
+
+def test_explicit_reanalysis_and_other_owner_keep_their_own_sources(
+    tmp_path: Path,
+    synthetic_video_factory: Any,
+) -> None:
+    client, _service, storage, _owner = _client(tmp_path)
+    data = synthetic_video_factory(tmp_path / "again.avi", frame_count=5).read_bytes()
+    first = _direct_round_trip(client, storage, data, "first")
+    again = _direct_round_trip(client, storage, data, "again", reanalyze=True)
+    assert first["analysis_id"] != again["analysis_id"]
+    token = _register_verified_user(client, "other-video-owner@example.com")
+    client.headers["Authorization"] = f"Bearer {token}"
+    other = _direct_round_trip(client, storage, data, "other")
+    assert other["analysis_id"] not in {first["analysis_id"], again["analysis_id"]}
+    with get_persistence().session_factory() as session:
+        keys = list(session.scalars(select(UploadSession.storage_key)))
+    assert len(keys) == 3 and all(key in storage.objects for key in keys)
 
 
 def test_provider_failure_is_sanitized(tmp_path: Path) -> None:
@@ -644,14 +704,22 @@ def test_concurrent_completion_allows_only_one_provider_completion(tmp_path: Pat
 
 
 def _direct_round_trip(
-    client: TestClient, storage: FakeMultipartStorage, data: bytes, key: str
+    client: TestClient,
+    storage: FakeMultipartStorage,
+    data: bytes,
+    key: str,
+    *,
+    reanalyze: bool = False,
 ) -> dict[str, Any]:
     initiated = client.post(
         "/api/v1/uploads/initiate",
         headers={"Idempotency-Key": key},
-        json=_metadata(
-            filename="duplicate.avi", content_type="video/x-msvideo", byte_size=len(data)
-        ),
+        json={
+            **_metadata(
+                filename="duplicate.avi", content_type="video/x-msvideo", byte_size=len(data)
+            ),
+            "reanalyze": reanalyze,
+        },
     ).json()
     storage.completed_data = data
     client.post(
@@ -948,6 +1016,7 @@ class FakeMultipartStorage:
         self.completed_data = b""
         self.presigned: list[int] = []
         self.fail_initiate = False
+        self.fail_delete = False
         self.block_completion = False
         self.completion_entered = threading.Event()
         self.completion_release = threading.Event()
@@ -1075,4 +1144,6 @@ class FakeMultipartStorage:
         return key in self.objects
 
     def delete(self, *, key: str) -> None:
+        if self.fail_delete:
+            raise ObjectStorageError("private-provider-error")
         self.objects.pop(key, None)

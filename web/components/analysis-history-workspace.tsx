@@ -4,7 +4,7 @@ import { ExternalLink } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { AnalysisStatusBadge, ContributionBadge } from "@/components/history-badges";
-import { ButtonLink } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 import type { AnalysisHistoryItem } from "@/lib/api/types";
 import { toApiUrl } from "@/lib/api/client";
 import { AuthenticatedImage } from "@/components/authenticated-image";
@@ -22,8 +22,10 @@ const filters: { key: Filter; label: string }[] = [
 ];
 
 export function AnalysisHistoryWorkspace() {
-  const history = useAnalysisHistory();
   const [filter, setFilter] = useState<Filter>("ALL");
+  const [offset, setOffset] = useState(0);
+  const limit = 100;
+  const history = useAnalysisHistory({ limit, offset, status: filter === "ALL" ? undefined : filter });
   const items = useMemo(
     () =>
       (history.data?.items ?? []).filter((item) => {
@@ -53,7 +55,7 @@ export function AnalysisHistoryWorkspace() {
           <button
             key={item.key}
             type="button"
-            onClick={() => setFilter(item.key)}
+            onClick={() => { setFilter(item.key); setOffset(0); }}
             aria-pressed={filter === item.key}
             className={
               filter === item.key
@@ -69,8 +71,8 @@ export function AnalysisHistoryWorkspace() {
       {history.isLoading ? (
         <HistoryMessage message="Loading your analyses." />
       ) : history.isError ? (
-        <HistoryMessage message="Court4 could not load Analysis History. Try again shortly." />
-      ) : history.data?.total === 0 ? (
+        <section role="alert"><HistoryMessage message="Court4 could not load Analysis History. Try again shortly." /><Button onClick={() => void history.refetch()}>Retry history</Button></section>
+      ) : history.data?.total === 0 && filter === "ALL" ? (
         <HistoryMessage message="No analyses yet. Upload a match recording to create your first Court4 report." />
       ) : items.length === 0 ? (
         <HistoryMessage message="No analyses match this filter." />
@@ -81,6 +83,13 @@ export function AnalysisHistoryWorkspace() {
           ))}
         </section>
       )}
+      {!history.isError && history.data ? (
+        <nav aria-label="History pages" className="flex flex-wrap items-center gap-3">
+          <Button variant="secondary" disabled={offset === 0 || history.isFetching} onClick={() => setOffset(Math.max(0, offset - limit))}>Previous page</Button>
+          <p role="status">Page {Math.floor(offset / limit) + 1} of {Math.max(1, Math.ceil(history.data.total / limit))} · {history.data.total} matching reports</p>
+          <Button variant="secondary" disabled={offset + limit >= history.data.total || history.isFetching} onClick={() => setOffset(offset + limit)}>Next page</Button>
+        </nav>
+      ) : null}
     </div>
   );
 }

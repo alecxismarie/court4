@@ -5,6 +5,7 @@ import { type ReactNode, Suspense, useState } from "react";
 
 import { AuthGate } from "@/components/auth-gate";
 import { AuthProvider } from "@/lib/auth-context";
+import { AccountQueryProvider } from "@/lib/account-query-provider";
 
 export function Providers({ children }: { children: ReactNode }) {
   const [queryClient] = useState(
@@ -29,7 +30,7 @@ export function Providers({ children }: { children: ReactNode }) {
             </main>
           }
         >
-          <AuthGate>{children}</AuthGate>
+          <AccountQueryProvider><AuthGate>{children}</AuthGate></AccountQueryProvider>
         </Suspense>
       </AuthProvider>
     </QueryClientProvider>

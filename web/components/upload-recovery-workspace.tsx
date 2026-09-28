@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { abortDirectUpload, completeDirectUpload, createAnalysis, discoverUploads, recoverUpload, waitForUploadResult } from "@/lib/api/analyses";
+import { abortDirectUpload, completeDirectUpload, createAnalysis, discoverUploads, recoverUpload, retryDuplicateCleanup, waitForUploadResult } from "@/lib/api/analyses";
 import { normalizeApiError } from "@/lib/api/client";
 import type { UploadAnalysisResponse, UploadProgress as Progress, UploadRecovery } from "@/lib/api/types";
 import { UploadDropzone } from "@/components/upload-dropzone";
@@ -67,6 +67,7 @@ function RecoveredUpload({ initial, onCanceled }: { initial: UploadRecovery; onC
     try {
       const current = await recoverUpload(upload.upload_session_id);
       setUpload(current); setProgress(confirmedProgress(current));
+      if (current.duplicate_cleanup_pending) await retryDuplicateCleanup(current.upload_session_id);
       let result: UploadAnalysisResponse;
       if (["completing", "verifying", "analyzing", "completed"].includes(current.status)) {
         result = await waitForUploadResult(current.upload_session_id, { size: current.byte_size }, setProgress, attempt.signal);
@@ -92,8 +93,9 @@ function RecoveredUpload({ initial, onCanceled }: { initial: UploadRecovery; onC
   }
 
   return <section className="space-y-5 rounded-md border border-court-line bg-white p-6">
-    <h1 className="text-2xl font-semibold">{busy ? finalizing || progress.phase === "verifying" ? "Finalizing" : "Uploading" : error ? "Upload interrupted" : "Recoverable upload found"}</h1>
+    <h1 className="text-2xl font-semibold">{busy ? progress.phase === "preparing" ? "Preparing video" : finalizing || progress.phase === "verifying" ? "Finalizing" : "Uploading" : error ? "Upload interrupted" : "Recoverable upload found"}</h1>
     <p>{upload.filename}</p>
+    {upload.duplicate_cleanup_pending ? <p>The existing analysis is safe. Removal of the extra uploaded copy is unfinished. Choose Check progress to retry.</p> : null}
     <p>Your uploaded parts are preserved. {finalizing ? "Check progress to continue finalizing." : allParts ? "All parts have arrived. You can finish without uploading the video again." : "Reselect the original video to resume the remaining parts."}</p>
     <UploadProgress progress={progress} />
     {!finalizing && !allParts && !expired && upload.file_identity ? <label className="block">Original match video

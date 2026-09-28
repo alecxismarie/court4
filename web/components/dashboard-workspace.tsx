@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 
 import { AnalysisStatusBadge } from "@/components/history-badges";
 import { ProfileAvatar } from "@/components/profile-avatar";
-import { ButtonLink } from "@/components/ui/button";
+import { Button, ButtonLink } from "@/components/ui/button";
 import { FirstTimeProfileModal } from "@/components/first-time-profile-modal";
 import { useOptionalAuth } from "@/lib/auth-context";
 import { useAnalysisHistory, usePlayHistory } from "@/lib/use-history";
@@ -34,13 +34,12 @@ export function DashboardWorkspace() {
     ["READY", "LIMITED", "UNSUITABLE"].includes(item.status),
   );
   const latestInsight = playHistory.data?.latest_verified_match_iq[0];
-  const completedCount =
-    analyses.data?.items.filter((item) =>
-      ["READY", "LIMITED", "UNSUITABLE"].includes(item.status),
-    ).length ?? 0;
+  const completedCount = analyses.data?.completed_total;
   const showFirstAnalysisState =
     !analyses.isLoading &&
     !playHistory.isLoading &&
+    !analyses.isError &&
+    !playHistory.isError &&
     !latestCompleted &&
     !latestInsight;
 
@@ -51,6 +50,14 @@ export function DashboardWorkspace() {
         : false,
     );
   }, [auth?.user]);
+
+  if (analyses.isError || playHistory.isError) {
+    return <section role="alert" className="space-y-4 rounded-md border border-court-line bg-white p-6">
+      <h1 className="text-2xl font-semibold">Your dashboard could not be loaded</h1>
+      <p>Your saved matches have not been removed. Reconnect and try again.</p>
+      <Button onClick={() => { void analyses.refetch(); void playHistory.refetch(); }}>Retry dashboard</Button>
+    </section>;
+  }
 
   return (
     <div className="space-y-5 md:space-y-6">
@@ -111,7 +118,7 @@ export function DashboardWorkspace() {
         />
         <MetricCard
           label="Completed reports"
-          value={analyses.isLoading ? "Loading" : String(completedCount)}
+          value={analyses.isLoading ? "Loading" : completedCount === undefined ? "Unavailable" : String(completedCount)}
           icon={CircleCheck}
         />
         <MetricCard

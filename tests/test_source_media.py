@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi import FastAPI
 from sqlalchemy import select
 
 from app.api.v1.analyses import get_workflow_service
@@ -17,13 +18,11 @@ from app.services.history import HistoryProjectionService
 from app.services.jobs import AnalysisJobRepository, AnalysisWorkflowService
 from app.services.jobs.exceptions import JobConflictError
 from app.services.jobs.source_media import SourceMediaService
-from tests.test_direct_uploads import _client, _register_verified_user
+from tests.test_direct_uploads import FakeMultipartStorage, _client, _register_verified_user
 from tests.test_history import _match_iq, _persist_qualified_report
 
 
 def test_legacy_local_source_can_be_deleted_with_s3_as_active_backend(tmp_path: Path) -> None:
-    from tests.test_direct_uploads import FakeMultipartStorage
-
     _client_instance, legacy, _storage = setup_media(tmp_path, "local")
     hybrid = AnalysisJobRepository(
         output_dir=tmp_path / "workspace",
@@ -44,6 +43,7 @@ def test_legacy_local_source_can_be_deleted_with_s3_as_active_backend(tmp_path: 
 
 
 def setup_media(tmp_path: Path, provider: str = "s3") -> tuple[Any, AnalysisJobRepository, Any]:
+    storage: LocalObjectStorage | FakeMultipartStorage
     client, upload_service, storage, owner = _client(tmp_path)
     if provider == "local":
         storage = LocalObjectStorage(tmp_path / "output")
@@ -55,6 +55,7 @@ def setup_media(tmp_path: Path, provider: str = "s3") -> tuple[Any, AnalysisJobR
         object_storage=storage,
     )
     workflow = AnalysisWorkflowService(settings=upload_service.settings, repository=repo)
+    assert isinstance(client.app, FastAPI)
     client.app.dependency_overrides[get_workflow_service] = lambda: workflow
     for day in range(5):
         analysis_id = f"match-{day}"
@@ -135,6 +136,7 @@ def test_media_only_deletion_retains_every_history_and_progress_input(
             )
         )
         assert artifact is not None and artifact.state == "deleted"
+    assert identity[0] is not None
     duplicate = repo.find_uploaded_video_by_owner_and_checksum(identity[0])
     assert duplicate is not None and duplicate.existing_analysis_id == "match-2"
     unavailable = client.get("/api/v1/analyses/match-2/artifacts/uploads/source.mp4")
@@ -279,6 +281,7 @@ def test_materialization_and_deletion_are_serialized(
     source.unlink(missing_ok=True)  # Force a provider download rather than a cache hit.
     key = next(key for key in storage.objects if "/match-2/" in key and "/source/" in key)
     entered, release, waiting, retry = Event(), Event(), Event(), Event()
+    assert isinstance(storage, FakeMultipartStorage)
     real_download, real_delete = storage.download_file, storage.delete
     source_downloads: list[str] = []
 

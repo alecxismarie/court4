@@ -67,13 +67,40 @@ class HistoryProjectionService:
     def __init__(self, *, repository: AnalysisJobRepository) -> None:
         self.repository = repository
 
-    def analysis_history(self, *, limit: int, offset: int) -> AnalysisHistoryResponse:
-        all_items = self._all_items()
+    def analysis_history(
+        self, *, limit: int, offset: int, status: AnalysisHistoryStatus | None = None
+    ) -> AnalysisHistoryResponse:
+        # Classify/order metadata first. Only the requested page needs result
+        # artifacts; counting/filtering must not download every report.
+        jobs = [
+            self.repository.load_job_metadata(analysis_id)
+            for analysis_id in dict.fromkeys(self.repository.list_job_ids())
+        ]
+        jobs.sort(key=lambda job: (job.created_at, job.analysis_id), reverse=True)
+
+        def history_status(job: AnalysisJob) -> AnalysisHistoryStatus:
+            quality = job.analysis_readiness or job.upload_preflight
+            return _history_status(job, quality.status if quality else None)
+
+        completed_total = sum(
+            history_status(job)
+            in {
+                AnalysisHistoryStatus.ready,
+                AnalysisHistoryStatus.limited,
+                AnalysisHistoryStatus.unsuitable,
+            }
+            for job in jobs
+        )
+        if status is not None:
+            jobs = [job for job in jobs if history_status(job) == status]
         return AnalysisHistoryResponse(
-            items=all_items[offset : offset + limit],
-            total=len(all_items),
+            items=[
+                self._project_analysis(job.analysis_id) for job in jobs[offset : offset + limit]
+            ],
+            total=len(jobs),
             limit=limit,
             offset=offset,
+            completed_total=completed_total,
         )
 
     def play_history(self, *, recent_limit: int) -> PlayHistoryResponse:

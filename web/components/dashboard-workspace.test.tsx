@@ -1,4 +1,5 @@
 import { screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardWorkspace } from "@/components/dashboard-workspace";
@@ -82,6 +83,24 @@ describe("dashboard workspace", () => {
       screen.getByText("No completed analysis is available yet.").closest("section"),
     ).toHaveClass("hidden", "md:grid");
     expect(screen.getByText(/No verified movement insight is available/)).toBeInTheDocument();
+  });
+
+  it("uses authoritative completed counts beyond the visible page", () => {
+    analysisHistoryMock.mockReturnValue(query({ ...makeAnalysisHistoryResponse([makeAnalysisHistoryItem()]), total: 150, completed_total: 120 }));
+    renderWithQueryClient(<DashboardWorkspace />);
+    expect(screen.getByText("Total reports").parentElement?.parentElement).toHaveTextContent("150");
+    expect(screen.getByText("Completed reports").parentElement?.parentElement).toHaveTextContent("120");
+  });
+
+  it.each(["history", "progress"])("distinguishes %s failure from empty and offers retry", async (failed) => {
+    const retry = vi.fn();
+    analysisHistoryMock.mockReturnValue({ ...query(makeAnalysisHistoryResponse()), isError: failed === "history", refetch: retry });
+    playHistoryMock.mockReturnValue({ ...query(makePlayHistoryResponse()), isError: failed === "progress", refetch: retry });
+    renderWithQueryClient(<DashboardWorkspace />);
+    expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded");
+    expect(screen.queryByText("Your first analysis starts here")).not.toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: "Retry dashboard" }));
+    expect(retry).toHaveBeenCalledTimes(2);
   });
 
   it("shows a personalized welcome with a saved display name", () => {

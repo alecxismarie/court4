@@ -12,6 +12,7 @@ test("delete original video requires confirmation and retains the report after r
   await page.route("**/api/v1/analyses/media-retention", (route) => route.fulfill({
     json: { ...job, source_media_state: deleted ? "deleted" : "available" },
   }));
+  await page.route("**/api/v1/analyses/media-retention/lifecycle", route => route.fulfill({ json: { analysis_id: job.analysis_id, state: "live" } }));
   await page.route("**/api/v1/analyses/media-retention/frames", (route) => route.fulfill({
     json: { analysis_id: job.analysis_id, frames: [] },
   }));
@@ -28,12 +29,13 @@ test("delete original video requires confirmation and retains the report after r
     return route.fulfill({ status: 204 });
   });
   await page.goto("/matches/media-retention");
-  await page.getByRole("button", { name: "Delete video", exact: true }).click();
+  await page.getByRole("button", { name: "Delete original video", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("Progress history will remain");
   expect(attempts).toBe(0);
   await page.getByRole("button", { name: "Keep video" }).click();
+  await expect(page.getByRole("button", { name: "Delete original video", exact: true })).toBeFocused();
   expect(attempts).toBe(0);
-  await page.getByRole("button", { name: "Delete video", exact: true }).click();
+  await page.getByRole("button", { name: "Delete original video", exact: true }).click();
   await page.getByRole("button", { name: "Permanently delete video" }).click();
   await expect(page.getByRole("dialog").getByRole("alert")).toContainText("Please retry");
   await expect(page.getByText(/Source video deleted/)).toHaveCount(0);
@@ -42,5 +44,5 @@ test("delete original video requires confirmation and retains the report after r
   await page.reload();
   await expect(page.getByText(/Source video deleted/)).toBeVisible();
   await expect(page.getByRole("link", { name: "View Match IQ" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Delete video", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Delete original video", exact: true })).toHaveCount(0);
 });

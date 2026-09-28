@@ -47,7 +47,7 @@ export function normalizeApiError(error: unknown): Court4ApiError {
     });
   }
   if (error instanceof TypeError) {
-    return new Court4ApiError("Court4 backend is unavailable.", {
+    return new Court4ApiError("Court4 is temporarily unavailable. Please check your connection and try again.", {
       code: "backend_unavailable",
     });
   }

@@ -23,6 +23,7 @@ from app.persistence.errors import (
     ResourceNotFoundError,
     SourceMediaUnavailableError,
 )
+from app.persistence.models import Analysis
 from app.persistence.models import AnalysisArtifact as PersistedArtifact
 from app.persistence.object_storage import (
     LocalObjectStorage,
@@ -196,6 +197,14 @@ class AnalysisJobRepository:
 
     def save_job(self, job: AnalysisJob) -> AnalysisJob:
         with self.media_operation(job.analysis_id):
+            # Reject tombstones before any filesystem artifacts can be uploaded.
+            with self.persistence.session_factory() as session:
+                existing = session.get(Analysis, job.analysis_id)
+                if existing is not None and (
+                    existing.owner_user_id != self.owner_user_id
+                    or existing.lifecycle_state != "live"
+                ):
+                    raise JobNotFoundError()
             with suppress(JobNotFoundError):  # Compatibility import of a new analysis.
                 self.require_retained_source(job.analysis_id)
             return self._save_job(job)
@@ -301,6 +310,31 @@ class AnalysisJobRepository:
             source = PurePosixPath(relative)
             storage.delete(key=str(source.with_name(f".{source.name}.court4-download")))
 
+    def purge_local_match_copies(self, analysis_id: str, *, videos_only: bool = False) -> None:
+        """Delete exact files under validated match roots, including abandoned temp files."""
+        self.validate_analysis_id(analysis_id)
+        roots = {self.output_dir, self.legacy_storage.root}
+        if self.storage.root != self.output_dir:
+            roots.update(
+                p.resolve()
+                for p in self.storage.root.glob(f"court4-{self.owner_user_id}-*")
+                if p.is_dir() and not p.is_symlink() and p.resolve().parent == self.storage.root
+            )
+        for root in roots:
+            for match_root in (
+                LocalStorage(root).analysis_root(analysis_id),
+                root / "_uploads" / analysis_id,
+            ):
+                if match_root.is_symlink() or not match_root.resolve().is_relative_to(root):
+                    raise JobStorageBackendError("Local match cleanup needs review.")
+                if not match_root.exists():
+                    continue
+                for path in match_root.rglob("*"):
+                    if path.is_symlink() or not path.resolve().is_relative_to(match_root):
+                        raise JobStorageBackendError("Local match cleanup needs review.")
+                    if path.is_file() and (not videos_only or is_playback_media(path.name)):
+                        path.unlink()
+
     def staging_dir(self, analysis_id: str) -> Path:
         self.validate_analysis_id(analysis_id)
         path = (self.output_dir / "_uploads" / analysis_id).resolve()
@@ -316,7 +350,7 @@ class AnalysisJobRepository:
         analysis_dir = self.analysis_dir(analysis_id)
         relative_path = validate_relative_artifact_path(artifact_path)
         job = self.load_job_metadata(analysis_id)
-        if relative_path == job.source_video:
+        if relative_path == job.source_video or is_playback_media(relative_path):
             self.require_retained_source(analysis_id)
         try:
             record = self.persistence.service.get_artifact(
@@ -326,6 +360,8 @@ class AnalysisJobRepository:
             )
         except (ResourceNotFoundError, OwnershipMismatchError):
             raise JobNotFoundError("Artifact was not found.") from None
+        if record.content_type.startswith("video/"):
+            self.require_retained_source(analysis_id)
         resolved = self.workspace.resolve(analysis_id, relative_path)
         if not _is_relative_to(resolved, analysis_dir):
             raise JobRequestError("unsafe_artifact_path", "Artifact path is outside the analysis.")
@@ -471,7 +507,13 @@ class AnalysisJobRepository:
             analysis_id=analysis_id,
         )
         if self.load_job_metadata(analysis_id).source_media_state in {"deleting", "deleted"}:
-            records = [record for record in records if record.artifact_kind != "source_video"]
+            records = [
+                record
+                for record in records
+                if record.artifact_kind != "source_video"
+                and not is_playback_media(record.logical_key)
+                and not record.content_type.startswith("video/")
+            ]
         self._reserve_workspace(records)
         for record in records:
             destination = self.workspace.resolve(analysis_id, record.logical_key)
@@ -595,6 +637,11 @@ def _artifact_kind(storage_key: str) -> str:
         "ball": "ball_tracking",
         "stages": "stage_evidence",
     }.get(first, "metadata")
+
+
+def is_playback_media(path: str) -> bool:
+    name = path.lower().removesuffix(".court4-download")
+    return PurePosixPath(name).suffix in {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v"}
 
 
 def _artifact_schema_version(storage_key: str) -> int | None:

@@ -64,6 +64,7 @@ class AnalysisHistoryResponse(BaseModel):
     total: int = Field(ge=0)
     limit: int = Field(ge=1)
     offset: int = Field(ge=0)
+    completed_total: int = Field(default=0, ge=0)
 
 
 class PlayHistoryZoneSummary(BaseModel):

@@ -14,18 +14,26 @@ import { Button, ButtonLink } from "@/components/ui/button";
 import { MatchWorkflow } from "@/components/workflow-actions";
 import { RecordingQualityCard } from "@/components/recording-quality-card";
 import { SourceVideoControls } from "@/components/source-video-controls";
+import { MatchDeletionControls } from "@/components/match-deletion-controls";
+import { getMatchLifecycle } from "@/lib/api/source-media";
 
 export function MatchDetails({ analysisId }: { analysisId: string }) {
+  const lifecycle = useQuery({ queryKey: ["match-lifecycle", analysisId], queryFn: () => getMatchLifecycle(analysisId) });
   const jobQuery = useQuery({
     queryKey: ["analysis", analysisId],
     queryFn: () => getAnalysis(analysisId),
+    enabled: !lifecycle.data || lifecycle.data.state === "live",
   });
 
   const framesQuery = useQuery({
     queryKey: ["analysis", analysisId, "frames"],
     queryFn: () => getAnalysisFrames(analysisId),
-    enabled: jobQuery.data?.inspection_completed === true,
+    enabled: jobQuery.data?.inspection_completed === true && (!lifecycle.data || lifecycle.data.state === "live"),
   });
+
+  if (lifecycle.data && lifecycle.data.state !== "live") {
+    return <MatchDeletionControls analysisId={analysisId} state={lifecycle.data.state} />;
+  }
 
   if (jobQuery.isLoading) {
     return <MatchDetailsSkeleton />;
@@ -43,7 +51,7 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
         </h1>
         <p className="mt-2 text-sm text-court-red">
           {isBackendUnavailable
-            ? "Make sure the Court4 backend is running, then try again."
+            ? "Court4 is temporarily unavailable. Check your connection and try again."
             : error.message}
         </p>
         <Button className="mt-5" type="button" variant="secondary" onClick={() => void jobQuery.refetch()}>
@@ -88,7 +96,11 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
       </section>
 
       {job.sport === "pickleball" ? <JobStatus job={job} /> : null}
-      <SourceVideoControls job={job} />
+      <section aria-label="Match management" className="space-y-4">
+        <h2 className="text-xl font-semibold">Match management</h2>
+        <SourceVideoControls job={job} />
+        <MatchDeletionControls analysisId={analysisId} />
+      </section>
 
       <RecordingQualityCard
         assessment={job.analysis_readiness ?? job.upload_preflight}

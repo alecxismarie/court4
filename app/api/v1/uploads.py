@@ -176,3 +176,14 @@ def abort_upload(
     service: UploadServiceDependency,
 ) -> UploadSessionResponse:
     return service.abort(owner_user_id=user.id, upload_session_id=upload_session_id)
+
+
+@router.post(
+    "/{upload_session_id}/retry-cleanup",
+    response_model=UploadSessionResponse,
+    responses=ERROR_RESPONSES,
+)
+def retry_duplicate_cleanup(
+    upload_session_id: UUID, user: VerifiedUser, service: UploadServiceDependency
+) -> UploadSessionResponse:
+    return service.cleanup_duplicate(owner_user_id=user.id, upload_session_id=upload_session_id)

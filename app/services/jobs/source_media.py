@@ -1,9 +1,10 @@
 from sqlalchemy import select
 
 from app.persistence.models import Analysis, AnalysisArtifact, UploadedVideo, UploadSession, utc_now
-from app.persistence.object_storage import LocalObjectStorage, ObjectStorageError
+from app.persistence.object_storage import ObjectStorageError
 from app.services.jobs.exceptions import JobConflictError, JobNotFoundError, JobStorageBackendError
-from app.services.jobs.repository import AnalysisJobRepository
+from app.services.jobs.match_lifecycle import delete_registered_object
+from app.services.jobs.repository import AnalysisJobRepository, is_playback_media
 
 
 class SourceMediaService:
@@ -19,14 +20,12 @@ class SourceMediaService:
                     .where(Analysis.id == analysis_id, Analysis.owner_user_id == repo.owner_user_id)
                     .with_for_update()
                 )
-                if analysis is None:
+                if analysis is None or analysis.lifecycle_state != "live":
                     raise JobNotFoundError()
                 video = session.get(UploadedVideo, analysis.uploaded_video_id)
                 if video is None or video.owner_user_id != repo.owner_user_id:
                     raise JobNotFoundError()
-                if video.state == "deleted":
-                    return
-                if video.state not in {"available", "deleting"}:
+                if video.state not in {"available", "deleting", "deleted"}:
                     raise JobConflictError(
                         "source_video_unavailable", "No established source recording is available."
                     )
@@ -66,6 +65,21 @@ class SourceMediaService:
                 provider, key = video.storage_provider, video.storage_key
                 logical_key = str(analysis.job_payload.get("source_video") or "")
                 video_id = video.id
+                media = list(
+                    session.scalars(
+                        select(AnalysisArtifact).where(
+                            AnalysisArtifact.analysis_id == analysis_id,
+                            AnalysisArtifact.owner_user_id == repo.owner_user_id,
+                        )
+                    )
+                )
+                media = [
+                    a
+                    for a in media
+                    if a.artifact_kind == "source_video"
+                    or is_playback_media(a.logical_key)
+                    or a.content_type.startswith("video/")
+                ]
                 video.state = "deleting"
                 video.metadata_payload = {
                     **video.metadata_payload,
@@ -79,15 +93,26 @@ class SourceMediaService:
             # Intent survives process failure. Never claim successful deletion until
             # exact provider deletion succeeds. Missing bytes are idempotent success.
             try:
-                if provider == "local":
-                    root = repo.legacy_storage.analysis_root(analysis_id)
-                    LocalObjectStorage(root).delete(key=key)
-                elif provider == repo.object_storage.provider:
-                    repo.object_storage.delete(key=key)
-                else:
-                    raise JobStorageBackendError()
                 if logical_key:
-                    repo.delete_local_source_copies(analysis_id, logical_key)
+                    delete_registered_object(
+                        repo,
+                        analysis_id,
+                        provider=provider,
+                        key=key,
+                        logical_key=logical_key,
+                        source=True,
+                    )
+                for artifact in media:
+                    delete_registered_object(
+                        repo,
+                        analysis_id,
+                        provider=artifact.storage_provider,
+                        key=artifact.storage_key,
+                        logical_key=artifact.logical_key,
+                        checksum=artifact.checksum_sha256,
+                        source=artifact.artifact_kind == "source_video",
+                    )
+                repo.purge_local_match_copies(analysis_id, videos_only=True)
             except (ObjectStorageError, OSError) as exc:
                 raise JobStorageBackendError(
                     "The source recording could not be deleted. Please retry."
@@ -106,7 +131,7 @@ class SourceMediaService:
                     select(AnalysisArtifact).where(
                         AnalysisArtifact.analysis_id == analysis_id,
                         AnalysisArtifact.owner_user_id == repo.owner_user_id,
-                        AnalysisArtifact.artifact_kind == "source_video",
                     )
                 ):
-                    artifact.state = "deleted"
+                    if artifact.id in {a.id for a in media}:
+                        artifact.state = "deleted"

@@ -32,6 +32,13 @@ describe("analytics details evidence narrative", () => {
     mockedGetAnalysis.mockResolvedValue(makeJob());
   });
 
+  it.each(["available", "deleted"] as const)("links to the same match with source %s", async (source_media_state) => {
+    mockedGetAnalysis.mockResolvedValue(makeJob({ source_media_state }));
+    mockedGetAnalytics.mockResolvedValue({ analysis_id: "manage-456", analytics: makeAnalyticsReport(), match_iq: makeMatchIQReport() });
+    renderWithQueryClient(<AnalyticsDetails analysisId="manage-456" />);
+    expect(await screen.findByRole("link", { name: "Manage match" })).toHaveAttribute("href", "/matches/manage-456");
+  });
+
   it("renders the evidence-to-insight hierarchy with unchanged measurements", async () => {
     mockedGetAnalytics.mockResolvedValue({
       analysis_id: "analysis-123",

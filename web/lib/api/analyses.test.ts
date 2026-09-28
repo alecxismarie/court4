@@ -183,8 +183,10 @@ describe("direct multipart analysis uploads", () => {
     expect(await discoverUploads()).toHaveLength(1);
     const progress: UploadProgress[] = [];
     await createAnalysis(new File(["abcdef"], "reselected.mp4"), (p) => progress.push(p), { resumeSessionId: SESSION_ID });
-    expect(progress[0]).toMatchObject({ loaded: 3, total: 6, percent: 50 });
-    expect(progress.every((p) => p.loaded >= 3 && p.loaded <= 6)).toBe(true);
+    expect(progress[0]).toMatchObject({ loaded: 0, percent: null, phase: "preparing" });
+    const transfers = progress.filter(p => p.phase !== "preparing");
+    expect(transfers[0]).toMatchObject({ loaded: 3, total: 6, percent: 50 });
+    expect(transfers.every((p) => p.loaded >= 3 && p.loaded <= 6)).toBe(true);
     expect(FakeXMLHttpRequest.openedUrls).toEqual([part(2).url]);
     expect(JSON.parse(String(fetchMock.mock.calls[3][1]?.body)).parts).toEqual([
       { part_number: 1, etag: '"first"', size_bytes: 3 }, { part_number: 2, etag: '"second"' },

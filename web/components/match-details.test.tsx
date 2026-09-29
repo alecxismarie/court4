@@ -236,6 +236,27 @@ describe("match details workflow", () => {
     expect(screen.queryByText(/Court recognized with .* confidence/i)).not.toBeInTheDocument();
   });
 
+  it("distinguishes unavailable frames from a saved geometric failure and permits retry", async () => {
+    const user = userEvent.setup();
+    mockedGetAnalysis.mockResolvedValue(makeJob({
+      court_detection_status: "failed", court_detection_confidence: 0,
+      manual_calibration_required: true,
+    }));
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+    mockedDetectCourt.mockRejectedValue(new Court4ApiError("Frames unavailable", {
+      code: "recognition_frames_unavailable", status: 409,
+    }));
+    renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+    await user.click(await screen.findByRole("button", { name: /recognize court/i }));
+    expect(await screen.findByText("Inspection frames unavailable")).toBeInTheDocument();
+    expect(screen.getByText(/could not access usable inspection frames/)).toBeInTheDocument();
+    expect(screen.queryByText(/Confidence was 0%/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /calibrate manually/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /try again/i }));
+    expect(mockedDetectCourt).toHaveBeenCalledTimes(2);
+    expect(pushMock).not.toHaveBeenCalled();
+  });
+
   it("renders persisted manual calibration requirement after refresh", async () => {
     mockedGetAnalysis.mockResolvedValue(
       makeJob({

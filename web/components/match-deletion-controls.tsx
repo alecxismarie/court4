@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { ConfirmationDialog } from "@/components/confirmation-dialog";
@@ -15,9 +15,11 @@ export function MatchDeletionControls({ analysisId, state = "live" }: {
   const mutation = useMutation({
     mutationFn: () => deleteMatch(analysisId),
     onSuccess: () => setConfirming(false),
-    onSettled: async () => {
+    onSettled: async (_data, error) => {
       // Even a failed purge may have accepted deletion and retired this match.
-      const lifecycle = await getMatchLifecycle(analysisId).catch(() => null);
+      const lifecycle = error
+        ? await getMatchLifecycle(analysisId).catch(() => null)
+        : { analysis_id: analysisId, state: "deleted" as const };
       if (lifecycle) client.setQueryData(["match-lifecycle", analysisId], lifecycle);
       if (!lifecycle || lifecycle.state !== "live") {
         client.removeQueries({ queryKey: ["analysis", analysisId] });
@@ -28,10 +30,7 @@ export function MatchDeletionControls({ analysisId, state = "live" }: {
       }
     },
   });
-  if (state === "deleted" || mutation.isSuccess) return <section className="space-y-3">
-    <p role="status">Match and analysis deleted. This match no longer contributes to Progress.</p>
-    <ButtonLink href="/analysis-history">Back to Analysis History</ButtonLink>
-  </section>;
+  if (state === "deleted" || mutation.isSuccess) return <MatchDeletedState />;
   return <section className="space-y-3 rounded-md border border-red-200 bg-white p-5">
     <h2 className="font-semibold">Delete match &amp; analysis</h2>
     <p>Permanently removes this match and its analysis from Court4. It will be removed from History and will no longer contribute to Progress.</p>
@@ -45,5 +44,30 @@ export function MatchDeletionControls({ analysisId, state = "live" }: {
         <Button variant="destructive" disabled={mutation.isPending} onClick={() => mutation.mutate()}>{mutation.isPending ? "Deleting match…" : "Permanently delete match & analysis"}</Button>
       </div>
     </ConfirmationDialog> : null}
+  </section>;
+}
+
+function MatchDeletedState() {
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    // Run after the confirmation dialog restores focus to its former trigger.
+    const frame = requestAnimationFrame(() => {
+      heading.current?.focus({ preventScroll: true });
+      window.scrollTo({ top: 0, behavior: "instant" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, []);
+
+  return <section aria-labelledby="match-deleted-heading" className="space-y-5 rounded-md border border-court-line bg-white p-6 shadow-panel">
+    <h1 id="match-deleted-heading" ref={heading} tabIndex={-1} className="text-2xl font-semibold text-court-ink">
+      Match and analysis deleted
+    </h1>
+    <p role="status" className="text-court-muted">
+      Your match, recording and analysis have been deleted. This match was removed from History and no longer contributes to Progress.
+    </p>
+    <div className="flex flex-wrap gap-3">
+      <ButtonLink href="/upload-match">Upload another match</ButtonLink>
+      <ButtonLink href="/analysis-history" variant="secondary">Back to History</ButtonLink>
+    </div>
   </section>;
 }

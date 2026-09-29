@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MatchDeletionControls } from "@/components/match-deletion-controls";
@@ -7,11 +7,14 @@ import { renderWithQueryClient } from "@/test/render";
 
 vi.mock("@/lib/api/source-media", () => ({ deleteMatch: vi.fn(), getMatchLifecycle: vi.fn() }));
 describe("whole match deletion", () => {
-  beforeEach(() => { vi.mocked(deleteMatch).mockReset(); vi.mocked(getMatchLifecycle).mockResolvedValue({ analysis_id: "match-1", state: "deleted" }); });
+  beforeEach(() => { vi.spyOn(window, "scrollTo").mockImplementation(() => {}); vi.mocked(deleteMatch).mockReset(); vi.mocked(getMatchLifecycle).mockReset().mockResolvedValue({ analysis_id: "match-1", state: "deleted" }); });
   it("requires separate confirmation and removes only this match's cached report", async () => {
     const user = userEvent.setup();
     vi.mocked(deleteMatch).mockResolvedValue(undefined);
-    renderWithQueryClient(<MatchDeletionControls analysisId="match-1" />);
+    vi.mocked(getMatchLifecycle).mockRejectedValue(new Error("Status unavailable"));
+    const { queryClient } = renderWithQueryClient(<MatchDeletionControls analysisId="match-1" />);
+    queryClient.setQueryData(["analysis", "match-1"], { analysis_id: "match-1" });
+    queryClient.setQueryData(["analysis", "match-2"], { analysis_id: "match-2" });
     await user.click(screen.getByRole("button", { name: "Delete match & analysis" }));
     expect(deleteMatch).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
@@ -20,6 +23,15 @@ describe("whole match deletion", () => {
     await user.click(screen.getByRole("button", { name: "Permanently delete match & analysis" }));
     expect(await screen.findByRole("status")).toHaveTextContent("no longer contributes");
     expect(deleteMatch).toHaveBeenCalledWith("match-1");
+    expect(screen.getByRole("status")).toHaveTextContent("removed from History");
+    expect(screen.getByRole("link", { name: "Upload another match" })).toHaveAttribute("href", "/upload-match");
+    expect(screen.getByRole("link", { name: "Back to History" })).toHaveAttribute("href", "/analysis-history");
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Match and analysis deleted" })).toHaveFocus());
+    expect(window.scrollTo).toHaveBeenCalledWith({ top: 0, behavior: "instant" });
+    expect(queryClient.getQueryData(["match-lifecycle", "match-1"])).toEqual({ analysis_id: "match-1", state: "deleted" });
+    expect(queryClient.getQueryData(["analysis", "match-1"])).toBeUndefined();
+    expect(queryClient.getQueryData(["analysis", "match-2"])).toEqual({ analysis_id: "match-2" });
+    expect(getMatchLifecycle).not.toHaveBeenCalled();
   });
   it("shows pending removal honestly and permits a retry after provider failure", async () => {
     const user = userEvent.setup();

@@ -74,7 +74,7 @@ from app.services.candidates import (
     select_player_candidate,
     unmerge_player_candidates,
 )
-from app.services.court_detection import detect_pickleball_court
+from app.services.court_detection import RecognitionFramesUnavailableError, detect_pickleball_court
 from app.services.jobs.exceptions import (
     JobConflictError,
     JobNotFoundError,
@@ -348,7 +348,7 @@ class AnalysisWorkflowService:
                 )
             inspection = inspect_video(
                 input_path=staging_path,
-                output_dir=self.settings.analysis_output_dir,
+                output_dir=self.repository.output_dir,
                 sample_interval_seconds=self.settings.default_sample_interval_seconds,
                 supported_extensions=self.settings.supported_extensions,
                 max_file_size_bytes=self.settings.max_upload_size_bytes,
@@ -510,18 +510,25 @@ class AnalysisWorkflowService:
         )
 
         frame_paths = tuple(self._sampled_frame_paths(analysis_id))
-        result = detect_pickleball_court(
-            frame_paths=frame_paths,
-            output_dir=self.settings.analysis_output_dir,
-            analysis_id=analysis_id,
-            calibration_id=self.settings.court_detection_calibration_id,
-            min_confidence=self.settings.court_detection_min_confidence,
-            low_confidence_threshold=self.settings.court_detection_low_confidence_threshold,
-            numeric_tolerance=self.settings.numeric_validation_tolerance,
-            min_polygon_area_pixels=self.settings.min_calibration_polygon_area_pixels,
-            transition_area_depth_feet=self.settings.transition_area_depth_feet,
-            top_down_width_pixels=self.settings.calibration_top_down_width_pixels,
-        )
+        try:
+            result = detect_pickleball_court(
+                frame_paths=frame_paths,
+                output_dir=self.repository.output_dir,
+                analysis_id=analysis_id,
+                calibration_id=self.settings.court_detection_calibration_id,
+                min_confidence=self.settings.court_detection_min_confidence,
+                low_confidence_threshold=self.settings.court_detection_low_confidence_threshold,
+                numeric_tolerance=self.settings.numeric_validation_tolerance,
+                min_polygon_area_pixels=self.settings.min_calibration_polygon_area_pixels,
+                transition_area_depth_feet=self.settings.transition_area_depth_feet,
+                top_down_width_pixels=self.settings.calibration_top_down_width_pixels,
+            )
+        except RecognitionFramesUnavailableError as exc:
+            raise JobConflictError(
+                "recognition_frames_unavailable",
+                "Court4 could not access usable inspection frames. Retry recognition. "
+                "If frames remain unavailable, upload the video again before calibration.",
+            ) from exc
 
         detection_succeeded = result.outcome == CourtDetectionOutcome.detected
         manual_required = not detection_succeeded

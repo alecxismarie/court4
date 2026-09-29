@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -34,8 +35,64 @@ from app.services.jobs.exceptions import (
     JobStorageBackendError,
     JobStorageCapacityError,
 )
+from app.services.jobs.repository import AnalysisJobRepository
+from app.services.jobs.workflow import AnalysisWorkflowService
 from app.services.uploads import DirectUploadService
 from scripts.reconcile_multipart_uploads import reconcile_expired_multipart_uploads
+
+
+def test_s3_inspection_frames_survive_new_workspaces_and_recognition(
+    tmp_path: Path, synthetic_court_video_factory: Callable[..., Path]
+) -> None:
+    client, service, storage, owner = _client(tmp_path)
+    service.settings.analysis_output_dir = tmp_path / "unused-output"
+    data = synthetic_court_video_factory(tmp_path / "court.avi").read_bytes()
+    uploaded = _direct_round_trip(client, storage, data, "durable-frames")
+    analysis_id = uploaded["analysis_id"]
+    frame_names = {
+        artifact["path"]
+        for artifact in uploaded["available_artifacts"]
+        if artifact["path"].startswith("frames/")
+    }
+    assert len(frame_names) == 6  # Three seconds sampled every half-second.
+    assert not service.settings.analysis_output_dir.exists()
+    frame_keys = {key for key in storage.objects if "/frames/" in key}
+    assert len(frame_keys) == len(frame_names)
+
+    workspaces = []
+    for recognize in (True, False):
+        repository = AnalysisJobRepository.from_settings(
+            settings=service.settings,
+            owner_user_id=owner,
+            persistence=get_persistence(),
+            object_storage=storage,
+        )
+        workspaces.append(repository.output_dir)
+        workflow = AnalysisWorkflowService(settings=service.settings, repository=repository)
+        try:
+            assert {
+                frame.path for frame in workflow.list_sampled_frames(analysis_id).frames
+            } == frame_names
+            repository.load_job(analysis_id)
+            paths = workflow._sampled_frame_paths(analysis_id)
+            assert {
+                path.relative_to(repository.analysis_dir(analysis_id)).as_posix() for path in paths
+            } == frame_names
+            assert all(path.is_file() for path in paths)
+            if recognize:
+                result = workflow.detect_court(analysis_id)
+                assert result.status == "detected"
+                assert result.selected_frame in frame_names
+            else:
+                assert workflow.get_job(analysis_id).calibration_completed
+                assert repository.resolve_artifact(
+                    analysis_id, "calibrations/auto-court-detection/calibration.json"
+                ).is_file()
+        finally:
+            repository.close()
+        assert not repository.output_dir.exists()
+    assert workspaces[0] != workspaces[1]
+    assert {key for key in storage.objects if "/frames/" in key} == frame_keys
 
 
 @pytest.mark.parametrize("status", ["completed", "failed", "aborted", "expired"])

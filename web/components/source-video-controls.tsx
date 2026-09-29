@@ -25,7 +25,7 @@ export function SourceVideoControls({ job }: { job: AnalysisJob }) {
   if (job.source_media_state === "deleted" || mutation.isSuccess) {
     return (
       <p role="status" className="text-sm text-court-muted">
-        Source video deleted. Your analysis and Progress history remain available.
+        Source video deleted, including large playback videos. Your analysis, Match IQ, History and Progress remain available. Reanalysis from the original video is no longer available.
       </p>
     );
   }

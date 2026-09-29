@@ -261,6 +261,7 @@ function CourtRecognitionPanel({
   const verification = findArtifact(artifacts, "verification.jpg");
   const detectionStatus = job.court_detection_status ?? result?.status ?? null;
   const detectionConfidence = job.court_detection_confidence ?? result?.confidence ?? null;
+  const framesUnavailable = normalizeApiError(error).code === "recognition_frames_unavailable";
   const detectionNeedsManualCalibration =
     detectionStatus === "failed" ||
     detectionStatus === "low_confidence" ||
@@ -317,12 +318,17 @@ function CourtRecognitionPanel({
         </div>
       ) : null}
 
-      <WorkflowError error={error} onRetry={onDetect} />
+      <WorkflowError
+        error={error}
+        onRetry={onDetect}
+        title={framesUnavailable ? "Inspection frames unavailable" : undefined}
+        message={framesUnavailable ? "Court4 could not access usable inspection frames. Retry recognition. If frames remain unavailable, upload the video again before automatic or manual calibration." : undefined}
+      />
 
-      {!job.calibration_completed && result ? (
+      {!framesUnavailable && !job.calibration_completed && result ? (
         <DetectionResultMessage analysisId={job.analysis_id} result={result} />
       ) : null}
-      {!job.calibration_completed && !result && detectionStatus ? (
+      {!framesUnavailable && !job.calibration_completed && !result && detectionStatus ? (
         <PersistedDetectionMessage
           analysisId={job.analysis_id}
           status={detectionStatus}
@@ -347,7 +353,7 @@ function CourtRecognitionPanel({
         </div>
       ) : null}
 
-      {detectionNeedsManualCalibration && !job.calibration_completed && !result && !detectionStatus ? (
+      {!framesUnavailable && detectionNeedsManualCalibration && !job.calibration_completed && !result && !detectionStatus ? (
         <div className="mt-5 flex flex-wrap items-center justify-between gap-4 rounded-md border border-amber-200 bg-amber-50 p-4">
           <div className="flex gap-3">
             <AlertTriangle aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-court-amber" />

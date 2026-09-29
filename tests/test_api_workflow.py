@@ -329,6 +329,26 @@ def test_calibration_success_invalid_calibration_and_tracking_order(
     assert calibration.json()["calibration"]["calibration_id"] == "api-calibration"
 
 
+def test_court_detection_missing_frames_returns_typed_error_without_confidence(
+    tmp_path: Path,
+    synthetic_video_factory: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.jobs.workflow import AnalysisWorkflowService
+
+    client, _output_dir = _api_client(tmp_path, monkeypatch)
+    video_path = synthetic_video_factory(tmp_path / "missing-frames.avi")
+    analysis_id = _upload_video(client, video_path).json()["analysis_id"]
+    monkeypatch.setattr(AnalysisWorkflowService, "_sampled_frame_paths", lambda *_args: [])
+    response = client.post(f"/api/v1/analyses/{analysis_id}/court-detection")
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "recognition_frames_unavailable"
+    assert "confidence" not in response.json()
+    job = client.get(f"/api/v1/analyses/{analysis_id}").json()
+    assert job["court_detection_confidence"] is None
+    assert job["court_detection_status"] is None
+
+
 def test_automatic_court_detection_success_updates_job(
     tmp_path: Path,
     synthetic_court_video_factory: Callable[..., Path],

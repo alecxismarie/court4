@@ -19,6 +19,10 @@ ImageArray = NDArray[np.uint8]
 MAX_AUTOMATIC_COURT_AREA_RATIO = 0.75
 
 
+class RecognitionFramesUnavailableError(Exception):
+    """No supplied inspection frame could be decoded for recognition."""
+
+
 @dataclass(frozen=True)
 class AutomaticCourtDetectionResult:
     outcome: CourtDetectionOutcome
@@ -60,11 +64,18 @@ def detect_pickleball_court(
     if low_confidence_threshold < 0 or low_confidence_threshold > min_confidence:
         raise ValueError("Low-confidence threshold must be between 0 and the minimum confidence.")
 
-    candidates = [
-        candidate
-        for frame_path in frame_paths
-        if (candidate := _detect_frame_candidate(frame_path, min_polygon_area_pixels)) is not None
-    ]
+    candidates = []
+    usable_frames = 0
+    for frame_path in frame_paths:
+        try:
+            candidate = _detect_frame_candidate(frame_path, min_polygon_area_pixels)
+        except RecognitionFramesUnavailableError:
+            continue
+        usable_frames += 1
+        if candidate is not None:
+            candidates.append(candidate)
+    if not usable_frames:
+        raise RecognitionFramesUnavailableError("No usable inspection frames are available.")
     if not candidates:
         return AutomaticCourtDetectionResult(
             outcome=CourtDetectionOutcome.failed,
@@ -148,7 +159,7 @@ def _detect_frame_candidate(
     image = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
     if image is None:
         logger.info("court_detection_frame_read_failed", extra={"frame_path": str(frame_path)})
-        return None
+        raise RecognitionFramesUnavailableError("Inspection frame could not be decoded.")
 
     mask = _court_line_mask(cast(ImageArray, image))
     contours, _hierarchy = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)

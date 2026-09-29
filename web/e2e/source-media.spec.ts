@@ -1,7 +1,9 @@
 import { test, expect } from "./fixtures";
 import { makeJob, makePlayerCandidateCollection } from "../test/factories";
 
-test("delete original video requires confirmation and retains the report after refresh", async ({ page }) => {
+for (const width of [390, 1280]) {
+test(`delete original video retains details on the same route at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: 844 });
   let deleted = false;
   let attempts = 0;
   const job = makeJob({
@@ -41,8 +43,13 @@ test("delete original video requires confirmation and retains the report after r
   await expect(page.getByText(/Source video deleted/)).toHaveCount(0);
   await page.getByRole("button", { name: "Permanently delete video" }).click();
   await expect(page.getByText(/Source video deleted/)).toBeVisible();
+  await expect(page).toHaveURL(/\/matches\/media-retention$/);
+  await expect(page.getByText(/Source video deleted/)).toContainText("History and Progress remain");
+  await expect(page.getByText(/Source video deleted/)).toContainText("Reanalysis from the original video is no longer available");
+  await expect(page.getByRole("link", { name: "View Match IQ" })).toBeVisible();
   await page.reload();
   await expect(page.getByText(/Source video deleted/)).toBeVisible();
   await expect(page.getByRole("link", { name: "View Match IQ" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Delete original video", exact: true })).toHaveCount(0);
 });
+}

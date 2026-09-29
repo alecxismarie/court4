@@ -28,6 +28,7 @@ LABEL org.court4.detector-model.identifier="ultralytics-yolo11n-assets-v8.3.0" \
 COPY app ./app
 COPY alembic.ini ./
 COPY scripts ./scripts
+RUN python -m scripts.provision_detector_model --destination /app/models/yolo11n.pt
 COPY calibration ./calibration
 COPY calibration-results.json CALIBRATION_REPORT.md CALIBRATION_DISAGREEMENTS.md ./
 COPY calibration-readiness-integrity.json ./

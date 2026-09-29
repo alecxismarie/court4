@@ -985,12 +985,25 @@ docker compose run --rm api python -m scripts.analyze_match --analysis-id ...
 ```
 
 The Docker image installs the optional detector dependencies, including Ultralytics
-and ByteTrack's `lap` dependency, but it does not include model weights. Provision
-the exact pinned artifact first, then mount it read-only. The Compose service mounts
-`./models:/app/models:ro` and sets the model path and expected checksum. Controlled
-JSONL detections remain available for deterministic offline tests that do not
-require weights. Staging uses the same provisioning command against a persistent
-model volume; an Ultralytics-default API refuses to start without verified bytes.
+and ByteTrack's `lap` dependency, and bakes the pinned model into
+`/app/models/yolo11n.pt`. The build runs `scripts.provision_detector_model`, which
+downloads the pinned artifact and verifies its SHA-256 before installing it.
+A download or checksum failure fails the build. No weights are committed to Git
+or silently downloaded at runtime. Staging needs no additional model variable or
+model volume for the default path.
+
+The runtime path remains configurable through `COURT4_DETECTOR_MODEL_PATH` (or its
+existing legacy alias). An override must point to a separately provisioned,
+checksum-verified model. Local Compose still mounts `./models:/app/models:ro`,
+which hides the baked-in directory: provision the local model with the command
+above before using that mount. Controlled JSONL detections remain available for
+deterministic offline tests that do not require weights.
+
+Health/readiness semantics are unchanged: `/health` reports process health and
+`/ready` checks database and storage. An Ultralytics-default API still refuses to
+start without verified model bytes; explicit Ultralytics tracking requests still
+return the existing typed errors for missing or invalid models. The image build
+verifies the default model even when the API default backend is controlled JSONL.
 
 Run the API with Docker:
 
@@ -999,7 +1012,6 @@ docker build -t court4:local .
 docker run --rm -p 8000:8000 \
   -e COURT4_DETECTOR_MODEL_PATH=/app/models/yolo11n.pt \
   -v "$PWD/data:/app/data" \
-  -v "$PWD/models:/app/models:ro" \
   court4:local
 ```
 

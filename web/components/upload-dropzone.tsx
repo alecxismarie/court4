@@ -3,6 +3,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { FileVideo2, RotateCcw, Upload } from "lucide-react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
@@ -210,6 +211,19 @@ export function UploadDropzone({
           <li>Capture enough continuous gameplay.</li>
           <li>Usable tracked time matters more than total duration.</li>
         </ul>
+        <figure className="mt-5">
+          <Image
+            src="/upload/court-angle-example.jpeg"
+            alt="Pickleball doubles court viewed from behind the baseline, with the full court and all four players visible."
+            width={954}
+            height={541}
+            unoptimized
+            className="h-auto w-full rounded-md border border-court-line"
+          />
+          <figcaption className="mt-2 text-xs text-court-muted">
+            Example: camera behind the baseline with the full court visible.
+          </figcaption>
+        </figure>
       </section>
 
       <fieldset className="rounded-md border border-court-line bg-white p-5">

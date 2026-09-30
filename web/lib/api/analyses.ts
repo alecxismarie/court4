@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { fileIdentity } from "@/lib/file-identity";
+import { UploadDiagnostics, uploadFailure, type FailureCategory } from "@/lib/upload-diagnostics";
 
 import {
   Court4ApiError,
@@ -82,11 +83,23 @@ async function createAnalysisDirect(
   const idempotencyKey = options?.idempotencyKey ?? crypto.randomUUID();
   throwIfAborted(options?.signal);
   onProgress?.({ loaded: 0, total: file.size, percent: null, phase: "preparing" });
-  const identity = await fileIdentity(file, options?.signal);
+  const diagnostics = new UploadDiagnostics();
+  const preparationStart = performance.now();
+  let chunks = 0;
+  let identity: string;
+  diagnostics.emit("preparation_start", { bytes: file.size });
+  try {
+    identity = await fileIdentity(file, options?.signal, () => { chunks += 1; });
+    diagnostics.emit("preparation_end", { bytes: file.size, chunks, duration_ms: performance.now() - preparationStart, outcome: "success" });
+  } catch (error) {
+    diagnostics.emit("preparation_end", { bytes: file.size, chunks, duration_ms: performance.now() - preparationStart, outcome: uploadFailure(error) });
+    throw error;
+  }
   if (options?.resumeSessionId) {
     const recovery = await postJson(`/api/v1/uploads/${encodeURIComponent(options.resumeSessionId)}/resume`,
       uploadRecoverySchema, { file_identity: identity, byte_size: file.size });
-    return resumeTransfer(file, recovery, onProgress, options);
+    diagnostics.bind(recovery.upload_session_id);
+    return resumeTransfer(file, recovery, onProgress, options, diagnostics);
   }
   const initiatedResponse = await authenticatedFetch(toApiUrl("/api/v1/uploads/initiate"), {
     method: "POST",
@@ -119,10 +132,11 @@ async function createAnalysisDirect(
   }
 
   const sessionId = initiated.upload_session_id;
+  diagnostics.bind(sessionId);
   options?.onSession?.(sessionId);
   if (initiated.resumed) {
     const recovery = await recoverUpload(sessionId);
-    return resumeTransfer(file, recovery, onProgress, options);
+    return resumeTransfer(file, recovery, onProgress, options, diagnostics);
   }
   if (initiated.status === "completed") {
     return waitForUploadResult(sessionId, file, onProgress, options?.signal);
@@ -132,22 +146,23 @@ async function createAnalysisDirect(
   }
 
   return transferDirect(file, sessionId, initiated.parts, [], initiated.part_size,
-    initiated.max_concurrency, initiated.max_attempts, initiated.inactivity_seconds, onProgress, options);
+    initiated.max_concurrency, initiated.max_attempts, initiated.inactivity_seconds, onProgress, options, diagnostics);
 }
 
-function resumeTransfer(file: File, recovery: UploadRecovery, onProgress?: (p: UploadProgress) => void, options?: UploadOptions) {
+function resumeTransfer(file: File, recovery: UploadRecovery, onProgress?: (p: UploadProgress) => void, options?: UploadOptions, diagnostics?: UploadDiagnostics) {
   options?.onSession?.(recovery.upload_session_id);
   if (!["initiated", "uploading"].includes(recovery.status)) {
     return waitForUploadResult(recovery.upload_session_id, file, onProgress, options?.signal);
   }
   return transferDirect(file, recovery.upload_session_id, [], recovery.completed_parts,
     recovery.part_size, recovery.max_concurrency, recovery.max_attempts, recovery.inactivity_seconds,
-    onProgress, options);
+    onProgress, options, diagnostics);
 }
 
 async function transferDirect(file: File, sessionId: string, initialParts: PresignedUploadPart[],
   existingParts: CompletedPart[], partSize: number, concurrency: number, maxAttempts: number,
   inactivitySeconds: number, onProgress?: (p: UploadProgress) => void, options?: UploadOptions,
+  diagnostics?: UploadDiagnostics,
 ): Promise<UploadAnalysisResponse> {
   const transferController = new AbortController();
   const cancelTransfer = () => transferController.abort();
@@ -160,6 +175,7 @@ async function transferDirect(file: File, sessionId: string, initialParts: Presi
       initialParts, existingParts, partSize, concurrency, maxAttempts, inactivitySeconds,
       onProgress,
       signal: transferController.signal,
+      diagnostics,
     });
     return await completeDirectUpload(sessionId, completedParts, file.size, onProgress, options?.signal);
   } catch (error) {
@@ -294,6 +310,7 @@ async function uploadParts({
   maxAttempts,
   onProgress,
   signal,
+  diagnostics = new UploadDiagnostics(),
 }: {
   file: File;
   sessionId: string;
@@ -305,6 +322,7 @@ async function uploadParts({
   maxAttempts: number;
   onProgress?: (progress: UploadProgress) => void;
   signal?: AbortSignal;
+  diagnostics?: UploadDiagnostics;
 }): Promise<CompletedPart[]> {
   const urls = new Map(initialParts.map((part) => [part.part_number, part]));
   const partCount = Math.ceil(file.size / partSize);
@@ -313,6 +331,14 @@ async function uploadParts({
   const completed = new Set(existingParts.map((p) => p.part_number));
   for (const number of completed) loadedByPart.set(number, Math.min(partSize, file.size - (number - 1) * partSize));
   let nextPart = 1;
+  const transferStart = performance.now();
+  const existingBytes = [...loadedByPart.values()].reduce((sum, size) => sum + size, 0);
+  let activeParts = 0;
+  let maxActiveParts = 0;
+  let retries = 0;
+  let renewals = 0;
+  let transferredBytes = 0;
+  diagnostics.emit("transfer_start", { bytes: file.size, part_count: partCount, existing_parts: completed.size, existing_bytes: existingBytes });
 
   const reportProgress = () => {
     if (signal?.aborted) return;
@@ -336,17 +362,47 @@ async function uploadParts({
         throwIfAborted(signal);
         loadedByPart.set(partNumber, 0);
         reportProgress();
+        if (attempt > 1) {
+          retries += 1;
+          diagnostics.emit("part_retry", { part_number: partNumber, attempt, outcome: uploadFailure(lastError) });
+        }
         try {
           let part = urls.get(partNumber);
           if (!part || Date.parse(part.expires_at) <= Date.now() + 30_000 ||
               (attempt > 1 && isAuthorizationFailure(lastError))) {
-            part = await refreshPartUrl(sessionId, partNumber, signal);
+            const reason = !part ? "recovery_resume" : attempt > 1 && isAuthorizationFailure(lastError)
+              ? "authorization_rejection" : Date.parse(part.expires_at) <= Date.now() ? "expired" : "near_expiry";
+            diagnostics.emit("url_renewal_start", { part_number: partNumber, attempt, reason });
+            const renewalStart = performance.now();
+            try {
+              part = await refreshPartUrl(sessionId, partNumber, signal);
+              renewals += 1;
+              diagnostics.emit("url_renewal_end", { part_number: partNumber, attempt, reason, outcome: "success", duration_ms: performance.now() - renewalStart });
+            } catch (error) {
+              diagnostics.emit("url_renewal_end", { part_number: partNumber, attempt, reason, outcome: uploadFailure(error), duration_ms: performance.now() - renewalStart });
+              throw error;
+            }
             urls.set(partNumber, part);
           }
-          const etag = await uploadPart(part.url, body, signal, inactivitySeconds, (loaded) => {
-            loadedByPart.set(partNumber, loaded);
-            reportProgress();
-          });
+          activeParts += 1;
+          maxActiveParts = Math.max(maxActiveParts, activeParts);
+          const partStart = performance.now();
+          diagnostics.emit("part_start", { part_number: partNumber, attempt, bytes: body.size, active_parts: activeParts });
+          let outcome: FailureCategory = "success";
+          let etag: string;
+          try {
+            etag = await uploadPart(part.url, body, signal, inactivitySeconds, (loaded) => {
+              loadedByPart.set(partNumber, loaded);
+              reportProgress();
+            }, (idleMs) => diagnostics.emit("part_stalled", { part_number: partNumber, attempt, idle_ms: idleMs }));
+          } catch (error) {
+            outcome = uploadFailure(error);
+            throw error;
+          } finally {
+            activeParts -= 1;
+            diagnostics.emit("part_end", { part_number: partNumber, attempt, bytes: body.size, active_parts: activeParts, duration_ms: performance.now() - partStart, outcome });
+          }
+          transferredBytes += body.size;
           loadedByPart.set(partNumber, body.size);
           results.push({ part_number: partNumber, etag });
           reportProgress();
@@ -370,9 +426,22 @@ async function uploadParts({
   };
 
   reportProgress();
-  await Promise.all(
-    Array.from({ length: Math.min(Math.max(1, concurrency), partCount) }, () => worker()),
-  );
+  let outcome: FailureCategory = "success";
+  try {
+    await Promise.all(
+      Array.from({ length: Math.min(Math.max(1, concurrency), partCount) }, () => worker()),
+    );
+  } catch (error) {
+    outcome = uploadFailure(error);
+    throw error;
+  } finally {
+    const duration = performance.now() - transferStart;
+    if (signal?.aborted) outcome = "canceled";
+    diagnostics.emit("transfer_end", { bytes: file.size, part_count: partCount, duration_ms: duration,
+      outcome, existing_parts: completed.size, existing_bytes: existingBytes, transferred_bytes: transferredBytes,
+      completed_parts: results.length, retries, renewals, max_active_parts: maxActiveParts,
+      effective_mbps: duration > 0 ? transferredBytes * 8 / (duration * 1000) : 0 });
+  }
   return results.sort((first, second) => first.part_number - second.part_number);
 }
 
@@ -382,15 +451,18 @@ function uploadPart(
   signal: AbortSignal | undefined,
   inactivitySeconds: number,
   onProgress: (loaded: number) => void,
+  onStall: (idleMs: number) => void,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     let watchdog: ReturnType<typeof setTimeout>;
     let lastLoaded = 0;
     let stalled = false;
+    let lastProgressAt = performance.now();
     const armWatchdog = () => {
       clearTimeout(watchdog);
-      watchdog = setTimeout(() => { stalled = true; xhr.abort(); }, inactivitySeconds * 1000);
+      lastProgressAt = performance.now();
+      watchdog = setTimeout(() => { stalled = true; onStall(performance.now() - lastProgressAt); xhr.abort(); }, inactivitySeconds * 1000);
     };
     const abort = () => xhr.abort();
     xhr.upload.addEventListener("progress", (event) => {

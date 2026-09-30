@@ -101,6 +101,7 @@ from app.services.tracking import (
     TrackingError,
     UltralyticsByteTrackBackend,
 )
+from app.services.upload_observability import upload_phase
 from app.services.video import VideoInspectionError, inspect_video
 from app.services.video.player_analysis import (
     EligibilityConfig,
@@ -264,9 +265,10 @@ class AnalysisWorkflowService:
         try:
             staging_dir.mkdir(parents=True, exist_ok=False)
             try:
-                metadata = self.repository.object_storage.download_file(
-                    key=storage_key, destination=staging_path
-                )
+                with upload_phase("source_materialization", analysis_id):
+                    metadata = self.repository.object_storage.download_file(
+                        key=storage_key, destination=staging_path
+                    )
             except ObjectStorageError as exc:
                 raise JobStorageBackendError(
                     "Verified source video could not be materialized for analysis."
@@ -346,14 +348,15 @@ class AnalysisWorkflowService:
                         self.repository.load_job_metadata(reservation.analysis_id)
                     ).model_dump(mode="json")
                 )
-            inspection = inspect_video(
-                input_path=staging_path,
-                output_dir=self.repository.output_dir,
-                sample_interval_seconds=self.settings.default_sample_interval_seconds,
-                supported_extensions=self.settings.supported_extensions,
-                max_file_size_bytes=self.settings.max_upload_size_bytes,
-                analysis_id=analysis_id,
-            )
+            with upload_phase("inspection", analysis_id):
+                inspection = inspect_video(
+                    input_path=staging_path,
+                    output_dir=self.repository.output_dir,
+                    sample_interval_seconds=self.settings.default_sample_interval_seconds,
+                    supported_extensions=self.settings.supported_extensions,
+                    max_file_size_bytes=self.settings.max_upload_size_bytes,
+                    analysis_id=analysis_id,
+                )
             source_video_path = self._move_upload_to_analysis(analysis_id, staging_path)
             job = AnalysisJob(
                 analysis_id=analysis_id,
@@ -368,7 +371,8 @@ class AnalysisWorkflowService:
                 inspection_completed=True,
                 upload_preflight=inspection.report.upload_preflight,
             )
-            saved = self.repository.save_job(job)
+            with upload_phase("artifact_persistence", analysis_id):
+                saved = self.repository.save_job(job)
             return UploadVideoResponse.model_validate(saved.model_dump(mode="json"))
         except VideoInspectionError as exc:
             logger.info(

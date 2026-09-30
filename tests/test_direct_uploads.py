@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import logging
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -376,9 +377,22 @@ def test_initiate_is_idempotent_and_rejects_metadata_reuse(tmp_path: Path) -> No
     assert conflict.json()["error"]["code"] == "upload_idempotency_conflict"
 
 
+@pytest.fixture
+def upload_logs(
+    caplog: pytest.LogCaptureFixture, request: pytest.FixtureRequest
+) -> pytest.LogCaptureFixture:
+    # create_app resets root logging handlers; attach capture to the timing logger.
+    logger = logging.getLogger("app.services.upload_observability")
+    caplog.set_level("INFO", logger=logger.name)
+    logger.addHandler(caplog.handler)
+    request.addfinalizer(lambda: logger.removeHandler(caplog.handler))
+    return caplog
+
+
 def test_complete_verifies_checksum_then_creates_analysis(
     tmp_path: Path,
     synthetic_video_factory: Any,
+    upload_logs: pytest.LogCaptureFixture,
 ) -> None:
     client, _service, storage, owner = _client(tmp_path)
     video = synthetic_video_factory(tmp_path / "direct.avi", frame_count=5)
@@ -412,10 +426,48 @@ def test_complete_verifies_checksum_then_creates_analysis(
         assert video_record.storage_provider == "s3"
         assert video_record.source_checksum == hashlib.sha256(data).hexdigest()
 
+    events = [r for r in upload_logs.records if r.name == "app.services.upload_observability"]
+    assert [r.getMessage() for r in events] == [
+        "upload_completion_received",
+        "upload_phase_start",
+        "upload_phase_end",  # completion and initial object metadata
+        "upload_completion_accepted",
+        "upload_verification_start",
+        "upload_phase_start",
+        "upload_phase_end",  # file identity
+        "upload_phase_start",
+        "upload_phase_end",  # sha256
+        "upload_phase_start",
+        "upload_phase_end",  # verified object metadata
+        "upload_verification_end",
+        "upload_phase_start",
+        "upload_phase_end",  # source materialization
+        "upload_phase_start",
+        "upload_phase_end",  # inspection
+        "upload_phase_start",
+        "upload_phase_end",  # durable artifacts
+        "upload_session_completed",
+    ]
+    assert {r.__dict__["analysis_id"] for r in events} == {payload["result"]["analysis_id"]}
+    phases = [r for r in events if r.getMessage() == "upload_phase_end"]
+    assert [r.__dict__["phase"] for r in phases] == [
+        "completion",
+        "integrity",
+        "sha256",
+        "verified_metadata",
+        "source_materialization",
+        "inspection",
+        "artifact_persistence",
+    ]
+    assert all(
+        r.__dict__["duration_ms"] >= 0 and r.__dict__["outcome"] == "success" for r in phases
+    )
+
 
 def test_checksum_mismatch_fails_without_creating_analysis(
     tmp_path: Path,
     synthetic_video_factory: Any,
+    upload_logs: pytest.LogCaptureFixture,
 ) -> None:
     client, _service, storage, _owner = _client(tmp_path)
     data = synthetic_video_factory(tmp_path / "mismatch.avi", frame_count=5).read_bytes()
@@ -441,6 +493,10 @@ def test_checksum_mismatch_fails_without_creating_analysis(
 
     assert status["status"] == "failed"
     assert status["failure_code"] == "checksum_mismatch"
+    events = [r for r in upload_logs.records if r.name == "app.services.upload_observability"]
+    assert not any(r.getMessage() == "upload_session_completed" for r in events)
+    assert events[-1].getMessage() == "upload_verification_end"
+    assert events[-1].__dict__["outcome"] == "failure"
     with get_persistence().session_factory() as session:
         assert session.get(Analysis, initiated["upload_session_id"].replace("-", "")) is None
 
@@ -480,7 +536,9 @@ def test_completion_requires_every_part_and_analysis_does_not_exist_before_verif
         assert session.get(Analysis, small.upload_session_id.hex) is None
 
 
-def test_completion_size_mismatch_fails_without_analysis(tmp_path: Path) -> None:
+def test_completion_size_mismatch_fails_without_analysis(
+    tmp_path: Path, upload_logs: pytest.LogCaptureFixture
+) -> None:
     client, _service, storage, _owner = _client(tmp_path)
     initiated = client.post(
         "/api/v1/uploads/initiate",
@@ -496,6 +554,16 @@ def test_completion_size_mismatch_fails_without_analysis(tmp_path: Path) -> None
 
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "object_verification_failed"
+    events = [r for r in upload_logs.records if r.name == "app.services.upload_observability"]
+    assert [r.getMessage() for r in events] == [
+        "upload_completion_received",
+        "upload_phase_start",
+        "upload_session_failed",
+        "upload_phase_end",
+    ]
+    assert events[-1].__dict__["phase"] == "completion"
+    assert events[-1].__dict__["outcome"] == "failure"
+    assert events[-1].__dict__["duration_ms"] >= 0
     with get_persistence().session_factory() as session:
         upload = session.get(UploadSession, UUID(initiated["upload_session_id"]))
         assert upload is not None

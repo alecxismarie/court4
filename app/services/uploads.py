@@ -9,6 +9,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 from typing import cast
 from uuid import UUID, uuid4
 
@@ -48,6 +49,7 @@ from app.services.jobs.exceptions import (
     JobWorkflowError,
 )
 from app.services.jobs.repository import AnalysisJobRepository
+from app.services.upload_observability import upload_event, upload_phase
 from app.sports import SportType
 
 logger = logging.getLogger(__name__)
@@ -413,6 +415,7 @@ class DirectUploadService:
                 record.updated_at = utc_now()
                 response = self._status_response(record)
         if verification_failed:
+            upload_event("session_failed", upload_session_id.hex)
             raise JobRequestError(
                 "object_verification_failed", "Uploaded object metadata did not match the session."
             )
@@ -459,6 +462,7 @@ class DirectUploadService:
             resumed_analysis = record.status == "analyzing"
             resumed_checksum = record.verified_sha256
 
+        verification_start: float | None = None
         try:
             if resumed_analysis:
                 if resumed_checksum is None:
@@ -471,22 +475,28 @@ class DirectUploadService:
                         return
                     snapshot = self._snapshot(record)
             else:
-                if (
-                    expected_identity is not None
-                    and self.storage.calculate_file_identity(key=storage_key) != expected_identity
-                ):
-                    self._fail(upload_session_id, "checksum_mismatch")
-                    return
-                checksum = self.storage.calculate_sha256(
-                    key=storage_key,
-                    chunk_size=self.settings.direct_upload_checksum_chunk_size_bytes,
-                )
+                verification_start = perf_counter()
+                upload_event("verification_start", upload_session_id.hex)
+                with upload_phase("integrity", upload_session_id.hex):
+                    if (
+                        expected_identity is not None
+                        and self.storage.calculate_file_identity(key=storage_key)
+                        != expected_identity
+                    ):
+                        self._fail(upload_session_id, "checksum_mismatch")
+                        return
+                with upload_phase("sha256", upload_session_id.hex):
+                    checksum = self.storage.calculate_sha256(
+                        key=storage_key,
+                        chunk_size=self.settings.direct_upload_checksum_chunk_size_bytes,
+                    )
                 if expected_sha256 is not None and checksum != expected_sha256:
                     self._fail(upload_session_id, "checksum_mismatch")
                     return
-                verified = self.storage.set_verified_checksum(
-                    key=storage_key, checksum_sha256=checksum
-                )
+                with upload_phase("verified_metadata", upload_session_id.hex):
+                    verified = self.storage.set_verified_checksum(
+                        key=storage_key, checksum_sha256=checksum
+                    )
                 with self.persistence.session_factory.begin() as session:
                     record = session.scalar(
                         select(UploadSession)
@@ -500,6 +510,7 @@ class DirectUploadService:
                         record.failure_reason = "object_size_mismatch"
                         record.row_version += 1
                         record.updated_at = utc_now()
+                        upload_event("session_failed", upload_session_id.hex)
                         return
                     record.verified_sha256 = checksum
                     record.status = "analyzing"
@@ -507,6 +518,13 @@ class DirectUploadService:
                     record.row_version += 1
                     record.updated_at = utc_now()
                     snapshot = self._snapshot(record)
+                upload_event(
+                    "verification_end",
+                    upload_session_id.hex,
+                    duration_ms=(perf_counter() - verification_start) * 1000,
+                    outcome="success",
+                )
+                verification_start = None
 
             workflow = AnalysisWorkflowService(
                 settings=self.settings,
@@ -560,6 +578,7 @@ class DirectUploadService:
                 record.completed_at = utc_now()
                 record.row_version += 1
                 record.updated_at = utc_now()
+            upload_event("session_completed", upload_session_id.hex)
         except JobWorkflowError as exc:
             self._fail(upload_session_id, exc.code)
         except ObjectStorageError:
@@ -570,6 +589,14 @@ class DirectUploadService:
                 extra={"upload_session_id": str(upload_session_id)},
             )
             self._fail(upload_session_id, "upload_finalization_failed")
+        finally:
+            if verification_start is not None:
+                upload_event(
+                    "verification_end",
+                    upload_session_id.hex,
+                    duration_ms=(perf_counter() - verification_start) * 1000,
+                    outcome="failure",
+                )
 
     def abort(self, *, owner_user_id: UUID, upload_session_id: UUID) -> UploadSessionResponse:
         # Durably fence completion before touching S3. A database connection can
@@ -801,6 +828,7 @@ class DirectUploadService:
             record.failure_reason = reason[:256]
             record.row_version += 1
             record.updated_at = utc_now()
+        upload_event("session_failed", upload_session_id.hex)
 
     def cleanup_duplicate(
         self, *, owner_user_id: UUID, upload_session_id: UUID
@@ -843,6 +871,7 @@ class DirectUploadService:
             record.completed_at = utc_now()
             record.updated_at = utc_now()
             record.row_version += 1
+            upload_event("session_completed", upload_session_id.hex)
             return self._status_response(record)
 
     @staticmethod

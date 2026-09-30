@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fileIdentity } from "@/lib/file-identity";
 
 describe("reselected file identity", () => {
@@ -9,7 +9,9 @@ describe("reselected file identity", () => {
       .update(createHash("sha256").update(data.subarray(0, 8_388_608)).digest())
       .update(createHash("sha256").update("last").digest()).update("\n8388612").digest("hex");
     const original = new File([data], "match.mp4");
-    expect(await fileIdentity(original)).toBe(`sha256-chunks-v1:${root}`);
+    const onChunk = vi.fn();
+    expect(await fileIdentity(original, undefined, onChunk)).toBe(`sha256-chunks-v1:${root}`);
+    expect(onChunk).toHaveBeenCalledTimes(2);
     expect(await fileIdentity(new File([data], "renamed.mp4"))).toBe(await fileIdentity(original));
     data[data.length - 1] = 33;
     expect(await fileIdentity(new File([data], "match.mp4"))).not.toBe(`sha256-chunks-v1:${root}`);

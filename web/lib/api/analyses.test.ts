@@ -1,15 +1,29 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { abortDirectUpload, createAnalysis, discoverUploads, TerminalUploadError } from "@/lib/api/analyses";
 import { setAccessToken } from "@/lib/api/client";
 import type { UploadProgress } from "@/lib/api/types";
 import { makeJob } from "@/test/factories";
+import { fileIdentity } from "@/lib/file-identity";
 
 const SESSION_ID = "8b2ee1d1-3176-4a9e-a643-66559d667e47";
 const IDENTITY = `sha256-chunks-v1:${"a".repeat(64)}`;
-vi.mock("@/lib/file-identity", () => ({ fileIdentity: async () => IDENTITY }));
+vi.mock("@/lib/file-identity", () => ({ fileIdentity: vi.fn() }));
+
+function diagnostics(event?: string): Array<Record<string, unknown>> {
+  return vi.mocked(console.info).mock.calls.filter(([label]) => label === "court4_upload")
+    .map(([, data]) => JSON.parse(String(data)) as Record<string, unknown>)
+    .filter((entry) => !event || entry.event === event);
+}
 
 describe("direct multipart analysis uploads", () => {
+  beforeEach(() => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    vi.mocked(fileIdentity).mockImplementation(async (_file, _signal, onChunk) => {
+      onChunk?.();
+      return IDENTITY;
+    });
+  });
   afterEach(() => {
     vi.useRealTimers();
     setAccessToken(null);
@@ -76,6 +90,15 @@ describe("direct multipart analysis uploads", () => {
       `http://localhost:8000/api/v1/uploads/${SESSION_ID}`,
     ]);
     expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("secret_access_key");
+    expect(diagnostics("preparation_end")[0]).toMatchObject({ bytes: 6, chunks: 1, outcome: "success" });
+    expect(diagnostics("preparation_start")[0].run_id).toBe(diagnostics("session_bound")[0].run_id);
+    expect(diagnostics("session_bound")[0].upload_session_id).toBe(SESSION_ID);
+    expect(diagnostics("part_start")).toHaveLength(3);
+    expect(diagnostics("part_end").map(e => e.outcome)).toEqual(["success", "http", "success"]);
+    expect(diagnostics("part_retry")[0]).toMatchObject({ part_number: 2, attempt: 2, outcome: "http" });
+    expect(diagnostics("transfer_end")[0]).toMatchObject({ bytes: 6, transferred_bytes: 6, completed_parts: 2, retries: 1, max_active_parts: 1, outcome: "success" });
+    const serialized = JSON.stringify(diagnostics());
+    for (const secret of [IDENTITY, "private-storage", "match.mp4", "direct-test", "part-one"]) expect(serialized).not.toContain(secret);
   });
 
   it("reports bounded retry exhaustion and preserves the durable session", async () => {
@@ -118,6 +141,7 @@ describe("direct multipart analysis uploads", () => {
     })).rejects.toMatchObject({ code: "upload_canceled" });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(FakeXMLHttpRequest.openedUrls).toHaveLength(0);
+    expect(diagnostics("transfer_end")[0]).toMatchObject({ outcome: "canceled", transferred_bytes: 0, completed_parts: 0 });
   });
 
   it("retains retry ambiguity when the initiation response is lost", async () => {
@@ -141,10 +165,11 @@ describe("direct multipart analysis uploads", () => {
     expect(FakeXMLHttpRequest.openedUrls).toHaveLength(2);
     expect(FakeXMLHttpRequest.abortCount).toBe(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(diagnostics("transfer_end")[0]).toMatchObject({ max_active_parts: 2, outcome: "http" });
   });
 
   it.each([false, true])("detects inactivity and bounds watchdog retries (exhaust=%s)", async (exhaust) => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
     FakeXMLHttpRequest.outcomes = [{ status: 0, hold: true }, exhaust ? { status: 0, hold: true } : { status: 200, etag: '"ok"' }];
     vi.stubGlobal("XMLHttpRequest", FakeXMLHttpRequest);
     const fetchMock = vi.spyOn(globalThis, "fetch")
@@ -157,12 +182,17 @@ describe("direct multipart analysis uploads", () => {
     expect(FakeXMLHttpRequest.abortCount).toBe(exhaust ? 2 : 1);
     expect(FakeXMLHttpRequest.openedUrls).toHaveLength(2);
     expect(fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(false);
+    expect(diagnostics("part_stalled")).toHaveLength(exhaust ? 2 : 1);
+    expect(diagnostics("part_stalled")[0]).toMatchObject({ part_number: 1, attempt: 1, idle_ms: 10_000 });
+    expect(diagnostics("part_retry")[0]).toMatchObject({ outcome: "inactivity", attempt: 2 });
   });
 
-  it.each(["expired", "rejected", "storage-401"])("renews a %s URL before continuing", async (kind) => {
-    FakeXMLHttpRequest.outcomes = [...(kind !== "expired" ? [{ status: kind === "storage-401" ? 401 : 403 }] : []), { status: 200, etag: '"ok"' }];
+  it.each(["expired", "near-expiry", "rejected", "storage-401"])("renews a %s URL before continuing", async (kind) => {
+    const proactive = ["expired", "near-expiry"].includes(kind);
+    FakeXMLHttpRequest.outcomes = [...(!proactive ? [{ status: kind === "storage-401" ? 401 : 403 }] : []), { status: 200, etag: '"ok"' }];
     vi.stubGlobal("XMLHttpRequest", FakeXMLHttpRequest);
     const old = { ...part(1), expires_at: kind === "expired" ? "2000-01-01T00:00:00Z" : part(1).expires_at };
+    if (kind === "near-expiry") old.expires_at = new Date(Date.now() + 10_000).toISOString();
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse({ ...initiatePayload(), part_count: 1, parts: [old] }))
       .mockResolvedValueOnce(jsonResponse({ upload_session_id: SESSION_ID, parts: [{ ...part(1), url: "https://private-storage.test/renewed" }] }))
@@ -170,10 +200,15 @@ describe("direct multipart analysis uploads", () => {
     await createAnalysis(new File(["abc"], "match.mp4"));
     expect(FakeXMLHttpRequest.openedUrls.at(-1)).toBe("https://private-storage.test/renewed");
     expect(String(fetchMock.mock.calls[1][0])).toContain("/parts");
+    expect(diagnostics("url_renewal_end")[0]).toMatchObject({ outcome: "success", part_number: 1,
+      reason: kind === "expired" ? "expired" : kind === "near-expiry" ? "near_expiry" : "authorization_rejection" });
+    expect(diagnostics("transfer_end")[0]).toMatchObject({ renewals: 1 });
+    expect(JSON.stringify(diagnostics())).not.toContain("https://");
   });
 
   it("rediscovers an owner session, preserves completed parts and starts at confirmed progress", async () => {
-    FakeXMLHttpRequest.outcomes = [{ status: 200, etag: '"second"' }];
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    FakeXMLHttpRequest.outcomes = [{ status: 200, etag: '"second"', delay: 2000 }];
     vi.stubGlobal("XMLHttpRequest", FakeXMLHttpRequest);
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(jsonResponse([recoveryPayload()]))
@@ -182,7 +217,9 @@ describe("direct multipart analysis uploads", () => {
       .mockResolvedValueOnce(jsonResponse(completedPayload()));
     expect(await discoverUploads()).toHaveLength(1);
     const progress: UploadProgress[] = [];
-    await createAnalysis(new File(["abcdef"], "reselected.mp4"), (p) => progress.push(p), { resumeSessionId: SESSION_ID });
+    const result = createAnalysis(new File(["abcdef"], "reselected.mp4"), (p) => progress.push(p), { resumeSessionId: SESSION_ID });
+    await vi.advanceTimersByTimeAsync(2000);
+    await result;
     expect(progress[0]).toMatchObject({ loaded: 0, percent: null, phase: "preparing" });
     const transfers = progress.filter(p => p.phase !== "preparing");
     expect(transfers[0]).toMatchObject({ loaded: 3, total: 6, percent: 50 });
@@ -190,6 +227,14 @@ describe("direct multipart analysis uploads", () => {
     expect(FakeXMLHttpRequest.openedUrls).toEqual([part(2).url]);
     expect(JSON.parse(String(fetchMock.mock.calls[3][1]?.body)).parts).toEqual([
       { part_number: 1, etag: '"first"', size_bytes: 3 }, { part_number: 2, etag: '"second"' },
+    ]);
+    expect(diagnostics("transfer_end")[0]).toMatchObject({ existing_parts: 1, existing_bytes: 3, transferred_bytes: 3, completed_parts: 2, retries: 0 });
+    expect(diagnostics("part_start")).toHaveLength(1);
+    expect(diagnostics("url_renewal_end")[0].reason).toBe("recovery_resume");
+    expect(diagnostics("transfer_end")[0]).toMatchObject({ duration_ms: 2000, effective_mbps: 0.000012 });
+    expect(diagnostics().map(e => e.event)).toEqual([
+      "preparation_start", "preparation_end", "session_bound", "transfer_start",
+      "url_renewal_start", "url_renewal_end", "part_start", "part_end", "transfer_end",
     ]);
   });
 
@@ -205,6 +250,33 @@ describe("direct multipart analysis uploads", () => {
     setAccessToken("reauthenticated");
     fetchMock.mockResolvedValueOnce(jsonResponse([recoveryPayload()]));
     expect((await discoverUploads())[0].completed_parts).toHaveLength(1);
+  });
+
+  it("measures successful part duration and effective transfer throughput", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    FakeXMLHttpRequest.outcomes = [{ status: 200, etag: '"ok"', delay: 2000 }];
+    vi.stubGlobal("XMLHttpRequest", FakeXMLHttpRequest);
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(jsonResponse({ ...initiatePayload(), part_count: 1, parts: [part(1)] }))
+      .mockResolvedValueOnce(jsonResponse(completedPayload()));
+    const result = createAnalysis(new File(["abc"], "private-name.mp4"));
+    await vi.advanceTimersByTimeAsync(2000);
+    await result;
+    expect(diagnostics("part_end")[0]).toMatchObject({ bytes: 3, duration_ms: 2000, outcome: "success" });
+    expect(diagnostics("transfer_end")[0]).toMatchObject({ duration_ms: 2000, effective_mbps: 0.000012 });
+  });
+
+  it("ends failed preparation without initiating storage or reporting success", async () => {
+    vi.mocked(fileIdentity).mockImplementationOnce(async (_file, _signal, onChunk) => {
+      onChunk?.();
+      throw new DOMException("sensitive exception details", "AbortError");
+    });
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    await expect(createAnalysis(new File(["abc"], "private.mp4"))).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(diagnostics().map(e => e.event)).toEqual(["preparation_start", "preparation_end"]);
+    expect(diagnostics("preparation_end")[0]).toMatchObject({ chunks: 1, outcome: "canceled" });
+    expect(JSON.stringify(diagnostics())).not.toContain("sensitive");
   });
 });
 
@@ -247,7 +319,7 @@ function jsonResponse(payload: unknown, status = 200): Response {
   });
 }
 
-type XhrOutcome = { status: number; etag?: string; hold?: boolean };
+type XhrOutcome = { status: number; etag?: string; hold?: boolean; delay?: number };
 
 class FakeXMLHttpRequest extends EventTarget {
   static outcomes: XhrOutcome[] = [];
@@ -270,14 +342,16 @@ class FakeXMLHttpRequest extends EventTarget {
     this.outcome = FakeXMLHttpRequest.outcomes.shift();
     if (!this.outcome) throw new Error("Missing fake XHR outcome");
     if (this.outcome.hold) return;
-    queueMicrotask(() => {
+    const finish = () => {
       this.upload.dispatchEvent(
         new ProgressEvent("progress", { lengthComputable: true, loaded: body.size, total: body.size }),
       );
       this.status = this.outcome?.status ?? 500;
       this.dispatchEvent(new Event("load"));
       this.dispatchEvent(new Event("loadend"));
-    });
+    };
+    if (this.outcome.delay) setTimeout(finish, this.outcome.delay);
+    else queueMicrotask(finish);
   }
 
   abort(): void {

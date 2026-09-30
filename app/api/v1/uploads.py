@@ -17,6 +17,7 @@ from app.schemas.uploads import (
     UploadRecoveryResponse,
     UploadSessionResponse,
 )
+from app.services.upload_observability import upload_event, upload_phase
 from app.services.uploads import DirectUploadService
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
@@ -152,15 +153,18 @@ def complete_upload(
     service: UploadServiceDependency,
     response: Response,
 ) -> UploadSessionResponse:
-    result = service.complete(
-        owner_user_id=user.id,
-        upload_session_id=upload_session_id,
-        request=request,
-    )
+    upload_event("completion_received", upload_session_id.hex)
+    with upload_phase("completion", upload_session_id.hex):
+        result = service.complete(
+            owner_user_id=user.id,
+            upload_session_id=upload_session_id,
+            request=request,
+        )
     if result.status in {"verifying", "analyzing"}:
         background_tasks.add_task(service.verify_and_analyze, upload_session_id)
     elif result.status == "completed":
         response.status_code = 200
+    upload_event("completion_accepted", upload_session_id.hex)
     return result
 
 

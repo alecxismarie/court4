@@ -1,6 +1,6 @@
 // Matches stream_file_identity on the API. Hash every byte with fixed 8 MiB
 // chunks instead of allocating an entire full-match video in browser memory.
-export async function fileIdentity(file: File, signal?: AbortSignal): Promise<string> {
+export async function fileIdentity(file: File, signal?: AbortSignal, onChunk?: () => void): Promise<string> {
   const encoder = new TextEncoder();
   const prefix = encoder.encode("court4-file-v1\n");
   const suffix = encoder.encode(`\n${file.size}`);
@@ -12,6 +12,7 @@ export async function fileIdentity(file: File, signal?: AbortSignal): Promise<st
     const bytes = await readBlob(file.slice(index * 8_388_608, (index + 1) * 8_388_608), signal);
     const digest = await crypto.subtle.digest("SHA-256", bytes);
     commitment.set(new Uint8Array(digest), prefix.length + index * 32);
+    onChunk?.();
   }
   signal?.throwIfAborted();
   commitment.set(suffix, prefix.length + count * 32);

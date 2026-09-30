@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -395,6 +395,121 @@ describe("match details workflow", () => {
         "Court4 found people in the video, but none were tracked long enough to analyze reliably.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("keeps a confirmed selection through a later 429 candidate refresh", async () => {
+    const user = userEvent.setup();
+    const initial = makePlayerCandidateCollection();
+    const saved = makePlayerCandidateCollection({
+      selected_candidate_id: initial.candidates[0].candidate_id,
+    });
+    mockedGetAnalysis.mockResolvedValue(makePlayerSelectedJob());
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+    mockedGetPlayerCandidates.mockResolvedValueOnce(initial).mockRejectedValue(
+      new Court4ApiError("Temporary processing workspace capacity is unavailable.", {
+        code: "processing_workspace_unavailable", status: 429,
+      }),
+    );
+    mockedSelectPlayerCandidate.mockResolvedValue(saved);
+    const { queryClient } = renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+    await user.click(await screen.findByRole("button", { name: /this is me/i }));
+
+    expect(await screen.findByText("You selected Player 1")).toBeInTheDocument();
+    await waitFor(() => expect(mockedGetAnalysis).toHaveBeenCalledTimes(2));
+    expect(mockedGetPlayerCandidates).toHaveBeenCalledTimes(1);
+    expect(mockedGetAnalysisFrames).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryData(["analysis", "analysis-123", "player-candidates"])).toEqual(saved);
+
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["analysis", "analysis-123", "player-candidates"], exact: true,
+      });
+    });
+    expect(await screen.findByText("Player details could not be refreshed")).toBeInTheDocument();
+    expect(screen.getByText("You selected Player 1")).toBeInTheDocument();
+    expect(screen.getByText("Player 1")).toBeInTheDocument();
+    expect(screen.queryByText("We could not identify the players")).not.toBeInTheDocument();
+    expect(queryClient.getQueryData(["analysis", "analysis-123", "player-candidates"])).toEqual(saved);
+  });
+
+  it("does not let an older in-flight candidate refresh replace a saved selection", async () => {
+    const user = userEvent.setup();
+    const initial = makePlayerCandidateCollection();
+    const saved = makePlayerCandidateCollection({
+      selected_candidate_id: initial.candidates[0].candidate_id,
+    });
+    let finishRefresh!: (value: typeof initial) => void;
+    mockedGetAnalysis.mockResolvedValue(makePlayerSelectedJob());
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+    mockedGetPlayerCandidates.mockResolvedValueOnce(initial).mockReturnValueOnce(
+      new Promise((resolve) => { finishRefresh = resolve; }),
+    );
+    mockedSelectPlayerCandidate.mockResolvedValue(saved);
+    const { queryClient } = renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+    await screen.findByText("Player 1");
+    act(() => {
+      void queryClient.invalidateQueries({
+        queryKey: ["analysis", "analysis-123", "player-candidates"], exact: true,
+      });
+    });
+    await waitFor(() => expect(mockedGetPlayerCandidates).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: /this is me/i }));
+    expect(await screen.findByText("You selected Player 1")).toBeInTheDocument();
+    await act(async () => { finishRefresh(initial); });
+    expect(queryClient.getQueryData(["analysis", "analysis-123", "player-candidates"])).toEqual(saved);
+    expect(screen.getByText("You selected Player 1")).toBeInTheDocument();
+  });
+
+  it("keeps candidates and reports a save failure without claiming a selection", async () => {
+    const user = userEvent.setup();
+    const initial = makePlayerCandidateCollection();
+    mockedGetAnalysis.mockResolvedValue(makeTrackedJob());
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+    mockedGetPlayerCandidates.mockResolvedValue(initial);
+    mockedSelectPlayerCandidate.mockRejectedValue(
+      new Court4ApiError("Player candidate selection failed.", {
+        code: "candidate_selection_failed", status: 400,
+      }),
+    );
+    const { queryClient } = renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+    await user.click(await screen.findByRole("button", { name: /this is me/i }));
+    expect(await screen.findByText("Court4 could not save the candidate review")).toBeInTheDocument();
+    expect(screen.getByText("Player 1")).toBeInTheDocument();
+    expect(screen.queryByText("You selected Player 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("We could not identify the players")).not.toBeInTheDocument();
+    expect(queryClient.getQueryData(["analysis", "analysis-123", "player-candidates"])).toEqual(initial);
+    expect(mockedGetPlayerCandidates).toHaveBeenCalledTimes(1);
+  });
+
+  it("distinguishes a candidate load failure from a successful empty collection", async () => {
+    mockedGetAnalysis.mockResolvedValue(makeTrackedJob());
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+    mockedGetPlayerCandidates.mockRejectedValue(
+      new Court4ApiError("Temporary processing workspace capacity is unavailable.", {
+        code: "processing_workspace_unavailable", status: 429,
+      }),
+    );
+    renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+    expect(await screen.findByText("Player details could not be loaded")).toBeInTheDocument();
+    expect(screen.queryByText("We could not identify the players")).not.toBeInTheDocument();
+    expect(screen.queryByText(/none were tracked long enough/)).not.toBeInTheDocument();
+  });
+
+  it("does not keep showing cached candidates after an access-denied refresh", async () => {
+    mockedGetAnalysis.mockResolvedValue(makeTrackedJob());
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+    mockedGetPlayerCandidates.mockResolvedValueOnce(makePlayerCandidateCollection()).mockRejectedValue(
+      new Court4ApiError("Access denied.", { code: "forbidden", status: 403 }),
+    );
+    const { queryClient } = renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+    await screen.findByText("Player 1");
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["analysis", "analysis-123", "player-candidates"], exact: true,
+      });
+    });
+    expect(await screen.findByText("Player details could not be loaded")).toBeInTheDocument();
+    expect(screen.queryByText("Player 1")).not.toBeInTheDocument();
   });
 
   it("shows tracking failures with useful copy and retry", async () => {

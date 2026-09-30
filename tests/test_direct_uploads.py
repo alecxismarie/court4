@@ -3,6 +3,7 @@ from __future__ import annotations
 import errno
 import hashlib
 import io
+import json
 import logging
 import threading
 from collections.abc import Callable, Iterator
@@ -46,6 +47,137 @@ from app.services.jobs.workflow import AnalysisWorkflowService
 from app.services.tracking import JsonTrackingBackend
 from app.services.uploads import DirectUploadService
 from scripts.reconcile_multipart_uploads import reconcile_expired_multipart_uploads
+
+
+@pytest.mark.parametrize("source_deleted", [False, True])
+@pytest.mark.parametrize("corruption", ["size", "checksum"])
+def test_s3_candidate_get_is_narrow_owner_scoped_and_integrity_checked(
+    tmp_path: Path,
+    synthetic_video_factory: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+    source_deleted: bool,
+    corruption: str,
+) -> None:
+    client, service, storage, owner = _client(tmp_path)
+    service.settings.storage_max_active_uploads = 1
+    uploaded = _direct_round_trip(
+        client,
+        storage,
+        synthetic_video_factory(tmp_path / "match.avi").read_bytes(),
+        "candidate-read",
+    )
+    analysis_id = uploaded["analysis_id"]
+    repositories: list[AnalysisJobRepository] = []
+
+    def workflow_for_user(user: VerifiedUser) -> Iterator[AnalysisWorkflowService]:
+        repository = AnalysisJobRepository.from_settings(
+            settings=service.settings,
+            owner_user_id=user.id,
+            persistence=get_persistence(),
+            object_storage=storage,
+        )
+        repositories.append(repository)
+        workflow = AnalysisWorkflowService(settings=service.settings, repository=repository)
+        try:
+            yield workflow
+        finally:
+            workflow.close()
+
+    repository = AnalysisJobRepository.from_settings(
+        settings=service.settings,
+        owner_user_id=owner,
+        persistence=get_persistence(),
+        object_storage=storage,
+    )
+    job = repository.load_job(analysis_id)
+    candidate_path = repository.analysis_dir(analysis_id) / "tracking" / "player_candidates.json"
+    candidate_path.parent.mkdir()
+    now = datetime.now(tz=UTC).isoformat()
+    candidate_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "analysis_id": analysis_id,
+                "candidates": [],
+                "excluded_candidates": [],
+                "recording_suitability": {
+                    "status": "UNSUITABLE",
+                    "reasons": ["no_person_detections"],
+                    "guidance": [],
+                    "orientation": "landscape",
+                    "detected_people": 0,
+                    "usable_candidate_count": 0,
+                },
+                "performance": {"candidate_build_seconds": 0, "preview_generation_seconds": 0},
+                "generated_at": now,
+                "updated_at": now,
+            }
+        ),
+        encoding="utf-8",
+    )
+    repository.update_job(
+        job,
+        tracking_completed=True,
+        source_media_state="deleted" if source_deleted else "available",
+    )
+    repository.close()
+    cast(FastAPI, client.app).dependency_overrides[get_workflow_service] = workflow_for_user
+    with get_persistence().session_factory() as session:
+        analysis = session.get(Analysis, analysis_id)
+        assert analysis is not None
+        previous_payload = analysis.job_payload
+        previous_updated_at = analysis.updated_at
+        records = list(
+            session.scalars(
+                select(AnalysisArtifact).where(AnalysisArtifact.analysis_id == analysis_id)
+            )
+        )
+    candidate_record = next(
+        r for r in records if r.logical_key == "tracking/player_candidates.json"
+    )
+    downloads: list[str] = []
+    download_file = storage.download_file
+
+    def download_candidate(*, key: str, destination: Path) -> ObjectMetadata:
+        downloads.append(key)
+        assert key == candidate_record.storage_key
+        return download_file(key=key, destination=destination)
+
+    def forbid_materialization(*args: Any, **kwargs: Any) -> None:
+        pytest.fail("Candidate GET must not materialize the analysis or rebuild candidates.")
+
+    monkeypatch.setattr(storage, "download_file", download_candidate)
+    monkeypatch.setattr(
+        AnalysisJobRepository, "_materialize_current_artifacts", forbid_materialization
+    )
+    monkeypatch.setattr(AnalysisWorkflowService, "_build_player_candidates", forbid_materialization)
+    response = client.get(f"/api/v1/analyses/{analysis_id}/player-candidates")
+    assert response.status_code == 200, response.text
+    assert response.json()["candidates"] == []
+    assert response.json()["selected_candidate_id"] is None
+    assert downloads == [candidate_record.storage_key]
+    assert not repositories[-1].output_dir.exists()
+    with get_persistence().session_factory() as session:
+        analysis = session.get(Analysis, analysis_id)
+        assert analysis is not None
+        assert analysis.job_payload == previous_payload
+        assert analysis.updated_at == previous_updated_at
+        assert set(session.scalars(select(AnalysisArtifact.id))) == {r.id for r in records}
+
+    if corruption == "size":
+        storage.objects[candidate_record.storage_key]["data"] += b"corrupt"
+    else:
+        storage.objects[candidate_record.storage_key]["metadata"]["court4-sha256"] = "0" * 64
+    corrupt = client.get(f"/api/v1/analyses/{analysis_id}/player-candidates")
+    assert corrupt.status_code == 404
+    assert not repositories[-1].output_dir.exists()
+
+    downloads.clear()
+    other = _register_verified_user(client, "candidate-other@example.com")
+    client.headers["Authorization"] = f"Bearer {other}"
+    assert client.get(f"/api/v1/analyses/{analysis_id}/player-candidates").status_code == 404
+    assert downloads == []
+    assert not repositories[-1].output_dir.exists()
 
 
 def test_s3_tracking_uses_admitted_workspace_and_retries_disk_full(

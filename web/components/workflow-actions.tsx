@@ -99,10 +99,16 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
   });
   const selectionMutation = useMutation({
     mutationFn: (candidateId: string) => selectPlayerCandidate(analysisId, candidateId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId] });
-      await queryClient.invalidateQueries({
+    onSuccess: async (collection) => {
+      // A refresh started before the save must not overwrite its confirmed result.
+      await queryClient.cancelQueries({
         queryKey: ["analysis", analysisId, "player-candidates"],
+        exact: true,
+      });
+      queryClient.setQueryData(["analysis", analysisId, "player-candidates"], collection);
+      await queryClient.invalidateQueries({
+        queryKey: ["analysis", analysisId],
+        exact: true,
       });
     },
   });
@@ -663,17 +669,32 @@ function PlayerSelectionPanel({
     return <Skeleton className="mt-5 h-64" />;
   }
 
-  if (error) {
+  const refreshError = error ? normalizeApiError(error) : null;
+  const temporaryRefreshFailure = refreshError && (
+    refreshError.status === 429 ||
+    (refreshError.status !== null && refreshError.status >= 500) ||
+    refreshError.code === "backend_unavailable"
+  );
+  if (error && (!collection || !temporaryRefreshFailure)) {
     return (
       <WorkflowError
         error={error}
         className="mt-5"
-        title="We could not identify the players"
-        message="Try the analysis again or open advanced settings to adjust processing options."
+        title="Player details could not be loaded"
+        message="Try refreshing the player details again."
         onRetry={onRetry}
       />
     );
   }
+
+  const refreshWarning = error ? (
+    <WorkflowError
+      error={error}
+      title="Player details could not be refreshed"
+      message="Showing the last saved player details. Try refreshing again."
+      onRetry={onRetry}
+    />
+  ) : null;
 
   const candidates = (collection?.candidates ?? [])
     .filter((candidate) => candidate.selection_eligible)
@@ -697,6 +718,7 @@ function PlayerSelectionPanel({
   if (!collection || candidates.length === 0) {
     return (
       <div className="mt-5 rounded-md border border-amber-200 bg-amber-50 p-4">
+        {refreshWarning}
         <p className="text-sm font-semibold text-court-ink">
           Court4 found people in the video, but none were tracked long enough to analyze reliably.
         </p>
@@ -734,6 +756,7 @@ function PlayerSelectionPanel({
 
   return (
     <div className="mt-5 space-y-5">
+      {refreshWarning}
       {selectedPlayer ? (
         <div className="rounded-md border border-green-200 bg-green-50 p-4 text-sm font-semibold text-court-green">
           You selected {selectedPlayer.label}

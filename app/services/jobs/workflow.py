@@ -689,20 +689,20 @@ class AnalysisWorkflowService:
 
     @media_operation(require_source=False)
     def list_player_candidates(self, analysis_id: str) -> PlayerCandidateCollection:
-        job = self.repository.load_job(analysis_id)
-        if job.source_media_state in {"deleting", "deleted"}:
-            path = self.repository.resolve_artifact(analysis_id, "tracking/player_candidates.json")
+        job = self.repository.load_job_metadata(analysis_id)
+        if job.source_media_state not in {"deleting", "deleted"}:
+            self._require(
+                job.tracking_completed, "tracking_required", "Player tracking is required."
+            )
+        # Listing saved candidates must not download the video/previews or regenerate state.
+        # resolve_artifact retains owner, lifecycle, size, and checksum validation.
+        path = self.repository.resolve_artifact(analysis_id, "tracking/player_candidates.json")
+        try:
             return load_player_candidates(path)
-        self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
-        tracking_path = self.repository.resolve_artifact(analysis_id, "tracking/tracking.json")
-        collection = self._ensure_player_candidates(
-            analysis_id,
-            job=job,
-            tracking=self._load_tracking(tracking_path),
-            preserve_review=True,
-        )
-        collection, _ = self._refresh_analysis_readiness(job, collection)
-        return collection
+        except CandidateError as exc:
+            raise JobRequestError(
+                "candidate_persistence_failure", "Saved player candidates could not be loaded."
+            ) from exc
 
     @media_operation()
     def generate_player_candidates(self, analysis_id: str) -> PlayerCandidateCollection:

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -13,13 +14,17 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.api.v1.analyses import get_workflow_service
 from app.api.v1.uploads import get_upload_service
+from app.auth import VerifiedUser
+from app.config import get_settings
 from app.config.settings import Settings
 from app.main import create_app
-from app.persistence.models import Analysis, UploadedVideo, UploadSession, User
+from app.persistence.models import Analysis, AnalysisArtifact, UploadedVideo, UploadSession, User
 from app.persistence.object_storage import (
     MultipartPart,
     ObjectMetadata,
@@ -38,8 +43,109 @@ from app.services.jobs.exceptions import (
 )
 from app.services.jobs.repository import AnalysisJobRepository
 from app.services.jobs.workflow import AnalysisWorkflowService
+from app.services.tracking import JsonTrackingBackend
 from app.services.uploads import DirectUploadService
 from scripts.reconcile_multipart_uploads import reconcile_expired_multipart_uploads
+
+
+def test_s3_tracking_uses_admitted_workspace_and_retries_disk_full(
+    tmp_path: Path,
+    synthetic_court_video_factory: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, service, storage, owner = _client(tmp_path)
+    legacy_output = tmp_path / "data" / "output"
+    service.settings.analysis_output_dir = legacy_output
+    uploaded = _direct_round_trip(
+        client,
+        storage,
+        synthetic_court_video_factory(tmp_path / "court.avi").read_bytes(),
+        "tracking-workspace",
+    )
+    analysis_id = uploaded["analysis_id"]
+    workspaces: list[Path] = []
+
+    def workflow_for_user(user: VerifiedUser) -> Iterator[AnalysisWorkflowService]:
+        repository = AnalysisJobRepository.from_settings(
+            settings=service.settings,
+            owner_user_id=user.id,
+            persistence=get_persistence(),
+            object_storage=storage,
+        )
+        workspaces.append(repository.output_dir)
+        workflow = AnalysisWorkflowService(settings=service.settings, repository=repository)
+        try:
+            yield workflow
+        finally:
+            workflow.close()
+
+    cast(FastAPI, client.app).dependency_overrides[get_workflow_service] = workflow_for_user
+    assert client.post(f"/api/v1/analyses/{analysis_id}/court-detection").status_code == 200
+    detections = tmp_path / "detections.jsonl"
+    detections.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        "app.services.jobs.workflow.UltralyticsByteTrackBackend",
+        lambda **kwargs: JsonTrackingBackend(detections),
+    )
+    request = {
+        "calibration_id": "auto-court-detection",
+        "backend": "ultralytics",
+        "frame_interval": 1,
+    }
+    origin = get_settings().frontend_allowed_origins[0]
+    original_mkdir = Path.mkdir
+
+    def disk_full(path: Path, *args: Any, **kwargs: Any) -> None:
+        if path.name == "tracking":
+            assert path.parent.parent == workspaces[-1]
+            raise OSError(errno.ENOSPC, "private disk path")
+        original_mkdir(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "mkdir", disk_full)
+        failed = client.post(
+            f"/api/v1/analyses/{analysis_id}/tracking",
+            json=request,
+            headers={"Origin": origin},
+        )
+    assert failed.status_code == 507
+    assert failed.json()["error"]["code"] == "storage_capacity_unavailable"
+    assert failed.headers["access-control-allow-origin"] == origin
+    assert "private disk path" not in failed.text
+    assert not workspaces[-1].exists()
+    job = client.get(f"/api/v1/analyses/{analysis_id}").json()
+    assert job["calibration_completed"] and not job["tracking_completed"]
+    assert job["source_media_state"] == "available"
+
+    response = client.post(f"/api/v1/analyses/{analysis_id}/tracking", json=request)
+    assert response.status_code == 200, response.text
+    assert response.json()["job"]["tracking_completed"]
+    assert response.json()["tracking"]["processed_frame_count"] > 0
+    assert not legacy_output.exists()
+    assert all(not workspace.exists() for workspace in workspaces)
+    with get_persistence().session_factory() as session:
+        artifacts = list(
+            session.scalars(
+                select(AnalysisArtifact).where(
+                    AnalysisArtifact.analysis_id == analysis_id,
+                    AnalysisArtifact.is_current.is_(True),
+                )
+            )
+        )
+    tracking = [a for a in artifacts if a.logical_key.startswith("tracking/")]
+    assert {a.logical_key for a in tracking} >= {
+        "tracking/tracking.json",
+        "tracking/observations.jsonl",
+        "tracking/tracked_players.mp4",
+    }
+    assert all(a.owner_user_id == owner and a.storage_provider == "s3" for a in artifacts)
+    assert all(a.storage_key in storage.objects for a in artifacts)
+    # A fresh request rematerializes durable tracking artifacts after workspace cleanup.
+    assert client.post(f"/api/v1/analyses/{analysis_id}/tracking", json=request).status_code == 200
+    assert not workspaces[-1].exists()
+    other = _register_verified_user(client, "tracking-other@example.com")
+    client.headers["Authorization"] = f"Bearer {other}"
+    assert client.get(f"/api/v1/analyses/{analysis_id}").status_code == 404
 
 
 def test_s3_inspection_frames_survive_new_workspaces_and_recognition(

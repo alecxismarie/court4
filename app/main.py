@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp
 
 from app.api.routes import router
 from app.api.v1 import create_api_v1_router
@@ -17,27 +18,38 @@ from app.services.tracking.model_provisioning import verify_detector_model
 logger = logging.getLogger(__name__)
 
 
+class _CorsFastAPI(FastAPI):
+    cors_origins: tuple[str, ...] = ()
+
+    def build_middleware_stack(self) -> ASGIApp:
+        # Wrap ServerErrorMiddleware too, so unexpected 500s remain readable
+        # by the browser. Keep the FastAPI object available for dependencies.
+        stack = super().build_middleware_stack()
+        if not self.cors_origins:
+            return stack
+        return CORSMiddleware(
+            stack,
+            allow_origins=list(self.cors_origins),
+            allow_credentials=True,
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+            allow_headers=["*"],
+        )
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.logging_level)
     if settings.default_tracking_backend == "ultralytics":
         verify_detector_model(settings.detector_model_path, settings.detector_model_sha256)
 
-    application = FastAPI(
+    application = _CorsFastAPI(
         title="Court4",
         description="Upload-first racket-sport analysis API.",
         version="0.5.0",
     )
     application.include_router(router)
     application.include_router(create_api_v1_router(settings), prefix=settings.api_base_path)
-    if settings.frontend_allowed_origins:
-        application.add_middleware(
-            CORSMiddleware,
-            allow_origins=list(settings.frontend_allowed_origins),
-            allow_credentials=True,
-            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-            allow_headers=["*"],
-        )
+    application.cors_origins = tuple(settings.frontend_allowed_origins)
     application.add_exception_handler(JobWorkflowError, _job_workflow_error_handler)
     application.add_exception_handler(AuthenticationError, _authentication_error_handler)
     application.add_exception_handler(Exception, _unexpected_error_handler)

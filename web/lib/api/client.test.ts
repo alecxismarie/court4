@@ -11,6 +11,18 @@ import {
 } from "@/lib/api/client";
 
 describe("API error normalization", () => {
+  it.each([
+    [500, "internal_error"],
+    [507, "storage_capacity_unavailable"],
+  ])("preserves application HTTP %s errors instead of reporting connectivity loss", async (status, code) => {
+    const response = new Response(JSON.stringify({ error: { code, message: "Please retry later." } }), {
+      status: Number(status), headers: { "content-type": "application/json" },
+    });
+    const error = normalizeApiError(await apiErrorFromResponse(response));
+    expect(error).toMatchObject({ status, code });
+    expect(error.code).not.toBe("backend_unavailable");
+  });
+
   it("preserves Court4 API errors", () => {
     const error = new Court4ApiError("Missing analysis.", {
       code: "analysis_not_found",

@@ -1,3 +1,4 @@
+import errno
 import hashlib
 import json
 import logging
@@ -607,7 +608,7 @@ class AnalysisWorkflowService:
                 result = analyze_players(
                     video_path=video_path,
                     calibration=calibration,
-                    output_dir=self.settings.analysis_output_dir,
+                    output_dir=self.repository.output_dir,
                     tracking_backend=backend,
                     analysis_id=analysis_id,
                     frame_interval=request.frame_interval
@@ -630,6 +631,13 @@ class AnalysisWorkflowService:
                     annotated_video_fps=self.settings.annotated_video_fps,
                 )
                 tracking = result.report
+            except OSError as exc:
+                if exc.errno != errno.ENOSPC:
+                    raise
+                raise JobStorageCapacityError(
+                    "storage_capacity_unavailable",
+                    "Storage capacity is unavailable for player tracking. Please retry later.",
+                ) from exc
             except DetectorModelMissingError as exc:
                 raise JobRequestError(
                     "detector_model_missing",

@@ -221,7 +221,7 @@ export function UploadDropzone({
             className="h-auto w-full rounded-md border border-court-line"
           />
           <figcaption className="mt-2 text-xs text-court-muted">
-            Example: camera behind the baseline with the full court visible.
+            camera behind the baseline with the full court visible.
           </figcaption>
         </figure>
       </section>

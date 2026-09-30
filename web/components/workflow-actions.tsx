@@ -124,9 +124,15 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
   const mergeMutation = useMutation({
     mutationFn: (candidateIds: [string, string]) =>
       mergePlayerCandidates(analysisId, candidateIds),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({
+    onSuccess: async (collection) => {
+      await queryClient.cancelQueries({
         queryKey: ["analysis", analysisId, "player-candidates"],
+        exact: true,
+      });
+      queryClient.setQueryData(["analysis", analysisId, "player-candidates"], collection);
+      await queryClient.invalidateQueries({
+        queryKey: ["analysis", analysisId],
+        exact: true,
       });
     },
   });

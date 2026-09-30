@@ -453,6 +453,10 @@ def merge_player_candidates(
         manual_merge_id=merge_id,
     )
     was_selected = collection.selected_candidate_id in set(candidate_ids)
+    if not merged.selection_eligible:
+        raise CandidateImpossibleMergeError(
+            "The combined candidate does not meet the existing player eligibility checks."
+        )
     if was_selected:
         merged = merged.model_copy(update={"review_status": CandidateReviewStatus.selected})
     remaining = [
@@ -706,6 +710,17 @@ def _build_candidate(
         ),
         key=lambda item: (item.timestamp_seconds, item.frame_index, item.track_id),
     )
+    if manual_merge_id is not None:
+        # Match downstream analytics: one observation per frame, with deterministic ties.
+        by_frame: dict[int, PlayerObservation] = {}
+        for item in observations:
+            current = by_frame.get(item.frame_index)
+            if current is None or (item.confidence, -item.track_id) > (
+                current.confidence,
+                -current.track_id,
+            ):
+                by_frame[item.frame_index] = item
+        observations = sorted(by_frame.values(), key=lambda item: item.frame_index)
     unique_frames = {(item.frame_index, item.track_id) for item in observations}
     in_court_count = sum(item.inside_court for item in observations)
     in_court_ratio = in_court_count / len(observations) if observations else 0.0

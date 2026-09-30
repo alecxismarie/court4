@@ -1,5 +1,6 @@
 import json
 import math
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict
@@ -7,7 +8,14 @@ from typing import TypedDict
 import cv2
 import numpy as np
 import pytest
+from fastapi import FastAPI
+from sqlalchemy import select
 
+from app.api.v1.analyses import get_workflow_service
+from app.auth import VerifiedUser
+from app.persistence.models import PlayerSelection
+from app.persistence.runtime import get_persistence
+from app.schemas.jobs import AnalysisJob, AnalysisStage, AnalysisStatus
 from app.schemas.player_candidates import (
     CandidateQuality,
     CandidateReviewStatus,
@@ -23,6 +31,7 @@ from app.schemas.player_tracking import (
     TrackingPerformanceSummary,
 )
 from app.schemas.video import VideoMetadataReport
+from app.services.analytics.movement import _load_selected_observations
 from app.services.candidates.service import (
     CandidateImpossibleMergeError,
     _association_evidence,
@@ -34,6 +43,9 @@ from app.services.candidates.service import (
     select_player_candidate,
     unmerge_player_candidates,
 )
+from app.services.jobs.repository import AnalysisJobRepository
+from app.services.jobs.workflow import AnalysisWorkflowService
+from tests.test_direct_uploads import _client
 
 
 class _CandidateCase(TypedDict):
@@ -301,6 +313,176 @@ def test_manual_merge_blocks_duplicate_timestamps(tmp_path: Path) -> None:
             source_video_path=case["video"],
             metadata_path=case["metadata"],
         )
+
+
+def test_manual_merge_does_not_bypass_fragment_limit(tmp_path: Path) -> None:
+    case = _candidate_case(
+        tmp_path,
+        [
+            *_track(1, start_frame=0, positions=[(1 + i * 0.2, 10.0) for i in range(15)]),
+            *_track(2, start_frame=15, positions=[(4 + i * 0.2, 10.0) for i in range(15)]),
+            *_track(3, start_frame=190, positions=[(1 + i * 0.2, 10.0) for i in range(15)]),
+            *_track(4, start_frame=205, positions=[(4 + i * 0.2, 10.0) for i in range(15)]),
+        ],
+    )
+    original = _build(case)
+    assert len(original.candidates) == 2
+    assert all(len(x.source_raw_track_ids) == 2 for x in original.candidates)
+    before = case["candidate"].read_bytes()
+    with pytest.raises(CandidateImpossibleMergeError, match="eligibility checks"):
+        merge_player_candidates(
+            candidate_path=case["candidate"],
+            candidate_ids=[x.candidate_id for x in original.candidates],
+            tracking_report_path=case["tracking"],
+            observations_path=case["observations"],
+            source_video_path=case["video"],
+            metadata_path=case["metadata"],
+        )
+    assert case["candidate"].read_bytes() == before
+
+
+def test_manual_merge_deduplicates_shared_boundary_and_preserves_lineage(tmp_path: Path) -> None:
+    case = _candidate_case(
+        tmp_path,
+        [
+            *_track(1, start_frame=0, positions=[(1 + i * 0.2, 10.0) for i in range(15)]),
+            *_track(2, start_frame=14, positions=[(3.8 + i * 0.2, 10.0) for i in range(15)]),
+        ],
+    )
+    original = _build(case)
+    assert len(original.candidates) == 2
+    select_player_candidate(
+        candidate_path=case["candidate"],
+        candidate_id=original.candidates[0].candidate_id,
+        tracking_report_path=case["tracking"],
+    )
+    merged = merge_player_candidates(
+        candidate_path=case["candidate"],
+        candidate_ids=[x.candidate_id for x in original.candidates],
+        tracking_report_path=case["tracking"],
+        observations_path=case["observations"],
+        source_video_path=case["video"],
+        metadata_path=case["metadata"],
+    )
+    candidate = merged.candidates[0]
+    assert candidate.source_raw_track_ids == [1, 2]
+    assert candidate.total_observed_frames == 29
+    assert candidate.total_observed_duration == pytest.approx(2.8)
+    assert merged.selected_candidate_id == candidate.candidate_id
+    rebuilt = _build(case)
+    assert rebuilt.selected_candidate_id == candidate.candidate_id
+    assert rebuilt.candidates[0].total_observed_frames == 29
+    tracking = PlayerTrackingReport.model_validate_json(case["tracking"].read_text())
+    assert tracking.selected_player_source_track_ids == [1, 2]
+    observations = _load_selected_observations(
+        observations_path=case["observations"],
+        selected_track_ids=tracking.selected_player_source_track_ids,
+    )
+    assert len(observations) == len({x.frame_index for x in observations}) == 29
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_manual_merge_survives_s3_workspace_cleanup_and_refetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selected: bool
+) -> None:
+    client, upload_service, storage, owner = _client(tmp_path)
+    repositories: list[AnalysisJobRepository] = []
+
+    def workflow_for_user(user: VerifiedUser) -> Iterator[AnalysisWorkflowService]:
+        repo = AnalysisJobRepository.from_settings(
+            settings=upload_service.settings,
+            owner_user_id=user.id,
+            persistence=get_persistence(),
+            object_storage=storage,
+        )
+        repositories.append(repo)
+        workflow = AnalysisWorkflowService(settings=upload_service.settings, repository=repo)
+        try:
+            yield workflow
+        finally:
+            workflow.close()
+
+    repo = AnalysisJobRepository.from_settings(
+        settings=upload_service.settings,
+        owner_user_id=owner,
+        persistence=get_persistence(),
+        object_storage=storage,
+    )
+    case = _candidate_case(
+        repo.output_dir,
+        [
+            *_track(1, start_frame=0, positions=[(1 + i * 0.2, 10.0) for i in range(15)]),
+            *_track(2, start_frame=21, positions=[(18 + i * 0.2, 10.0) for i in range(15)]),
+        ],
+    )
+    original = _build(case)
+    if selected:
+        select_player_candidate(
+            candidate_path=case["candidate"],
+            candidate_id=original.candidates[0].candidate_id,
+            tracking_report_path=case["tracking"],
+        )
+    now = datetime.now(tz=UTC)
+    repo.save_job(
+        AnalysisJob(
+            analysis_id="candidate-test",
+            status=AnalysisStatus.processing,
+            current_stage=AnalysisStage.player_selected if selected else AnalysisStage.tracked,
+            source_video="source.avi",
+            created_at=now,
+            updated_at=now,
+            tracking_completed=True,
+            calibration_completed=True,
+            player_selected=selected,
+            analysis_readiness=original.analysis_readiness,
+        )
+    )
+    repo.close()
+    assert isinstance(client.app, FastAPI)
+    client.app.dependency_overrides[get_workflow_service] = workflow_for_user
+    if not selected:
+        # Persistence must not depend on whether readiness happens to need an update.
+        monkeypatch.setattr(
+            AnalysisWorkflowService,
+            "_refresh_analysis_readiness",
+            lambda self, job, collection: (collection, job),
+        )
+    merged = client.post(
+        "/api/v1/analyses/candidate-test/player-candidates/merge",
+        json={
+            "candidate_ids": [x.candidate_id for x in original.candidates],
+        },
+    )
+    assert merged.status_code == 200, merged.text
+    candidate = merged.json()["candidates"][0]
+    assert candidate["source_raw_track_ids"] == [1, 2]
+    assert len(merged.json()["candidates"]) == 1
+    assert not repositories[-1].output_dir.exists()
+    for _ in range(2):
+        fetched = client.get("/api/v1/analyses/candidate-test/player-candidates")
+        assert fetched.status_code == 200
+        assert fetched.json() == merged.json()
+        assert not repositories[-1].output_dir.exists()
+    if selected:
+        assert merged.json()["selected_candidate_id"] == candidate["candidate_id"]
+        assert merged.json()["analysis_readiness"]["analysis_signals"]["fragment_count"] == 2
+        with get_persistence().session_factory() as session:
+            selection = session.scalar(select(PlayerSelection).where(PlayerSelection.is_current))
+            assert selection is not None
+            assert selection.candidate_id == candidate["candidate_id"]
+            assert selection.source_track_ids == [1, 2]
+    else:
+        assert merged.json()["selected_candidate_id"] is None
+    undone = client.post(
+        "/api/v1/analyses/candidate-test/player-candidates/unmerge",
+        json={
+            "candidate_id": candidate["candidate_id"],
+        },
+    )
+    assert undone.status_code == 200, undone.text
+    fetched = client.get("/api/v1/analyses/candidate-test/player-candidates")
+    assert fetched.json() == undone.json()
+    assert len(fetched.json()["candidates"]) == 2
 
 
 def test_selection_policy_exposes_only_four_active_in_court_moving_candidates(

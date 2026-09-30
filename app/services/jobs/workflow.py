@@ -841,7 +841,10 @@ class AnalysisWorkflowService:
             raise JobRequestError(
                 "candidate_merge_failed", "Player candidates could not be merged."
             ) from exc
-        collection, _ = self._refresh_analysis_readiness(job, collection)
+        collection, updated_job = self._refresh_analysis_readiness(job, collection)
+        if updated_job is job:
+            # A review edit must persist even when its readiness assessment is unchanged.
+            self.repository.save_job(updated_job)
         return collection
 
     @media_operation()
@@ -875,7 +878,9 @@ class AnalysisWorkflowService:
                 player_selected=False,
                 analytics_completed=False,
             )
-        collection, _ = self._refresh_analysis_readiness(updated_job, collection)
+        collection, refreshed_job = self._refresh_analysis_readiness(updated_job, collection)
+        if refreshed_job is job:
+            self.repository.save_job(refreshed_job)
         return collection
 
     @media_operation(require_source=False)

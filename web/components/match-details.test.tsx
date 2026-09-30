@@ -709,6 +709,54 @@ describe("match details workflow", () => {
     );
   });
 
+  it("keeps a saved Same player merge through refresh failure and reload", async () => {
+    const user = userEvent.setup();
+    const first = makePlayerCandidate();
+    const second = makePlayerCandidate({ candidate_id: "pc-two", source_raw_track_ids: [2] });
+    const other = makePlayerCandidate({ candidate_id: "pc-other", source_raw_track_ids: [3] });
+    const combined = makePlayerCandidate({
+      candidate_id: "pc-combined", source_raw_track_ids: [1, 2],
+      manual_merge_id: "merge-one", review_status: "SELECTED",
+    });
+    const saved = makePlayerCandidateCollection({
+      candidates: [combined, other], selected_candidate_id: combined.candidate_id,
+    });
+    mockedGetAnalysis.mockResolvedValue(makePlayerSelectedJob());
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+    mockedGetPlayerCandidates.mockResolvedValueOnce(makePlayerCandidateCollection({
+      candidates: [first, second, other], selected_candidate_id: first.candidate_id,
+    })).mockRejectedValueOnce(new Court4ApiError("Workspace busy.", {
+      code: "processing_workspace_unavailable", status: 429,
+    })).mockResolvedValue(saved);
+    mockedMergePlayerCandidates.mockResolvedValue(saved);
+    const { queryClient, unmount } = renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+    const playerOne = (await screen.findByText("Player 1")).closest("article") as HTMLElement;
+    const playerTwo = screen.getByText("Player 2").closest("article") as HTMLElement;
+    await user.click(within(playerOne).getByRole("button", { name: /same player/i }));
+    await user.click(within(playerTwo).getByRole("button", { name: /merge with this/i }));
+    await user.click(screen.getByRole("button", { name: /confirm merge/i }));
+    await waitFor(() => expect(queryClient.getQueryData(
+      ["analysis", "analysis-123", "player-candidates"],
+    )).toEqual(saved));
+    expect(mockedMergePlayerCandidates).toHaveBeenCalledWith("analysis-123", [first.candidate_id, second.candidate_id]);
+    expect(mockedGetPlayerCandidates).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Player 3")).not.toBeInTheDocument();
+    expect(screen.getByText("Player 2")).toBeInTheDocument();
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: ["analysis", "analysis-123", "player-candidates"], exact: true,
+      });
+    });
+    expect(await screen.findByText("Player details could not be refreshed")).toBeInTheDocument();
+    expect(screen.getByText("You selected Player 1")).toBeInTheDocument();
+    expect(queryClient.getQueryData(["analysis", "analysis-123", "player-candidates"])).toEqual(saved);
+    unmount();
+    renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+    expect(await screen.findByText("You selected Player 1")).toBeInTheDocument();
+    expect(screen.getByText("Player 2")).toBeInTheDocument();
+    expect(screen.queryByText("Player 3")).not.toBeInTheDocument();
+  });
+
   it("shows a clear warning when a manual candidate merge is impossible", async () => {
     const user = userEvent.setup();
     mockedGetAnalysis.mockResolvedValue(makeTrackedJob());

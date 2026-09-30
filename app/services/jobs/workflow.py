@@ -982,7 +982,7 @@ class AnalysisWorkflowService:
             try:
                 result = generate_match_analytics(
                     analysis_id=analysis_id,
-                    output_dir=self.settings.analysis_output_dir,
+                    output_dir=self.repository.output_dir,
                     transition_area_depth_feet=self.settings.transition_area_depth_feet,
                     image_width_pixels=self.settings.analytics_image_width_pixels,
                 )
@@ -993,6 +993,13 @@ class AnalysisWorkflowService:
                     analytics_dir=result.analytics_dir,
                     recording_quality=job.analysis_readiness,
                 )
+            except OSError as exc:
+                if exc.errno != errno.ENOSPC:
+                    raise
+                raise JobStorageCapacityError(
+                    "storage_capacity_unavailable",
+                    "Storage capacity is unavailable for analytics. Please retry later.",
+                ) from exc
             except AnalyticsOutputExistsError as exc:
                 raise JobConflictError(
                     "analytics_exists",

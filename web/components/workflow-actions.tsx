@@ -43,6 +43,7 @@ import { cn } from "@/lib/utils";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Skeleton } from "@/components/skeleton";
 import { RecordingQualityCard } from "@/components/recording-quality-card";
+import { CalibrationReview } from "@/components/calibration-review";
 
 const trackingFormSchema = z
   .object({
@@ -72,7 +73,7 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
   const router = useRouter();
   const trackingRequestInFlight = useRef(false);
   const analysisId = job.analysis_id;
-  const calibrationIds = getCalibrationIds(job);
+  const calibrationIds = job.active_calibration_id ? [job.active_calibration_id] : getCalibrationIds(job);
   const defaultCalibrationId = calibrationIds[0] ?? "auto-court-detection";
   const detectionMutation = useMutation({
     mutationFn: () => detectCourt(analysisId),
@@ -83,7 +84,7 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
   const candidatesQuery = useQuery({
     queryKey: ["analysis", analysisId, "player-candidates"],
     queryFn: () => getPlayerCandidates(analysisId),
-    enabled: job.tracking_completed,
+    enabled: job.tracking_completed && job.calibration_verified,
   });
   const trackingMutation = useMutation({
     mutationFn: (request: TrackingRequest) => startTracking(analysisId, request),
@@ -194,7 +195,7 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
         error={detectionMutation.error}
         onDetect={() => detectionMutation.mutate()}
       >
-        {job.calibration_completed ? (
+        {job.calibration_verified ? (
           <>
             <PlayerTrackingPanel
               analysisId={analysisId}
@@ -294,14 +295,14 @@ function CourtRecognitionPanel({
             className="mt-2 text-lg font-semibold text-court-ink"
           >
             {job.calibration_completed
-              ? "Court recognized"
+              ? (job.calibration_verified ? "Court verified" : "Court generated — review required")
               : isPending
                 ? "Recognizing the court"
                 : "Recognize the court"}
           </h2>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-court-muted">
             {job.calibration_completed
-              ? "We found the court and are ready to measure player movement."
+              ? "Review the proposed floor mapping before measuring player movement."
               : "Court4 checks the match video to understand where play happens."}
           </p>
         </div>
@@ -318,8 +319,8 @@ function CourtRecognitionPanel({
           <span className="inline-flex items-center gap-2 rounded-md bg-green-50 px-3 py-2 text-sm font-semibold text-court-green">
             <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
             {detectionStatus === "detected" && detectionConfidence !== null
-              ? `${toPercent(detectionConfidence)}% confidence`
-              : "Court ready"}
+              ? `${toPercent(detectionConfidence)}% proposal confidence`
+              : "Court generated"}
           </span>
         )}
       </div>
@@ -351,11 +352,12 @@ function CourtRecognitionPanel({
 
       {job.calibration_completed ? (
         <div className="mt-5 space-y-5">
+          <CalibrationReview key={job.calibration_checksum_sha256} job={job} />
           <div className="rounded-md border border-green-200 bg-green-50 p-4">
             {children}
           </div>
 
-          {verification ? (
+          {verification && !job.active_calibration_id ? (
             <ArtifactPreview
               analysisId={job.analysis_id}
               artifact={verification}

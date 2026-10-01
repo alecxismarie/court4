@@ -58,11 +58,11 @@ export function getWorkflowSteps(job: AnalysisJob): WorkflowStep[] {
     },
     {
       label: "Court recognized",
-      activeLabel: "Recognizing court",
-      complete: job.calibration_completed,
+      activeLabel: job.calibration_completed ? "Review court" : "Recognizing court",
+      complete: job.calibration_verified,
       descriptions: {
         complete: "The court is ready for player tracking.",
-        active: "Court4 is locating the pickleball court.",
+        active: job.calibration_completed ? "Confirm the court overlay before measurements." : "Court4 is locating the pickleball court.",
         waiting: "Court4 will recognize the court after upload.",
         failed: "Court4 could not recognize the court automatically.",
       },
@@ -70,7 +70,7 @@ export function getWorkflowSteps(job: AnalysisJob): WorkflowStep[] {
     {
       label: "Players identified",
       activeLabel: "Finding players",
-      complete: job.tracking_completed,
+      complete: job.calibration_verified && job.tracking_completed,
       descriptions: {
         complete: "Player movement has been tracked.",
         active: "Court4 is tracking each player throughout the match.",
@@ -81,7 +81,7 @@ export function getWorkflowSteps(job: AnalysisJob): WorkflowStep[] {
     {
       label: "Select yourself",
       activeLabel: "Select yourself",
-      complete: job.player_selected,
+      complete: job.calibration_verified && job.player_selected,
       descriptions: {
         complete: "Your player is selected.",
         active: "Choose which player is you.",
@@ -92,7 +92,7 @@ export function getWorkflowSteps(job: AnalysisJob): WorkflowStep[] {
     {
       label: "Your Match IQ",
       activeLabel: "Generate Match IQ",
-      complete: job.analytics_completed,
+      complete: job.calibration_verified && job.analytics_completed,
       descriptions: {
         complete: "Match IQ is ready.",
         active: "Generate your Match IQ from your selected player.",

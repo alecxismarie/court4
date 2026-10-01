@@ -91,6 +91,15 @@ def test_s3_analytics_workspace_registration_cleanup_and_retry(
             workflow.close()
 
     cast(FastAPI, client.app).dependency_overrides[get_workflow_service] = workflow_for_user
+    proposed = client.get(f"/api/v1/analyses/{analysis_id}").json()
+    confirmed = client.post(
+        f"/api/v1/analyses/{analysis_id}/calibration/confirm",
+        json={
+            "calibration_id": proposed["active_calibration_id"],
+            "calibration_checksum_sha256": proposed["calibration_checksum_sha256"],
+        },
+    )
+    assert confirmed.status_code == 200, confirmed.text
     original_write = Path.write_text
 
     def disk_full(path: Path, *args: Any, **kwargs: Any) -> int:

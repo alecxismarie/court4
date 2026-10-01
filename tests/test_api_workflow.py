@@ -489,6 +489,7 @@ def test_full_controlled_api_workflow(
         f"/api/v1/analyses/{analysis_id}/calibration",
         json=_calibration_payload(calibration_id="api-calibration"),
     )
+    _confirm_calibration(client, analysis_id)
     _write_controlled_api_detections(output_dir, analysis_id)
     tracking = client.post(
         f"/api/v1/analyses/{analysis_id}/tracking",
@@ -588,6 +589,7 @@ def test_full_controlled_api_workflow_with_automatic_court_detection(
     analysis_id = _upload_video(client, video_path).json()["analysis_id"]
 
     detection = client.post(f"/api/v1/analyses/{analysis_id}/court-detection")
+    _confirm_calibration(client, analysis_id)
     _write_controlled_api_detections(
         output_dir,
         analysis_id,
@@ -653,6 +655,7 @@ def test_ultralytics_tracking_missing_model_returns_typed_error(
         json=_calibration_payload(calibration_id="api-calibration"),
     )
 
+    _confirm_calibration(client, analysis_id)
     response = client.post(
         f"/api/v1/analyses/{analysis_id}/tracking",
         json={
@@ -700,6 +703,7 @@ def test_ultralytics_tracking_invalid_model_returns_typed_error(
         json=_calibration_payload(calibration_id="api-calibration"),
     )
 
+    _confirm_calibration(client, analysis_id)
     response = client.post(
         f"/api/v1/analyses/{analysis_id}/tracking",
         json={
@@ -758,14 +762,14 @@ def test_legacy_job_without_court_detection_fields_still_loads(
 
     assert response.status_code == 200
     assert active_play.status_code == 409
-    assert active_play.json()["error"]["code"] == "active_play_not_ready"
+    assert active_play.json()["error"]["code"] == "calibration_verification_required"
     assert response.json()["court_detection_status"] is None
     assert response.json()["court_detection_confidence"] is None
     assert response.json()["court_detection_selected_frame"] is None
     assert response.json()["court_detection_detected_corners"] is None
 
 
-def test_legacy_analytics_without_match_iq_returns_null(
+def test_legacy_analytics_without_verification_requires_review(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -836,9 +840,8 @@ def test_legacy_analytics_without_match_iq_returns_null(
 
     response = client.get(f"/api/v1/analyses/{analysis_id}/analytics")
 
-    assert response.status_code == 200
-    assert response.json()["analytics"]["analysis_id"] == analysis_id
-    assert response.json()["match_iq"] is None
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "calibration_verification_required"
 
 
 def test_analytics_retrieval_before_generation_returns_conflict(
@@ -859,7 +862,7 @@ def test_analytics_retrieval_before_generation_returns_conflict(
     response = client.get(f"/api/v1/analyses/{analysis_id}/analytics")
 
     assert response.status_code == 409
-    assert response.json()["error"]["code"] == "analytics_not_ready"
+    assert response.json()["error"]["code"] == "calibration_verification_required"
 
 
 def test_openapi_docs_available(
@@ -992,3 +995,15 @@ def _line_from_ground_point(
         y2=y,
         confidence=confidence,
     )
+
+
+def _confirm_calibration(client: TestClient, analysis_id: str) -> None:
+    job = client.get(f"/api/v1/analyses/{analysis_id}").json()
+    response = client.post(
+        f"/api/v1/analyses/{analysis_id}/calibration/confirm",
+        json={
+            "calibration_id": job["active_calibration_id"],
+            "calibration_checksum_sha256": job["calibration_checksum_sha256"],
+        },
+    )
+    assert response.status_code == 200, response.text

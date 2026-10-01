@@ -17,6 +17,7 @@ describe("job status labels", () => {
           current_stage: "tracked",
           inspection_completed: true,
           calibration_completed: true,
+          calibration_verified: true,
           tracking_completed: true,
           status: "processing",
         })}
@@ -44,9 +45,23 @@ describe("job status labels", () => {
       getCurrentWorkflowStep(
         makeJob({
           calibration_completed: true,
+          calibration_verified: true,
           tracking_completed: false,
         }),
       ).currentLabel,
     ).toBe("Finding players");
+  });
+
+  it("requires review before treating existing downstream results as complete", () => {
+    render(<JobStatus job={makeJob({
+      inspection_completed: true,
+      calibration_completed: true,
+      calibration_verified: false,
+      tracking_completed: true,
+      player_selected: true,
+      analytics_completed: true,
+    })} />);
+    expect(screen.getByText("Current step: Review court")).toBeInTheDocument();
+    expect(screen.getByText("1 of 5 steps complete")).toBeInTheDocument();
   });
 });

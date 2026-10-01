@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from sqlalchemy import text
 
 from app.persistence.errors import (
+    OptimisticConcurrencyError,
     OwnershipMismatchError,
     ResourceNotFoundError,
     SourceMediaUnavailableError,
@@ -210,6 +211,14 @@ class AnalysisJobRepository:
             return self._save_job(job)
 
     def _save_job(self, job: AnalysisJob) -> AnalysisJob:
+        # Reject known-stale snapshots before uploading any workspace artifacts.
+        with suppress(JobNotFoundError):
+            current = self.load_job_metadata(job.analysis_id)
+            if (
+                job.persistence_version is not None
+                and job.persistence_version != current.persistence_version
+            ) or (job.persistence_version is None and current.calibration_completed):
+                raise JobConflictError("analysis_changed", "Analysis changed. Reload and retry.")
         filesystem_artifacts = self._filesystem_artifacts(job.analysis_id)
         projected = job.model_copy(
             update={
@@ -228,13 +237,18 @@ class AnalysisJobRepository:
             }
         )
         try:
-            self.persistence.service.persist_job(
+            version = self.persistence.service.persist_job(
                 owner_user_id=self.owner_user_id,
                 payload=projected.model_dump(mode="json"),
                 artifacts=filesystem_artifacts,
                 player_selection=self._player_selection(job.analysis_id),
                 compatibility_import=True,
+                expected_row_version=job.persistence_version,
             )
+        except OptimisticConcurrencyError:
+            raise JobConflictError(
+                "analysis_changed", "Analysis changed. Reload and retry."
+            ) from None
         except (ResourceNotFoundError, OwnershipMismatchError):
             raise JobNotFoundError() from None
         except SourceMediaUnavailableError:
@@ -242,7 +256,7 @@ class AnalysisJobRepository:
                 "source_video_unavailable",
                 "The original recording is no longer available for reanalysis.",
             ) from None
-        return projected
+        return projected.model_copy(update={"persistence_version": version})
 
     def load_job(self, analysis_id: str) -> AnalysisJob:
         with self.media_operation(analysis_id, wait=True):
@@ -257,7 +271,35 @@ class AnalysisJobRepository:
                 owner_user_id=self.owner_user_id,
                 analysis_id=analysis_id,
             )
-            return AnalysisJob.model_validate(payload)
+            job = AnalysisJob.model_validate(payload)
+            if job.calibration_completed:
+                records = self.persistence.service.list_artifacts(
+                    owner_user_id=self.owner_user_id, analysis_id=analysis_id
+                )
+                calibrations = [
+                    record
+                    for record in records
+                    if record.logical_key.startswith("calibrations/")
+                    and record.logical_key.endswith("/calibration.json")
+                ]
+                active_id = job.active_calibration_id
+                if active_id is None and len(calibrations) == 1:
+                    active_id = calibrations[0].logical_key.split("/")[1]
+                checksum = next(
+                    (
+                        r.checksum_sha256
+                        for r in calibrations
+                        if r.logical_key == f"calibrations/{active_id}/calibration.json"
+                    ),
+                    None,
+                )
+                job = job.model_copy(
+                    update={
+                        "active_calibration_id": active_id,
+                        "calibration_checksum_sha256": checksum,
+                    }
+                )
+            return job
         except (ResourceNotFoundError, OwnershipMismatchError):
             raise JobNotFoundError() from None
         except ValidationError:

@@ -203,8 +203,8 @@ class HistoryProjectionService:
 
     def _project_analysis(self, analysis_id: str) -> AnalysisHistoryItem:
         job = self.repository.load_job_metadata(analysis_id)
-        analytics = self._load_analytics(analysis_id)
-        match_iq = self._load_match_iq(analysis_id)
+        analytics = self._load_analytics(analysis_id) if job.calibration_verified else None
+        match_iq = self._load_match_iq(analysis_id) if job.calibration_verified else None
         evaluated_at = max(
             [
                 job.updated_at,

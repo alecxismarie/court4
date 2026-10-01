@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,6 +18,7 @@ from app.schemas.analytics import (
     ZoneOccupancyMetric,
     ZoneOccupancyReport,
 )
+from app.schemas.calibration import CalibrationVerificationRecord, CalibrationVerificationState
 from app.schemas.history import (
     AnalysisHistoryStatus,
     ContributionStatus,
@@ -581,6 +583,9 @@ def test_missing_measurements_are_unavailable_and_never_zero(tmp_path: Path) -> 
         analytics_completed=True,
     )
     repository.save_job(job)
+    calibration_dir = repository.analysis_dir(job.analysis_id) / "calibrations" / "calibration"
+    calibration_dir.mkdir(parents=True)
+    (calibration_dir / "calibration.json").write_bytes(b"{}")
     analytics_dir = repository.analysis_dir(job.analysis_id) / "analytics"
     analytics_dir.mkdir(parents=True)
     (analytics_dir / "analytics.json").write_text(
@@ -787,6 +792,19 @@ def _job(
         updated_at=NOW + timedelta(minutes=1, seconds=len(analysis_id)),
         inspection_completed=True,
         calibration_completed=analytics_completed,
+        active_calibration_id="calibration" if analytics_completed else None,
+        calibration_checksum_sha256=hashlib.sha256(b"{}").hexdigest()
+        if analytics_completed
+        else None,
+        calibration_verification=CalibrationVerificationRecord(
+            calibration_id="calibration",
+            calibration_checksum_sha256=hashlib.sha256(b"{}").hexdigest(),
+            verification_state=CalibrationVerificationState.verified,
+            verified_at=NOW,
+            verification_method="test_fixture",
+        )
+        if analytics_completed
+        else None,
         tracking_completed=analytics_completed,
         player_selected=analytics_completed,
         analytics_completed=analytics_completed,
@@ -919,6 +937,9 @@ def _write_analytics(
     analysis_id: str,
     analytics: AnalyticsReport,
 ) -> None:
+    calibration_dir = repository.analysis_dir(analysis_id) / "calibrations" / "calibration"
+    calibration_dir.mkdir(parents=True, exist_ok=True)
+    (calibration_dir / "calibration.json").write_bytes(b"{}")
     analytics_dir = repository.analysis_dir(analysis_id) / "analytics"
     analytics_dir.mkdir(parents=True, exist_ok=True)
     (analytics_dir / "analytics.json").write_text(

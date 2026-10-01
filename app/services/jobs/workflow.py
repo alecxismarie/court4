@@ -19,7 +19,11 @@ from app.persistence.object_storage import ObjectStorageError
 from app.persistence.storage import StorageCapacityError
 from app.schemas.active_play import ActivePlayReport
 from app.schemas.analytics import AnalyticsReport
-from app.schemas.calibration import CourtCalibrationReport
+from app.schemas.calibration import (
+    CalibrationVerificationRecord,
+    CalibrationVerificationState,
+    CourtCalibrationReport,
+)
 from app.schemas.jobs import (
     AnalysisArtifact,
     AnalysisJob,
@@ -28,6 +32,7 @@ from app.schemas.jobs import (
     AnalysisStatus,
     AnalyticsGenerationResponse,
     AnalyticsResponse,
+    CalibrationConfirmationRequest,
     CalibrationPointRequest,
     CalibrationRequest,
     CalibrationResponse,
@@ -85,7 +90,7 @@ from app.services.jobs.exceptions import (
     JobTooLargeError,
 )
 from app.services.jobs.media_guard import media_operation
-from app.services.jobs.repository import AnalysisJobRepository
+from app.services.jobs.repository import AnalysisJobRepository, validate_relative_artifact_path
 from app.services.match_iq import (
     MATCH_IQ_FILENAME,
     MatchIQPersistenceError,
@@ -146,6 +151,48 @@ class AnalysisWorkflowService:
 
     def close(self) -> None:
         self.repository.close()
+
+    def _require_verified_calibration(self, analysis_id: str) -> AnalysisJob:
+        job = self.repository.load_job_metadata(analysis_id)
+        self._require_supported_interpretation(job, "court-based measurements")
+        self._require(
+            job.calibration_verified,
+            "calibration_verification_required",
+            "Review the court overlay and confirm it before using measurements.",
+        )
+        return job
+
+    @media_operation(require_source=False, exclusive=True)
+    def confirm_calibration(
+        self, analysis_id: str, request: CalibrationConfirmationRequest
+    ) -> AnalysisJobResponse:
+        job = self.repository.load_job(analysis_id)
+        self._require_supported_interpretation(job, "court calibration verification")
+        self._require(
+            job.calibration_completed
+            and request.calibration_id == job.active_calibration_id
+            and request.calibration_checksum_sha256 == job.calibration_checksum_sha256,
+            "calibration_changed",
+            "The court changed. Reload and review its current overlay.",
+        )
+        path = self.repository.resolve_artifact(
+            analysis_id, f"calibrations/{request.calibration_id}/calibration.json"
+        )
+        self._require(
+            hashlib.sha256(path.read_bytes()).hexdigest() == request.calibration_checksum_sha256,
+            "calibration_changed",
+            "The court changed. Reload and review it.",
+        )
+        if not job.calibration_verified:
+            review = CalibrationVerificationRecord(
+                calibration_id=request.calibration_id,
+                calibration_checksum_sha256=request.calibration_checksum_sha256,
+                verification_state=CalibrationVerificationState.verified,
+                verified_at=datetime.now(tz=UTC),
+                verification_method="user_overlay_confirmation",
+            )
+            job = self.repository.update_job(job, calibration_verification=review)
+        return AnalysisJobResponse.model_validate(job.model_dump(mode="json"))
 
     async def create_analysis(
         self,
@@ -424,15 +471,19 @@ class AnalysisWorkflowService:
                 )
         return SampledFramesResponse(analysis_id=analysis_id, frames=frames)
 
+    @media_operation(require_source=False)
     def get_artifact_file(self, analysis_id: str, artifact_path: str) -> ArtifactFile:
         self.repository.load_job_metadata(analysis_id)
+        artifact_path = validate_relative_artifact_path(artifact_path)
+        if artifact_path.startswith(("analytics/", "tracking/", "active_play/")):
+            self._require_verified_calibration(analysis_id)
         resolved = self.repository.resolve_artifact(analysis_id, artifact_path)
         if not resolved.exists() or not resolved.is_file():
             raise JobNotFoundError("Artifact not found.")
         artifact = self.repository.artifact_from_path(analysis_id, resolved)
         return ArtifactFile(path=resolved, content_type=artifact.content_type)
 
-    @media_operation()
+    @media_operation(exclusive=True)
     def submit_calibration(
         self,
         analysis_id: str,
@@ -456,12 +507,14 @@ class AnalysisWorkflowService:
         )
 
         if calibration_path.exists():
-            calibration = self._load_calibration(calibration_path)
+            raise JobConflictError(
+                "calibration_exists", "Use a new calibration ID for corrections."
+            )
         else:
             try:
                 result = calibrate_court(
                     image_path=source_frame,
-                    output_dir=self.settings.analysis_output_dir,
+                    output_dir=self.repository.output_dir,
                     image_points=(
                         (request.near_left.x, request.near_left.y),
                         (request.near_right.x, request.near_right.y),
@@ -485,12 +538,25 @@ class AnalysisWorkflowService:
                 self._mark_failed(job, "Calibration failed.")
                 raise JobRequestError("calibration_failed", "Calibration failed.") from exc
 
+        # Old measurements must not be reused with a different floor mapping.
+        # Durable S3 versions are retained; their current registrations are retired on save.
+        for folder in ("tracking", "analytics", "active_play"):
+            old = self.repository.analysis_dir(analysis_id) / folder
+            if old.exists():
+                shutil.rmtree(old)
         updated = self.repository.update_job(
             job,
             status=AnalysisStatus.processing,
             current_stage=AnalysisStage.calibrated,
             error=None,
             calibration_completed=True,
+            active_calibration_id=calibration_id,
+            calibration_checksum_sha256=hashlib.sha256(calibration_path.read_bytes()).hexdigest(),
+            calibration_verification=None,
+            tracking_completed=False,
+            player_selected=False,
+            analytics_completed=False,
+            analysis_readiness=None,
             manual_calibration_required=False,
         )
         artifacts = self._artifacts_under(analysis_id, calibration_path.parent)
@@ -501,7 +567,7 @@ class AnalysisWorkflowService:
             job=AnalysisJobResponse.model_validate(updated.model_dump(mode="json")),
         )
 
-    @media_operation()
+    @media_operation(exclusive=True)
     def detect_court(self, analysis_id: str) -> CourtDetectionResponse:
         job = self.repository.load_job(analysis_id)
         self._require_supported_interpretation(job, "automatic court detection")
@@ -551,6 +617,22 @@ class AnalysisWorkflowService:
             ),
             error=None,
             calibration_completed=detection_succeeded,
+            active_calibration_id=(
+                result.calibration.calibration_id if result.calibration else None
+            ),
+            calibration_checksum_sha256=(
+                hashlib.sha256(
+                    (
+                        self.repository.analysis_dir(analysis_id)
+                        / "calibrations"
+                        / result.calibration.calibration_id
+                        / "calibration.json"
+                    ).read_bytes()
+                ).hexdigest()
+                if result.calibration
+                else None
+            ),
+            calibration_verification=None,
             manual_calibration_required=manual_required,
             court_detection_status=result.outcome,
             court_detection_confidence=result.confidence,
@@ -574,12 +656,17 @@ class AnalysisWorkflowService:
             job=AnalysisJobResponse.model_validate(updated.model_dump(mode="json")),
         )
 
-    @media_operation()
+    @media_operation(require_calibration=True, exclusive=True)
     def start_tracking(self, analysis_id: str, request: TrackingRequest) -> TrackingResponse:
         job = self.repository.load_job(analysis_id)
         self._require_supported_interpretation(job, "court-mapped player tracking")
         self._require(job.calibration_completed, "calibration_required", "Calibration is required.")
         calibration_id = self._validate_output_id(request.calibration_id, "calibration")
+        self._require(
+            calibration_id == job.active_calibration_id,
+            "calibration_changed",
+            "Select the verified calibration before tracking.",
+        )
         tracking_path = self.repository.analysis_dir(analysis_id) / "tracking" / "tracking.json"
         try:
             registered_tracking = self.repository.resolve_artifact(
@@ -590,6 +677,11 @@ class AnalysisWorkflowService:
 
         if registered_tracking is not None:
             tracking = self._load_tracking(registered_tracking)
+            self._require(
+                tracking.calibration_id == job.active_calibration_id,
+                "calibration_changed",
+                "Tracking must use the verified court.",
+            )
         else:
             calibration_path = self.repository.resolve_artifact(
                 analysis_id,
@@ -687,7 +779,7 @@ class AnalysisWorkflowService:
             player_candidates=candidates,
         )
 
-    @media_operation(require_source=False)
+    @media_operation(require_source=False, require_calibration=True)
     def list_player_candidates(self, analysis_id: str) -> PlayerCandidateCollection:
         job = self.repository.load_job_metadata(analysis_id)
         if job.source_media_state not in {"deleting", "deleted"}:
@@ -704,7 +796,7 @@ class AnalysisWorkflowService:
                 "candidate_persistence_failure", "Saved player candidates could not be loaded."
             ) from exc
 
-    @media_operation()
+    @media_operation(require_calibration=True, exclusive=True)
     def generate_player_candidates(self, analysis_id: str) -> PlayerCandidateCollection:
         job = self.repository.load_job(analysis_id)
         self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
@@ -718,7 +810,7 @@ class AnalysisWorkflowService:
         collection, _ = self._refresh_analysis_readiness(job, collection)
         return collection
 
-    @media_operation()
+    @media_operation(require_calibration=True, exclusive=True)
     def select_player_candidate(
         self,
         analysis_id: str,
@@ -753,7 +845,7 @@ class AnalysisWorkflowService:
         collection, _ = self._refresh_analysis_readiness(updated, collection)
         return collection
 
-    @media_operation()
+    @media_operation(require_calibration=True, exclusive=True)
     def reject_player_candidate(
         self,
         analysis_id: str,
@@ -792,7 +884,7 @@ class AnalysisWorkflowService:
         collection, _ = self._refresh_analysis_readiness(updated_job, collection)
         return collection
 
-    @media_operation()
+    @media_operation(require_calibration=True, exclusive=True)
     def restore_player_candidate(
         self,
         analysis_id: str,
@@ -816,7 +908,7 @@ class AnalysisWorkflowService:
         collection, _ = self._refresh_analysis_readiness(job, collection)
         return collection
 
-    @media_operation()
+    @media_operation(require_calibration=True, exclusive=True)
     def merge_player_candidates(
         self,
         analysis_id: str,
@@ -847,7 +939,7 @@ class AnalysisWorkflowService:
             self.repository.save_job(updated_job)
         return collection
 
-    @media_operation()
+    @media_operation(require_calibration=True, exclusive=True)
     def unmerge_player_candidates(
         self,
         analysis_id: str,
@@ -883,7 +975,7 @@ class AnalysisWorkflowService:
             self.repository.save_job(refreshed_job)
         return collection
 
-    @media_operation(require_source=False)
+    @media_operation(require_source=False, require_calibration=True)
     def list_players(self, analysis_id: str) -> PlayersResponse:
         job = self.repository.load_job(analysis_id)
         self._require(job.tracking_completed, "tracking_required", "Player tracking is required.")
@@ -905,7 +997,7 @@ class AnalysisWorkflowService:
             selected_player_track_id=tracking.selected_player_track_id,
         )
 
-    @media_operation()
+    @media_operation(require_calibration=True, exclusive=True)
     def select_player(
         self,
         analysis_id: str,
@@ -965,7 +1057,7 @@ class AnalysisWorkflowService:
             job=AnalysisJobResponse.model_validate(updated.model_dump(mode="json")),
         )
 
-    @media_operation()
+    @media_operation(require_calibration=True, exclusive=True)
     def generate_analytics(self, analysis_id: str) -> AnalyticsGenerationResponse:
         job = self.repository.load_job(analysis_id)
         self._require_supported_interpretation(job, "movement analytics and Match IQ")
@@ -1030,7 +1122,7 @@ class AnalysisWorkflowService:
             job=AnalysisJobResponse.model_validate(updated.model_dump(mode="json")),
         )
 
-    @media_operation()
+    @media_operation(require_calibration=True, exclusive=True)
     def generate_active_play(self, analysis_id: str) -> ActivePlayReport:
         """Generate internal shadow evidence without changing job or analytics state."""
 
@@ -1056,7 +1148,7 @@ class AnalysisWorkflowService:
                 "Shadow Active Play evidence could not be generated.",
             ) from exc
 
-    @media_operation(require_source=False)
+    @media_operation(require_source=False, require_calibration=True)
     def get_active_play(self, analysis_id: str) -> ActivePlayReport:
         """Load an existing internal shadow artifact without legacy migration."""
 
@@ -1078,7 +1170,7 @@ class AnalysisWorkflowService:
                 "Saved shadow Active Play evidence could not be read.",
             ) from exc
 
-    @media_operation(require_source=False)
+    @media_operation(require_source=False, require_calibration=True)
     def get_analytics(self, analysis_id: str) -> AnalyticsResponse:
         job = self.repository.load_job(analysis_id)
         self._require_supported_interpretation(job, "movement analytics and Match IQ")

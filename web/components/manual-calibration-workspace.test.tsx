@@ -3,13 +3,14 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ManualCalibrationWorkspace } from "@/components/manual-calibration-workspace";
-import { getAnalysisFrames, submitCalibration } from "@/lib/api/analyses";
+import { confirmCalibration, getAnalysisFrames, submitCalibration } from "@/lib/api/analyses";
 import { makeCalibrationResponse, makeFrame } from "@/test/factories";
 import { renderWithQueryClient } from "@/test/render";
 
 vi.mock("@/lib/api/analyses", () => ({
   getAnalysisFrames: vi.fn(),
   submitCalibration: vi.fn(),
+  confirmCalibration: vi.fn(),
 }));
 
 const mockedGetAnalysisFrames = vi.mocked(getAnalysisFrames);
@@ -19,6 +20,7 @@ describe("manual calibration workspace", () => {
   beforeEach(() => {
     mockedGetAnalysisFrames.mockReset();
     mockedSubmitCalibration.mockReset();
+    vi.mocked(confirmCalibration).mockReset();
   });
 
   it("selects four scaled points and submits them in backend order", async () => {
@@ -27,7 +29,11 @@ describe("manual calibration workspace", () => {
       analysis_id: "analysis-123",
       frames: [makeFrame()],
     });
-    mockedSubmitCalibration.mockResolvedValue(makeCalibrationResponse());
+    const corrected = makeCalibrationResponse();
+    corrected.job.active_calibration_id = "manual-corrected";
+    corrected.job.calibration_checksum_sha256 = "b".repeat(64);
+    mockedSubmitCalibration.mockResolvedValue(corrected);
+    vi.mocked(confirmCalibration).mockResolvedValue({ ...corrected.job, calibration_verified: true });
 
     renderWithQueryClient(<ManualCalibrationWorkspace analysisId="analysis-123" />);
 
@@ -45,7 +51,7 @@ describe("manual calibration workspace", () => {
 
     await waitFor(() =>
       expect(mockedSubmitCalibration).toHaveBeenCalledWith("analysis-123", {
-        calibration_id: "manual-calibration",
+        calibration_id: expect.stringMatching(/^manual-/),
         source_frame: "frames/frame_000001.jpg",
         near_left: { x: 80, y: 760 },
         near_right: { x: 720, y: 760 },
@@ -56,6 +62,12 @@ describe("manual calibration workspace", () => {
     expect(await screen.findByText("Manual calibration saved")).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Verification artifact" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Top-down court artifact" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Looks correct" })).toBeDisabled();
+    expect(confirmCalibration).not.toHaveBeenCalled();
+    fireEvent.load(screen.getByRole("img", { name: "Court calibration overlay for review" }));
+    await user.click(screen.getByRole("button", { name: "Looks correct" }));
+    expect(await screen.findByText("Court verified for measurements")).toBeInTheDocument();
+    expect(confirmCalibration).toHaveBeenCalledWith("analysis-123", "manual-corrected", "b".repeat(64));
   });
 
   it("supports undo and reset", async () => {

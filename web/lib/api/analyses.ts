@@ -50,6 +50,13 @@ import {
 
 export class TerminalUploadError extends Court4ApiError {}
 
+export function confirmCalibration(analysisId: string, calibrationId: string, checksum: string) {
+  return postJson(`/api/v1/analyses/${analysisId}/calibration/confirm`, analysisJobSchema, {
+    calibration_id: calibrationId,
+    calibration_checksum_sha256: checksum,
+  });
+}
+
 export type UploadOptions = {
   idempotencyKey?: string;
   reanalyze?: boolean;

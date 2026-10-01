@@ -3,10 +3,10 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from app.schemas.analytics import AnalyticsReport
-from app.schemas.calibration import CourtCalibrationReport
+from app.schemas.calibration import CalibrationVerificationRecord, CourtCalibrationReport
 from app.schemas.match_iq import MatchIQReport
 from app.schemas.player_candidates import PlayerCandidateCollection
 from app.schemas.player_tracking import PlayerTrackingReport, TrackSummary
@@ -78,6 +78,7 @@ class DetectedCourtCorners(BaseModel):
 class AnalysisJob(BaseModel):
     model_config = ConfigDict(frozen=True)
 
+    persistence_version: int | None = Field(default=None, exclude=True)
     analysis_id: str
     sport: SportType = SportType.PICKLEBALL
     status: AnalysisStatus
@@ -89,6 +90,9 @@ class AnalysisJob(BaseModel):
     error: str | None = None
     inspection_completed: bool = False
     calibration_completed: bool = False
+    active_calibration_id: str | None = None
+    calibration_checksum_sha256: str | None = None
+    calibration_verification: CalibrationVerificationRecord | None = None
     tracking_completed: bool = False
     player_selected: bool = False
     analytics_completed: bool = False
@@ -100,6 +104,18 @@ class AnalysisJob(BaseModel):
     upload_preflight: RecordingQualityAssessment | None = None
     analysis_readiness: RecordingQualityAssessment | None = None
     available_artifacts: list[AnalysisArtifact] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def calibration_verified(self) -> bool:
+        review = self.calibration_verification
+        return bool(
+            self.calibration_completed
+            and review is not None
+            and review.verification_state == "verified"
+            and review.calibration_id == self.active_calibration_id
+            and review.calibration_checksum_sha256 == self.calibration_checksum_sha256
+        )
 
 
 class AnalysisJobResponse(AnalysisJob):
@@ -139,6 +155,13 @@ class CalibrationRequest(BaseModel):
     @classmethod
     def validate_source_frame(cls, value: str) -> str:
         return _validate_relative_artifact_path(value)
+
+
+class CalibrationConfirmationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    calibration_id: str
+    calibration_checksum_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class CalibrationResponse(BaseModel):

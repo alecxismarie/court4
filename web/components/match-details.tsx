@@ -154,6 +154,9 @@ export function MatchDetails({ analysisId }: { analysisId: string }) {
 }
 
 function NextAction({ job }: { job: AnalysisJob }) {
+  if (job.sport === "pickleball" && job.calibration_completed && !job.calibration_verified) {
+    return <ButtonLink href="#court-recognition-heading">Review court</ButtonLink>;
+  }
   if (job.status === "failed") {
     return (
       <span className="rounded-md bg-red-50 px-3 py-2 text-sm font-semibold text-court-red">

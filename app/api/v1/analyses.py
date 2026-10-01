@@ -14,6 +14,7 @@ from app.schemas.jobs import (
     AnalyticsGenerationResponse,
     AnalyticsResponse,
     ApiErrorResponse,
+    CalibrationConfirmationRequest,
     CalibrationRequest,
     CalibrationResponse,
     CourtDetectionResponse,
@@ -209,6 +210,17 @@ def submit_calibration(
     workflow: WorkflowDependency,
 ) -> CalibrationResponse:
     return workflow.submit_calibration(analysis_id, request)
+
+
+@router.post(
+    "/{analysis_id}/calibration/confirm",
+    response_model=AnalysisJobResponse,
+    responses=ERROR_RESPONSES,
+)
+def confirm_calibration(
+    analysis_id: str, request: CalibrationConfirmationRequest, workflow: WorkflowDependency
+) -> AnalysisJobResponse:
+    return workflow.confirm_calibration(analysis_id, request)
 
 
 @router.post(

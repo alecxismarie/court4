@@ -85,6 +85,16 @@ def evaluate_contribution(
             source_version,
         )
 
+    if not job.calibration_verified:
+        return _decision(
+            ContributionStatus.excluded,
+            ["CALIBRATION_UNVERIFIED"],
+            "Review and confirm the court overlay before these measurements "
+            "can contribute to Progress.",
+            evaluated_at,
+            source_version,
+        )
+
     if analytics is None:
         return _decision(
             ContributionStatus.not_evaluated,

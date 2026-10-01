@@ -43,6 +43,7 @@ vi.mock("next/navigation", () => ({
 
 vi.mock("@/lib/api/analyses", () => ({
   detectCourt: vi.fn(),
+  confirmCalibration: vi.fn(),
   generateAnalytics: vi.fn(),
   getAnalysis: vi.fn(),
   getAnalysisFrames: vi.fn(),
@@ -181,9 +182,9 @@ describe("match details workflow", () => {
     renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
     await user.click(await screen.findByRole("button", { name: /recognize court/i }));
 
-    expect(await screen.findByText("91% confidence")).toBeInTheDocument();
+    expect(await screen.findByText("91% proposal confidence")).toBeInTheDocument();
     expect(await screen.findByText("Find the players")).toBeInTheDocument();
-    const courtRecognition = screen.getByRole("region", { name: "Court recognized" });
+    const courtRecognition = screen.getByRole("region", { name: "Court verified" });
     const playerTracking = within(courtRecognition).getByRole("region", {
       name: "Find the players",
     });
@@ -192,7 +193,7 @@ describe("match details workflow", () => {
     expect(
       screen.queryByRole("link", { name: /continue to find players/i }),
     ).not.toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "Detected court" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Court calibration overlay for review" })).toBeInTheDocument();
     expect(screen.queryByText("Detected court")).not.toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "Top-down court view" })).not.toBeInTheDocument();
     expect(screen.queryByText("Confidence value")).not.toBeInTheDocument();
@@ -220,18 +221,18 @@ describe("match details workflow", () => {
 
     renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
 
-    expect(await screen.findByText("91% confidence")).toBeInTheDocument();
+    expect(await screen.findByText("91% proposal confidence")).toBeInTheDocument();
     expect(screen.queryByText("Detection confidence")).not.toBeInTheDocument();
     expect(mockedDetectCourt).not.toHaveBeenCalled();
   });
 
   it("renders legacy calibrated analyses without fabricating confidence", async () => {
-    mockedGetAnalysis.mockResolvedValue(makeCalibratedJob());
+    mockedGetAnalysis.mockResolvedValue(makeCalibratedJob({ calibration_verified: false }));
     mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
 
     renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
 
-    expect(await screen.findAllByText("Court recognized")).not.toHaveLength(0);
+    expect(await screen.findAllByText(/Court generated.*review required/)).not.toHaveLength(0);
     expect(screen.queryByText("Detection confidence")).not.toBeInTheDocument();
     expect(screen.queryByText(/Court recognized with .* confidence/i)).not.toBeInTheDocument();
   });
@@ -828,6 +829,9 @@ function makeCalibratedFlags() {
   return {
     current_stage: "calibrated",
     calibration_completed: true,
+    calibration_verified: true,
+    active_calibration_id: "auto-court-detection",
+    calibration_checksum_sha256: "a".repeat(64),
     available_artifacts: [
       makeArtifact({
         path: "calibrations/auto-court-detection/calibration.json",

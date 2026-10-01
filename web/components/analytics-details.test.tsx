@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AnalyticsDetails } from "@/components/analytics-details";
 import { getAnalysis, getAnalytics } from "@/lib/api/analyses";
+import { Court4ApiError } from "@/lib/api/client";
 import type { MatchIQReport } from "@/lib/api/types";
 import {
   makeAnalyticsReport,
@@ -26,6 +27,14 @@ const mockedGetAnalysis = vi.mocked(getAnalysis);
 const mockedGetAnalytics = vi.mocked(getAnalytics);
 
 describe("analytics details evidence narrative", () => {
+  it("directs unverified reports to court review without a misleading connectivity error", async () => {
+    mockedGetAnalytics.mockRejectedValue(new Court4ApiError("Review the court", {
+      code: "calibration_verification_required", status: 409,
+    }));
+    renderWithQueryClient(<AnalyticsDetails analysisId="analysis-123" />);
+    expect(await screen.findByRole("link", { name: "Review court" })).toHaveAttribute("href", "/matches/analysis-123");
+    expect(screen.queryByText("Match IQ could not be loaded")).not.toBeInTheDocument();
+  });
   beforeEach(() => {
     mockedGetAnalytics.mockReset();
     mockedGetAnalysis.mockReset();

@@ -51,6 +51,13 @@ export function AnalyticsDetails({ analysisId }: { analysisId: string }) {
 
   if (analyticsQuery.isError || !analyticsQuery.data) {
     const error = normalizeApiError(analyticsQuery.error);
+    if (error.code === "calibration_verification_required") {
+      return <section className="space-y-4 rounded-md border border-court-line p-6">
+        <h1 className="text-xl font-semibold">Review the court before viewing measurements</h1>
+        <p>The saved court mapping needs your confirmation. Check the overlay or adjust the corners.</p>
+        <ButtonLink href={`/matches/${analysisId}`}>Review court</ButtonLink>
+      </section>;
+    }
     return (
       <div className="rounded-md border border-red-200 bg-red-50 p-6">
         <h1 className="text-xl font-semibold text-court-red">Match IQ could not be loaded</h1>

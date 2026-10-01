@@ -11,6 +11,7 @@ import type { AnalysisArtifact, CalibrationRequest, SampledFrame } from "@/lib/a
 import { cn } from "@/lib/utils";
 import { Button, ButtonLink } from "@/components/ui/button";
 import { Skeleton } from "@/components/skeleton";
+import { CalibrationReview } from "@/components/calibration-review";
 
 type CornerId = "far_left" | "far_right" | "near_right" | "near_left";
 
@@ -26,7 +27,6 @@ type ImageSize = {
   height: number;
 };
 
-const CALIBRATION_ID = "manual-calibration";
 const MIN_POLYGON_AREA_PIXELS = 1000;
 const DISTINCT_POINT_DISTANCE_PIXELS = 3;
 
@@ -61,6 +61,8 @@ export function ManualCalibrationWorkspace({ analysisId }: { analysisId: string 
       setSubmittedArtifacts(response.artifacts);
       await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId] });
       await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId, "frames"] });
+      await queryClient.invalidateQueries({ queryKey: ["analysis-history"] });
+      await queryClient.invalidateQueries({ queryKey: ["play-history"] });
     },
   });
 
@@ -121,7 +123,7 @@ export function ManualCalibrationWorkspace({ analysisId }: { analysisId: string 
       CalibrationPoint
     >;
     calibrationMutation.mutate({
-      calibration_id: CALIBRATION_ID,
+      calibration_id: `manual-${crypto.randomUUID()}`,
       source_frame: selectedFrame.path,
       near_left: toRequestPoint(byId.near_left),
       near_right: toRequestPoint(byId.near_right),
@@ -220,7 +222,7 @@ export function ManualCalibrationWorkspace({ analysisId }: { analysisId: string 
               src={getArtifactUrl(analysisId, selectedFrame.path)}
               alt="Manual calibration frame"
               className={cn(
-                "block max-h-[70vh] w-full object-contain",
+                "block h-auto w-full",
                 nextStep && "cursor-crosshair",
               )}
               onClick={handleImageClick}
@@ -298,14 +300,15 @@ export function ManualCalibrationWorkspace({ analysisId }: { analysisId: string 
               <div>
                 <h2 className="text-lg font-semibold text-court-ink">Manual calibration saved</h2>
                 <p className="mt-1 text-sm leading-6 text-court-muted">
-                  Review the generated court artifacts, then continue to player tracking.
+                  Review the corrected overlay and confirm it before player tracking.
                 </p>
               </div>
             </div>
             <ButtonLink href={`/matches/${analysisId}#player-tracking`}>
-              Continue to Find Players
+              Return to match
             </ButtonLink>
           </div>
+          <CalibrationReview key={calibrationMutation.data.job.calibration_checksum_sha256} job={calibrationMutation.data.job} />
           <div className="mt-5 grid gap-4 md:grid-cols-2">
             {verification ? (
               <CalibrationArtifact analysisId={analysisId} artifact={verification} label="Verification artifact" />

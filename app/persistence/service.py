@@ -954,6 +954,7 @@ class PersistenceService:
         with self._session_factory() as session:
             analysis = self._owned_analysis(session.get(Analysis, analysis_id), owner_user_id)
             payload = dict(analysis.job_payload)
+            payload["persistence_version"] = analysis.row_version
             payload["sport"] = analysis.sport
             video = session.get(UploadedVideo, analysis.uploaded_video_id)
             payload["source_media_state"] = (
@@ -983,7 +984,8 @@ class PersistenceService:
         artifacts: list[ArtifactInput],
         player_selection: PlayerSelectionInput | None = None,
         compatibility_import: bool = False,
-    ) -> None:
+        expected_row_version: int | None = None,
+    ) -> int:
         analysis_id = str(payload["analysis_id"])
         now = utc_now()
         with self._session_factory.begin() as session:
@@ -1018,6 +1020,14 @@ class PersistenceService:
                 self._add_run_event(session, initial_run, None, "processing", "run_started")
             else:
                 analysis = self._owned_analysis(analysis, owner_user_id)
+                if (
+                    expected_row_version is not None
+                    and analysis.row_version != expected_row_version
+                ) or (
+                    expected_row_version is None
+                    and analysis.job_payload.get("calibration_completed")
+                ):
+                    raise OptimisticConcurrencyError("Analysis changed; reload before saving.")
 
             video_state = session.get(UploadedVideo, analysis.uploaded_video_id)
             if video_state is not None and video_state.state in {"deleting", "deleted"}:
@@ -1027,6 +1037,25 @@ class PersistenceService:
             if analysis.sport != payload_sport.value:
                 raise ValueError("An analysis sport is immutable; create a new analysis instead.")
 
+            if (
+                payload.get("active_calibration_id")
+                and payload.get("active_calibration_id")
+                != analysis.job_payload.get("active_calibration_id")
+                and payload.get("calibration_verification") is None
+                and not payload.get("tracking_completed")
+            ):
+                # A corrected court invalidates dependent results, not their retained S3 versions.
+                session.execute(
+                    update(AnalysisArtifact)
+                    .where(
+                        AnalysisArtifact.analysis_id == analysis_id,
+                        AnalysisArtifact.is_current.is_(True),
+                        AnalysisArtifact.logical_key.startswith("tracking/")
+                        | AnalysisArtifact.logical_key.startswith("analytics/")
+                        | AnalysisArtifact.logical_key.startswith("active_play/"),
+                    )
+                    .values(is_current=False, updated_at=now)
+                )
             previous_state = analysis.state
             new_state = str(payload["status"])
             run: AnalysisRun | None = self._active_or_latest_run(session, analysis.id)
@@ -1112,6 +1141,7 @@ class PersistenceService:
                 run=run,
                 selection=player_selection,
             )
+            return analysis.row_version
 
     def list_artifacts(self, *, owner_user_id: UUID, analysis_id: str) -> list[AnalysisArtifact]:
         with self._session_factory() as session:

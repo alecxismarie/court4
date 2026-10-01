@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -33,6 +33,20 @@ describe("analysis history workspace", () => {
         "No analyses yet. Upload a match recording to create your first Court4 report.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it.each([
+    [16.96666666666666 / 61.2, "28%"],
+    [null, "Not available"],
+  ])("renders whole-video coverage %s", (coverage, expected) => {
+    historyMock.mockReturnValue(query(makeAnalysisHistoryResponse([
+      makeAnalysisHistoryItem({ observation_coverage_ratio: coverage }),
+    ])));
+    renderWithQueryClient(<AnalysisHistoryWorkspace />);
+    const fact = screen.getByText("Observation coverage").parentElement;
+    expect(fact).not.toBeNull();
+    expect(within(fact!).getByText(expected)).toBeInTheDocument();
+    expect(screen.queryByText("69%")).not.toBeInTheDocument();
   });
 
   it("pages beyond 100 and resets the server filter to its first page", async () => {

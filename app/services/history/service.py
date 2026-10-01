@@ -63,6 +63,22 @@ PROGRESS_DISCLAIMER = (
 )
 
 
+def _observation_coverage(
+    job: AnalysisJob, analytics: AnalyticsReport | None, match_iq: MatchIQReport | None
+) -> float | None:
+    """Match Report's whole-video coverage, independently of candidate visibility."""
+    if analytics is None:
+        return None
+    assessment = (match_iq.recording_quality if match_iq else None) or job.analysis_readiness
+    upload_signals = job.upload_preflight.upload_signals if job.upload_preflight else None
+    if upload_signals is None and assessment is not None:
+        upload_signals = assessment.upload_signals
+    observed = analytics.observed_duration_seconds
+    if upload_signals is None or not 0 < observed <= upload_signals.duration_seconds:
+        return None
+    return observed / upload_signals.duration_seconds
+
+
 class HistoryProjectionService:
     def __init__(self, *, repository: AnalysisJobRepository) -> None:
         self.repository = repository
@@ -212,7 +228,7 @@ class HistoryProjectionService:
             status=_history_status(job, quality.status if quality else None),
             processing_status=job.status.value,
             recording_quality=quality.status if quality else None,
-            observation_coverage_ratio=signals.player_visibility_ratio if signals else None,
+            observation_coverage_ratio=_observation_coverage(job, analytics, match_iq),
             reliable_observation_seconds=(
                 analytics.observed_duration_seconds
                 if analytics is not None

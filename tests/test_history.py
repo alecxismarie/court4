@@ -37,6 +37,7 @@ from app.schemas.recording_quality import (
     QualityCheckStatus,
     RecordingQualityAssessment,
     RecordingQualityLevel,
+    UploadQualitySignals,
 )
 from app.services.history import (
     PLAY_HISTORY_POLICY_VERSION,
@@ -49,9 +50,123 @@ from app.services.history.comparability import (
 )
 from app.services.history.grouping import deterministic_split
 from app.services.history.progress_policy import evaluate_trend_eligibility
+from app.services.history.service import _observation_coverage
 from app.services.jobs import AnalysisJobRepository
 
 NOW = datetime(2026, 7, 28, 10, 0, tzinfo=UTC)
+
+
+def _coverage_preflight(duration: float = 61.2) -> RecordingQualityAssessment:
+    return RecordingQualityAssessment(
+        stage=PreflightStage.upload,
+        status=RecordingQualityLevel.good,
+        upload_signals=UploadQualitySignals(
+            format=".mp4",
+            orientation="landscape",
+            width=640,
+            height=368,
+            fps=30,
+            duration_seconds=duration,
+        ),
+        assessed_at=NOW,
+    )
+
+
+def test_history_coverage_uses_video_duration_without_changing_visibility(tmp_path: Path) -> None:
+    repository = _repository(tmp_path)
+    visibility = 350 / 508
+    job = _job(
+        "coverage",
+        status=AnalysisStatus.completed,
+        analytics_completed=True,
+        readiness=_readiness(coverage=visibility),
+    ).model_copy(update={"upload_preflight": _coverage_preflight()})
+    analytics = _analytics(job.analysis_id, observed=16.96666666666666)
+    repository.save_job(job)
+    _write_analytics(repository, job.analysis_id, analytics)
+    before = evaluate_contribution(job=job, analytics=analytics, match_iq=None, evaluated_at=NOW)
+
+    item = (
+        HistoryProjectionService(repository=repository)
+        .analysis_history(limit=100, offset=0)
+        .items[0]
+    )
+
+    assert item.observation_coverage_ratio == pytest.approx(16.96666666666666 / 61.2)
+    assert item.observation_coverage_ratio is not None
+    assert round(item.observation_coverage_ratio * 100) == 28
+    saved = repository.load_job_metadata(job.analysis_id)
+    assert saved.analysis_readiness == job.analysis_readiness
+    assert saved.analysis_readiness is not None
+    assert saved.analysis_readiness.analysis_signals is not None
+    assert saved.analysis_readiness.analysis_signals.player_visibility_ratio == visibility
+    after = evaluate_contribution(job=saved, analytics=analytics, match_iq=None, evaluated_at=NOW)
+    assert after == before
+
+
+@pytest.mark.parametrize("missing", ["artifact", "duration"])
+def test_history_coverage_unavailable_without_analytics_duration(
+    tmp_path: Path, missing: str
+) -> None:
+    repository = _repository(tmp_path)
+    job = _job("missing-duration", status=AnalysisStatus.completed, analytics_completed=True)
+    job = job.model_copy(update={"upload_preflight": _coverage_preflight()})
+    repository.save_job(job)
+    if missing == "duration":
+        payload = _analytics(job.analysis_id).model_dump(
+            mode="json", exclude={"observed_duration_seconds"}
+        )
+        analytics_dir = repository.analysis_dir(job.analysis_id) / "analytics"
+        analytics_dir.mkdir(parents=True)
+        (analytics_dir / "analytics.json").write_text(json.dumps(payload), encoding="utf-8")
+        repository.register_current_artifacts(job.analysis_id)
+    item = (
+        HistoryProjectionService(repository=repository)
+        .analysis_history(limit=100, offset=0)
+        .items[0]
+    )
+    assert item.observation_coverage_ratio is None
+
+
+@pytest.mark.parametrize("video_duration", [None, 0, -1, 10, float("nan")])
+def test_coverage_unavailable_for_missing_or_invalid_video_duration(
+    video_duration: float | None,
+) -> None:
+    preflight = _coverage_preflight()
+    assert preflight.upload_signals is not None
+    # Exercise the boundary defensively even for values rejected by persisted schemas.
+    signals = preflight.upload_signals.model_copy(update={"duration_seconds": video_duration})
+    preflight = preflight.model_copy(
+        update={"upload_signals": signals if video_duration is not None else None}
+    )
+    job = _job("invalid-duration").model_copy(update={"upload_preflight": preflight})
+    assert _observation_coverage(job, _analytics(job.analysis_id), None) is None
+
+
+@pytest.mark.parametrize("observed, expected", [(0, None), (61.2, 1.0), (61.3, None)])
+def test_coverage_matches_report_duration_boundaries(
+    observed: float, expected: float | None
+) -> None:
+    job = _job("boundary").model_copy(update={"upload_preflight": _coverage_preflight()})
+    assert (
+        _observation_coverage(job, _analytics(job.analysis_id, observed=observed), None) == expected
+    )
+
+
+def test_coverage_matches_report_assessment_fallback_and_preflight_precedence() -> None:
+    readiness = _readiness().model_copy(
+        update={"upload_signals": _coverage_preflight(120).upload_signals}
+    )
+    job = _job("fallback", readiness=readiness)
+    analytics = _analytics(job.analysis_id)
+    assert _observation_coverage(job, analytics, None) == 0.25
+    match_iq = _match_iq(job.analysis_id).model_copy(
+        update={"recording_quality": _coverage_preflight(150)}
+    )
+    assert _observation_coverage(job, analytics, match_iq) == 0.2
+    job = job.model_copy(update={"upload_preflight": _coverage_preflight(60)})
+    assert _observation_coverage(job, analytics, None) == 0.5
+    assert _observation_coverage(job, analytics, match_iq) == 0.5
 
 
 def test_history_pages_filter_before_slicing_and_count_all_metadata(tmp_path: Path) -> None:

@@ -1,10 +1,20 @@
 # Current Court4 Task
 
 ## Status
-COMPLETE — 120-Frame Reviewed Dataset Pilot Preparation (2026-10-02)
+COMPLETE — Candidate-Source Inventory & Provenance Assessment (2026-10-02)
 
 ## Current task
-Premium Pickleball Court Vision — prepare the 120-frame reviewed real-world dataset pilot protocol. Preparation only: no collection, labeling, training or production integration.
+Premium Pickleball Court Vision — inventory eligible real Pickleball source material, establish only supported provenance and diversity facts, and assess gaps against the committed 120-frame pilot protocol. Inventory only: no final frame selection/extraction, labeling, detector evaluation, training or production integration.
+
+## Candidate-source inventory progress
+- Started from clean `main` at pilot-preparation commit `fbaf41c3496ca8e290ba229e5f5f506fb0c467a9`; read the permanent context, design audit, Phase 1 benchmark contract, pilot protocol and empty ledger.
+- Phase 1 Offline Benchmark Foundation remains COMPLETE. The 120-frame Dataset Pilot Preparation remains COMPLETE. Candidate-Source Inventory & Provenance Assessment is the CURRENT TASK.
+- The reviewed-real manifest remains at 0 frames and the pilot review ledger remains at 0 actual data rows. The 120-frame collection/review is NOT STARTED.
+- Completed scope: traced locally accessible candidate recordings and the previously observed sampled images through repository metadata and artifacts, distinguished established/derived/human-assessed/unknown facts, and reported feasibility gaps without selecting pilot frames.
+- Milestone 1: hashed 179 local sampled-frame JPEG files across 144 analysis directories and confirmed 24 unique image contents. Ten unique real images (29 copies) trace to three distinct local source-video hashes; the other 14 unique images (150 copies) are blank/tiny or synthetic validation fixtures and are ineligible.
+- Milestone 2: added a three-row source inventory and assessment. All three real sources are `questionable`: source bytes and analysis relationships are established, but dataset-use/retention authority and physical court/venue/camera/shot provenance are not. No source is currently pilot-eligible.
+- Current feasibility: three conservative source-scoped recording/camera groups, zero provenance-established physical courts, venues or physical camera identities, and zero eligible sources cannot satisfy the protocol's 20-group, approximately eight-court, approximately five-venue or 120-frame requirements. Additional provenance-cleared footage is required.
+- Final validation: inventory sums trace to 3 distinct source hashes, 3 source-scoped groups, 10 unique real sampled hashes, 29 real sampled-file copies and 19 redundant copies. The reviewed-real manifest remains at 0 frames; the pilot ledger remains at 0 data rows; Phase 1 and pilot-preparation files, production/benchmark code, configuration and deployment files are unchanged. `git diff --check` passed. No frames were selected/extracted or labeled, no detector evaluation ran, no model was trained and nothing was deployed.
 
 ## Dataset pilot preparation progress
 - Started from clean `main` at Phase 1 commit `e9f9d30c6bde69ce0f8c80ceecd040dd51875824`; reviewed the permanent context, Phase 1 contract, design audit, annotation template/manifest and relevant implementation history.
@@ -58,7 +68,7 @@ Verified court calibration safety gate and concurrency protection.
 - Stale concurrent saves are blocked by row-version checks.
 
 ## Next planned work
-After separate authorization, inventory eligible sources and populate the candidate ledger under the protocol before copying or labeling frames. Runtime integration and model training remain outside this task.
+After separate authorization, establish usage/retention provenance for retained sources and obtain the additional independent recordings, courts, venues and conditions identified by the inventory. The 120-frame collection/review remains NOT STARTED; frame selection, extraction, labeling, detector evaluation, runtime integration and model training remain outside this task.
 
 ## Do not change without explicit instruction
 - detector confidence formula or thresholds

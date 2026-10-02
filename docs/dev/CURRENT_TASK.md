@@ -1,10 +1,21 @@
 # Current Court4 Task
 
 ## Status
-COMPLETE — Phase 1 Offline Benchmark Foundation (2026-10-02)
+COMPLETE — 120-Frame Reviewed Dataset Pilot Preparation (2026-10-02)
 
 ## Current task
-Premium Pickleball Court Vision / Calibration Accuracy.
+Premium Pickleball Court Vision — prepare the 120-frame reviewed real-world dataset pilot protocol. Preparation only: no collection, labeling, training or production integration.
+
+## Dataset pilot preparation progress
+- Started from clean `main` at Phase 1 commit `e9f9d30c6bde69ce0f8c80ceecd040dd51875824`; reviewed the permanent context, Phase 1 contract, design audit, annotation template/manifest and relevant implementation history.
+- Phase 1 Offline Benchmark Foundation remains complete and unchanged. The reviewed-real manifest still contains zero frames. Actual 120-frame collection/review is NOT STARTED.
+- Current work: lock the exact sampling, orientation, independent review/adjudication, provenance/grouping, diversity, completion-gate and future baseline-evaluation protocol without changing the validated schema or evaluator.
+- Milestone 1: added `calibration/court_vision/PILOT_PROTOCOL.md` with an exact 50/40/20/10 sampling structure, group contribution caps, controlled diversity tags, decoded-image orientation convention and schematic, blind annotation/review/adjudication procedure, provenance rules, completion gates, candidate-image handling and future baseline formulas. Added a header-only review ledger template for backward-compatible disagreement/derivation records; it contains no candidate data.
+- Milestone 2: completed a standalone safety review, resolved the prior left/right ambiguity, kept all pilot records in `development` until any future split is authorized, and documented how pre-existing known failures may be declared without detector-driven sample mining. The schema, evaluator, frame template and empty manifest remain byte-unchanged from Phase 1.
+- Final validation: reviewed-real manifest = 0 frames; ledger template = 30 unique columns and 0 data rows; documentation and untracked-file whitespace checks passed; git status contains only this preparation documentation/handoff scope. No benchmark code was touched, so Python tests/static checks were not rerun.
+- Preparation is complete. Actual 120-frame collection/review remains NOT STARTED and requires separate authorization.
+
+## Phase 1 Offline Benchmark Foundation — COMPLETE
 
 Implement the offline benchmark foundation authorized by the user: annotation validation, unchanged detector replay, independent geometric metrics, outcomes, grouped machine/human reports and focused tests. No production changes or model training.
 
@@ -47,7 +58,7 @@ Verified court calibration safety gate and concurrency protection.
 - Stale concurrent saves are blocked by row-version checks.
 
 ## Next planned work
-Collect and independently review the proposed 120-frame real dataset pilot using the documented grouped provenance and annotation contract. Runtime integration and model training remain outside this task.
+After separate authorization, inventory eligible sources and populate the candidate ledger under the protocol before copying or labeling frames. Runtime integration and model training remain outside this task.
 
 ## Do not change without explicit instruction
 - detector confidence formula or thresholds

@@ -1,0 +1,500 @@
+{
+  "$defs": {
+    "FrameAnnotation": {
+      "additionalProperties": false,
+      "properties": {
+        "annotator": {
+          "minLength": 1,
+          "title": "Annotator",
+          "type": "string"
+        },
+        "camera_motion": {
+          "enum": [
+            "stationary",
+            "moving",
+            "unknown"
+          ],
+          "title": "Camera Motion",
+          "type": "string"
+        },
+        "camera_setup_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Camera Setup Id",
+          "type": "string"
+        },
+        "coordinate_space": {
+          "const": "original_decoded_pixels",
+          "title": "Coordinate Space",
+          "type": "string"
+        },
+        "court_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Court Id",
+          "type": "string"
+        },
+        "data_kind": {
+          "enum": [
+            "real",
+            "synthetic"
+          ],
+          "title": "Data Kind",
+          "type": "string"
+        },
+        "frame_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Frame Id",
+          "type": "string"
+        },
+        "frame_number": {
+          "exclusiveMinimum": 0,
+          "title": "Frame Number",
+          "type": "integer"
+        },
+        "height": {
+          "exclusiveMinimum": 0,
+          "title": "Height",
+          "type": "integer"
+        },
+        "image_path": {
+          "minLength": 1,
+          "title": "Image Path",
+          "type": "string"
+        },
+        "image_sha256": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Image Sha256",
+          "type": "string"
+        },
+        "keypoints": {
+          "additionalProperties": false,
+          "properties": {
+            "far_baseline_center": {
+              "$ref": "#/$defs/Keypoint"
+            },
+            "far_left": {
+              "$ref": "#/$defs/Keypoint"
+            },
+            "far_nvz_center": {
+              "$ref": "#/$defs/Keypoint"
+            },
+            "far_nvz_left": {
+              "$ref": "#/$defs/Keypoint"
+            },
+            "far_nvz_right": {
+              "$ref": "#/$defs/Keypoint"
+            },
+            "far_right": {
+              "$ref": "#/$defs/Keypoint"
+            },
+            "near_baseline_center": {
+              "$ref": "#/$defs/Keypoint"
+            },
+            "near_left": {
+              "$ref": "#/$defs/Keypoint"
+            },
+            "near_nvz_center": {
+              "$ref": "#/$defs/Keypoint"
+            },
+            "near_nvz_left": {
+              "$ref": "#/$defs/Keypoint"
+            },
+            "near_nvz_right": {
+              "$ref": "#/$defs/Keypoint"
+            },
+            "near_right": {
+              "$ref": "#/$defs/Keypoint"
+            }
+          },
+          "required": [
+            "near_left",
+            "near_right",
+            "far_right",
+            "far_left",
+            "near_nvz_left",
+            "near_nvz_right",
+            "far_nvz_left",
+            "far_nvz_right",
+            "near_baseline_center",
+            "near_nvz_center",
+            "far_nvz_center",
+            "far_baseline_center"
+          ],
+          "title": "Keypoints",
+          "type": "object"
+        },
+        "lines": {
+          "additionalProperties": false,
+          "properties": {
+            "far_baseline": {
+              "$ref": "#/$defs/LineAnnotation"
+            },
+            "far_center_service": {
+              "$ref": "#/$defs/LineAnnotation"
+            },
+            "far_nvz": {
+              "$ref": "#/$defs/LineAnnotation"
+            },
+            "left_sideline": {
+              "$ref": "#/$defs/LineAnnotation"
+            },
+            "near_baseline": {
+              "$ref": "#/$defs/LineAnnotation"
+            },
+            "near_center_service": {
+              "$ref": "#/$defs/LineAnnotation"
+            },
+            "near_nvz": {
+              "$ref": "#/$defs/LineAnnotation"
+            },
+            "right_sideline": {
+              "$ref": "#/$defs/LineAnnotation"
+            }
+          },
+          "required": [
+            "near_baseline",
+            "far_baseline",
+            "left_sideline",
+            "right_sideline",
+            "near_nvz",
+            "far_nvz",
+            "near_center_service",
+            "far_center_service"
+          ],
+          "title": "Lines",
+          "type": "object"
+        },
+        "orientation": {
+          "enum": [
+            "camera_relative_near_left",
+            "unresolved"
+          ],
+          "title": "Orientation",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Reasons",
+          "type": "array"
+        },
+        "recording_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Recording Id",
+          "type": "string"
+        },
+        "review_status": {
+          "enum": [
+            "draft",
+            "reviewed"
+          ],
+          "title": "Review Status",
+          "type": "string"
+        },
+        "reviewer": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reviewer"
+        },
+        "shot_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Shot Id",
+          "type": "string"
+        },
+        "source_reference": {
+          "minLength": 1,
+          "title": "Source Reference",
+          "type": "string"
+        },
+        "source_video_sha256": {
+          "anyOf": [
+            {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Video Sha256"
+        },
+        "split": {
+          "enum": [
+            "development",
+            "train",
+            "validation",
+            "test"
+          ],
+          "title": "Split",
+          "type": "string"
+        },
+        "suitability": {
+          "enum": [
+            "full_geometry_supported",
+            "partial_or_ambiguous",
+            "no_target_court"
+          ],
+          "title": "Suitability",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "timestamp_seconds": {
+          "minimum": 0,
+          "title": "Timestamp Seconds",
+          "type": "number"
+        },
+        "usage_provenance": {
+          "minLength": 1,
+          "title": "Usage Provenance",
+          "type": "string"
+        },
+        "venue_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+$",
+          "title": "Venue Id",
+          "type": "string"
+        },
+        "width": {
+          "exclusiveMinimum": 0,
+          "title": "Width",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "frame_id",
+        "image_path",
+        "image_sha256",
+        "source_reference",
+        "usage_provenance",
+        "recording_id",
+        "venue_id",
+        "court_id",
+        "camera_setup_id",
+        "shot_id",
+        "split",
+        "data_kind",
+        "frame_number",
+        "timestamp_seconds",
+        "width",
+        "height",
+        "coordinate_space",
+        "orientation",
+        "camera_motion",
+        "suitability",
+        "reasons",
+        "tags",
+        "annotator",
+        "review_status",
+        "keypoints",
+        "lines"
+      ],
+      "title": "FrameAnnotation",
+      "type": "object"
+    },
+    "Keypoint": {
+      "additionalProperties": false,
+      "properties": {
+        "uncertainty_px": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Uncertainty Px"
+        },
+        "visibility": {
+          "enum": [
+            "visible",
+            "occluded_localizable",
+            "outside_frame",
+            "unknown"
+          ],
+          "title": "Visibility",
+          "type": "string"
+        },
+        "xy": {
+          "anyOf": [
+            {
+              "maxItems": 2,
+              "minItems": 2,
+              "prefixItems": [
+                {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                {
+                  "minimum": 0,
+                  "type": "number"
+                }
+              ],
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Xy"
+        }
+      },
+      "required": [
+        "visibility"
+      ],
+      "title": "Keypoint",
+      "type": "object"
+    },
+    "LineAnnotation": {
+      "additionalProperties": false,
+      "properties": {
+        "paint_width_px": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Paint Width Px"
+        },
+        "reference": {
+          "enum": [
+            "outside_perimeter",
+            "away_from_net",
+            "stripe_center"
+          ],
+          "title": "Reference",
+          "type": "string"
+        },
+        "uncertainty_px": {
+          "minimum": 0,
+          "title": "Uncertainty Px",
+          "type": "number"
+        },
+        "unobserved_reason": {
+          "enum": [
+            "none",
+            "occluded",
+            "outside_frame",
+            "unknown",
+            "mixed"
+          ],
+          "title": "Unobserved Reason",
+          "type": "string"
+        },
+        "visible_runs": {
+          "items": {
+            "$ref": "#/$defs/LineRun"
+          },
+          "title": "Visible Runs",
+          "type": "array"
+        }
+      },
+      "required": [
+        "reference",
+        "visible_runs",
+        "uncertainty_px",
+        "unobserved_reason"
+      ],
+      "title": "LineAnnotation",
+      "type": "object"
+    },
+    "LineRun": {
+      "additionalProperties": false,
+      "description": "One uninterrupted visible reference-edge/center polyline, in original pixels.",
+      "properties": {
+        "points": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "minimum": 0,
+                "type": "number"
+              },
+              {
+                "minimum": 0,
+                "type": "number"
+              }
+            ],
+            "type": "array"
+          },
+          "minItems": 2,
+          "title": "Points",
+          "type": "array"
+        }
+      },
+      "required": [
+        "points"
+      ],
+      "title": "LineRun",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "annotation_convention": {
+      "const": "outside-perimeter-nvz-away-service-center-v1",
+      "title": "Annotation Convention",
+      "type": "string"
+    },
+    "dataset_id": {
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.-]+$",
+      "title": "Dataset Id",
+      "type": "string"
+    },
+    "frames": {
+      "items": {
+        "$ref": "#/$defs/FrameAnnotation"
+      },
+      "title": "Frames",
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "court-vision-annotations-v1",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "template_version": {
+      "const": "pickleball-court-v1",
+      "title": "Template Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schema_version",
+    "template_version",
+    "annotation_convention",
+    "dataset_id",
+    "frames"
+  ],
+  "title": "BenchmarkManifest",
+  "type": "object"
+}

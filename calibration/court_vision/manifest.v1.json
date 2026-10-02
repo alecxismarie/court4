@@ -1,0 +1,7 @@
+{
+  "schema_version": "court-vision-annotations-v1",
+  "template_version": "pickleball-court-v1",
+  "annotation_convention": "outside-perimeter-nvz-away-service-center-v1",
+  "dataset_id": "pickleball-pilot-pending-labels",
+  "frames": []
+}

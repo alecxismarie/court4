@@ -2,6 +2,7 @@ import hashlib
 import json
 import math
 import time
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,8 +31,12 @@ from app.schemas.player_tracking import BoundingBox, PlayerObservation, PlayerTr
 from app.schemas.video import VideoMetadataReport
 from app.services.detection.interfaces import ImageArray
 from app.services.recording_quality import assess_analysis_readiness, assess_upload_preflight
+from app.services.tracking.continuity import (
+    is_observed_court_position,
+    supports_observed_interval,
+)
 
-CANDIDATE_SCHEMA_VERSION = 3
+CANDIDATE_SCHEMA_VERSION = 4
 CANDIDATE_FILENAME = "player_candidates.json"
 CANDIDATE_PREVIEW_DIR = "player_candidates"
 
@@ -154,7 +159,14 @@ def build_player_candidates(
                 )
 
     candidates.sort(key=_candidate_rank_key)
-    selected_candidate_id = _preserved_selection(candidates, previous if preserve_review else None)
+    selected_candidate_id = _preserved_selection(
+        candidates,
+        previous
+        if preserve_review
+        and previous is not None
+        and previous.schema_version == CANDIDATE_SCHEMA_VERSION
+        else None,
+    )
     if selected_candidate_id is None and previous is None:
         legacy_track_id = tracking_report.selected_player_track_id
         legacy_match = next(
@@ -226,12 +238,14 @@ def build_player_candidates(
         updated_at=now,
     )
     _write_collection(collection, tracking_dir / CANDIDATE_FILENAME)
-    if (
-        tracking_report.selected_player_candidate_id is not None
-        and selected_candidate_id is None
-        and (tracking_dir / "tracking.json").is_file()
-    ):
-        _clear_tracking_selection(tracking_dir / "tracking.json")
+    if (tracking_dir / "tracking.json").is_file():
+        if selected_candidate_id is None:
+            _clear_tracking_selection(tracking_dir / "tracking.json")
+        else:
+            _write_candidate_selection_to_tracking(
+                next(item for item in active if item.candidate_id == selected_candidate_id),
+                tracking_dir / "tracking.json",
+            )
     return collection
 
 
@@ -261,7 +275,23 @@ def associate_fragments(fragments: dict[int, _Fragment]) -> list[_CandidateGroup
             )
             edges.append((score, evidence))
 
+    predecessors: dict[int, set[int]] = defaultdict(set)
+    successors: dict[int, set[int]] = defaultdict(set)
+    for _, evidence in edges:
+        predecessors[evidence.to_track_id].add(evidence.from_track_id)
+        successors[evidence.from_track_id].add(evidence.to_track_id)
+
     for _score, evidence in sorted(edges, key=lambda item: item[0]):
+        # A plausible edge is not unique evidence of continuity when simultaneous
+        # people can supply either endpoint. Do not resolve identity by rank/ID.
+        if any(
+            not _groups_compatible({other}, {evidence.from_track_id}, fragments)
+            for other in predecessors[evidence.to_track_id] - {evidence.from_track_id}
+        ) or any(
+            not _groups_compatible({other}, {evidence.to_track_id}, fragments)
+            for other in successors[evidence.from_track_id] - {evidence.to_track_id}
+        ):
+            continue
         first_root = root_by_track[evidence.from_track_id]
         second_root = root_by_track[evidence.to_track_id]
         if first_root == second_root:
@@ -309,6 +339,14 @@ def load_player_candidates(candidate_path: Path) -> PlayerCandidateCollection:
         raise CandidatePersistenceError("Player candidate state could not be loaded.") from exc
 
 
+def require_current_candidate_evidence(collection: PlayerCandidateCollection) -> None:
+    if collection.schema_version != CANDIDATE_SCHEMA_VERSION:
+        raise CandidateError(
+            "Regenerate player candidates from the original observations and select your player "
+            "again. Saved legacy durations have not been validated for missing intervals."
+        )
+
+
 def select_player_candidate(
     *,
     candidate_path: Path,
@@ -316,6 +354,7 @@ def select_player_candidate(
     tracking_report_path: Path,
 ) -> PlayerCandidateCollection:
     collection = load_player_candidates(candidate_path)
+    require_current_candidate_evidence(collection)
     candidate = _find_active_candidate(collection, candidate_id)
     if not candidate.selection_eligible or candidate.quality == CandidateQuality.rejected:
         raise CandidateNotFoundError("Ineligible candidate cannot be selected.")
@@ -335,6 +374,7 @@ def select_player_candidate(
         update={
             "candidates": active,
             "selected_candidate_id": candidate_id,
+            "analysis_readiness": None,
             "updated_at": datetime.now(tz=UTC),
         }
     )
@@ -351,6 +391,7 @@ def reject_player_candidate(
     tracking_report_path: Path,
 ) -> PlayerCandidateCollection:
     collection = load_player_candidates(candidate_path)
+    require_current_candidate_evidence(collection)
     candidate = _find_active_candidate(collection, candidate_id)
     rejected = candidate.model_copy(
         update={
@@ -370,6 +411,7 @@ def reject_player_candidate(
             ],
             "excluded_candidates": [*collection.excluded_candidates, rejected],
             "selected_candidate_id": selected_id,
+            "analysis_readiness": None,
             "updated_at": datetime.now(tz=UTC),
         }
     )
@@ -385,6 +427,7 @@ def restore_player_candidate(
     candidate_id: str,
 ) -> PlayerCandidateCollection:
     collection = load_player_candidates(candidate_path)
+    require_current_candidate_evidence(collection)
     candidate = next(
         (item for item in collection.excluded_candidates if item.candidate_id == candidate_id),
         None,
@@ -405,6 +448,7 @@ def restore_player_candidate(
             "excluded_candidates": [
                 item for item in collection.excluded_candidates if item.candidate_id != candidate_id
             ],
+            "analysis_readiness": None,
             "updated_at": datetime.now(tz=UTC),
         }
     )
@@ -424,6 +468,7 @@ def merge_player_candidates(
     if len(candidate_ids) != 2 or len(set(candidate_ids)) != 2:
         raise CandidateImpossibleMergeError("Exactly two distinct candidates are required.")
     collection = load_player_candidates(candidate_path)
+    require_current_candidate_evidence(collection)
     first = _find_active_candidate(collection, candidate_ids[0])
     second = _find_active_candidate(collection, candidate_ids[1])
     observations = _load_observations(observations_path)
@@ -471,6 +516,7 @@ def merge_player_candidates(
                 merged.candidate_id if was_selected else collection.selected_candidate_id
             ),
             "manual_merge_decisions": [*collection.manual_merge_decisions, decision],
+            "analysis_readiness": None,
             "updated_at": now,
         }
     )
@@ -490,6 +536,7 @@ def unmerge_player_candidates(
     metadata_path: Path,
 ) -> PlayerCandidateCollection:
     collection = load_player_candidates(candidate_path)
+    require_current_candidate_evidence(collection)
     decision = next(
         (
             item
@@ -514,6 +561,7 @@ def unmerge_player_candidates(
             "selected_candidate_id": None
             if collection.selected_candidate_id == candidate_id
             else collection.selected_candidate_id,
+            "analysis_readiness": None,
             "updated_at": now,
         }
     )
@@ -613,6 +661,12 @@ def _association_evidence(
     first: _Fragment,
     second: _Fragment,
 ) -> AutomaticMergeEvidence | None:
+    # Endpoint positions must belong to the endpoint times, not the last/first
+    # in-court sample somewhere inside a track that has since left the court.
+    if not is_observed_court_position(first.observations[-1]) or not is_observed_court_position(
+        second.observations[0]
+    ):
+        return None
     if second.first_timestamp <= first.last_timestamp:
         return None
     gap = second.first_timestamp - first.last_timestamp
@@ -685,7 +739,7 @@ def _groups_compatible(
             overlap = min(first.last_timestamp, second.last_timestamp) - max(
                 first.first_timestamp, second.first_timestamp
             )
-            if overlap > THRESHOLDS.substantial_overlap_seconds:
+            if overlap >= THRESHOLDS.substantial_overlap_seconds:
                 return False
             if _opposite_sides(first.court_side, second.court_side):
                 return False
@@ -721,8 +775,10 @@ def _build_candidate(
             ):
                 by_frame[item.frame_index] = item
         observations = sorted(by_frame.values(), key=lambda item: item.frame_index)
-    unique_frames = {(item.frame_index, item.track_id) for item in observations}
-    in_court_count = sum(item.inside_court for item in observations)
+    unique_frames = {
+        (item.frame_index, item.track_id) for item in observations if not item.interpolated
+    }
+    in_court_count = sum(is_observed_court_position(item) for item in observations)
     in_court_ratio = in_court_count / len(observations) if observations else 0.0
     average_width = sum(item.bounding_box.width for item in observations) / len(observations)
     average_height = sum(item.bounding_box.height for item in observations) / len(observations)
@@ -733,8 +789,9 @@ def _build_candidate(
         else 0.0
     )
     observed_duration = sum(
-        max(0.0, fragments[track_id].last_timestamp - fragments[track_id].first_timestamp)
-        for track_id in group.track_ids
+        current.timestamp_seconds - previous.timestamp_seconds
+        for previous, current in zip(observations, observations[1:], strict=False)
+        if supports_observed_interval(previous, current)
     )
     court_distance = _candidate_court_distance(group.track_ids, fragments)
     movement_rate = court_distance / observed_duration if observed_duration > 0 else 0.0
@@ -749,7 +806,7 @@ def _build_candidate(
     previews = (
         _write_candidate_previews(
             candidate_id=candidate_id,
-            observations=observations,
+            observations=[item for item in observations if is_observed_court_position(item)],
             source_video_path=source_video_path,
             tracking_dir=tracking_dir,
         )
@@ -1055,8 +1112,7 @@ def _candidate_court_distance(
     for track_id in track_ids:
         observations = fragments[track_id].observations
         for previous, current in zip(observations, observations[1:], strict=False):
-            gap = current.timestamp_seconds - previous.timestamp_seconds
-            if gap <= 0 or gap > 1.0 or not previous.inside_court or not current.inside_court:
+            if not supports_observed_interval(previous, current):
                 continue
             step = math.dist(previous.court_position, current.court_position)
             if step <= 15.0:

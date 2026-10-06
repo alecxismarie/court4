@@ -7,6 +7,7 @@ import { Court4ApiError } from "@/lib/api/client";
 import {
   detectCourt,
   generateAnalytics,
+  generatePlayerCandidates,
   getAnalysis,
   getAnalysisFrames,
   getPlayerCandidates,
@@ -45,6 +46,7 @@ vi.mock("@/lib/api/analyses", () => ({
   detectCourt: vi.fn(),
   confirmCalibration: vi.fn(),
   generateAnalytics: vi.fn(),
+  generatePlayerCandidates: vi.fn(),
   getAnalysis: vi.fn(),
   getAnalysisFrames: vi.fn(),
   getPlayerCandidates: vi.fn(),
@@ -70,6 +72,7 @@ const mockedUnmergePlayerCandidate = vi.mocked(unmergePlayerCandidate);
 
 describe("match details workflow", () => {
   beforeEach(() => {
+    vi.mocked(generatePlayerCandidates).mockReset();
     pushMock.mockClear();
     mockedDetectCourt.mockReset();
     mockedGenerateAnalytics.mockReset();
@@ -413,6 +416,9 @@ describe("match details workflow", () => {
     );
     mockedSelectPlayerCandidate.mockResolvedValue(saved);
     const { queryClient } = renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+    queryClient.setQueryData(["analysis", "analysis-123", "analytics"], { stale: true });
+    queryClient.setQueryData(["analysis-history"], { stale: true });
+    queryClient.setQueryData(["play-history"], { stale: true });
     await user.click(await screen.findByRole("button", { name: /this is me/i }));
 
     expect(await screen.findByText("You selected Player 1")).toBeInTheDocument();
@@ -420,6 +426,9 @@ describe("match details workflow", () => {
     expect(mockedGetPlayerCandidates).toHaveBeenCalledTimes(1);
     expect(mockedGetAnalysisFrames).toHaveBeenCalledTimes(1);
     expect(queryClient.getQueryData(["analysis", "analysis-123", "player-candidates"])).toEqual(saved);
+    expect(queryClient.getQueryData(["analysis", "analysis-123", "analytics"])).toBeUndefined();
+    expect(queryClient.getQueryState(["analysis-history"])?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(["play-history"])?.isInvalidated).toBe(true);
 
     await act(async () => {
       await queryClient.invalidateQueries({
@@ -595,6 +604,44 @@ describe("match details workflow", () => {
         "pc-player-two",
       ),
     );
+  });
+
+  it.each([1, 2, 3])("requires regeneration for legacy v%s evidence", async (schema_version) => {
+    const user = userEvent.setup();
+    mockedGetAnalysis.mockResolvedValue(makePlayerSelectedJob());
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+    mockedGetPlayerCandidates.mockResolvedValue(makePlayerCandidateCollection({ schema_version }));
+    vi.mocked(generatePlayerCandidates).mockRejectedValue(new Error("Source unavailable"));
+    renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+    expect(await screen.findByText("Player evidence needs regeneration")).toBeInTheDocument();
+    expect(screen.getByText(/historical durations may include/)).toBeInTheDocument();
+    expect(screen.queryByText("Review views across this track")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Missing intervals are excluded/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "This is me" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Regenerate player evidence" }));
+    expect(generatePlayerCandidates).toHaveBeenCalledWith("analysis-123");
+    expect(mockedSelectPlayerCandidate).not.toHaveBeenCalled();
+  });
+
+  it("opens timestamped evidence views without changing the selected candidate", async () => {
+    const user = userEvent.setup();
+    mockedGetAnalysis.mockResolvedValue(makePlayerSelectedJob());
+    mockedGetAnalysisFrames.mockResolvedValue({ analysis_id: "analysis-123", frames: [] });
+    mockedGetPlayerCandidates.mockResolvedValue(
+      makePlayerCandidateCollection({
+        candidates: [makePlayerCandidate({ source_raw_track_ids: [1, 7] })],
+        selected_candidate_id: "pc-player-one",
+      }),
+    );
+    renderWithQueryClient(<MatchDetails analysisId="analysis-123" />);
+    const review = await screen.findByText("Review views across this track");
+    expect(screen.queryByAltText("Player 1 observation at 0.0 seconds")).not.toBeInTheDocument();
+    await user.click(review);
+    expect(await screen.findByAltText("Player 1 observation at 0.0 seconds")).toBeInTheDocument();
+    expect(screen.getByAltText("Player 1 observation at 5.0 seconds")).toBeInTheDocument();
+    expect(screen.getByText(/combines 2 tracked sections/)).toBeInTheDocument();
+    expect(screen.getByText(/Missing intervals are excluded from observed time/)).toBeInTheDocument();
+    expect(mockedSelectPlayerCandidate).not.toHaveBeenCalled();
   });
 
   it("shows at most four eligible player choices and hides automatic exclusions", async () => {

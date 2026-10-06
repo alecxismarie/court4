@@ -203,8 +203,18 @@ class HistoryProjectionService:
 
     def _project_analysis(self, analysis_id: str) -> AnalysisHistoryItem:
         job = self.repository.load_job_metadata(analysis_id)
-        analytics = self._load_analytics(analysis_id) if job.calibration_verified else None
-        match_iq = self._load_match_iq(analysis_id) if job.calibration_verified else None
+        if not self.repository.candidate_evidence_is_current(analysis_id):
+            job = job.model_copy(
+                update={
+                    "analytics_completed": False,
+                    "player_selected": False,
+                    "analysis_readiness": None,
+                    "status": AnalysisStatus.processing,
+                }
+            )
+        authoritative = job.calibration_verified and job.analytics_completed
+        analytics = self._load_analytics(analysis_id) if authoritative else None
+        match_iq = self._load_match_iq(analysis_id) if authoritative else None
         evaluated_at = max(
             [
                 job.updated_at,

@@ -53,7 +53,7 @@ from app.schemas.jobs import (
 )
 from app.schemas.match_iq import MatchIQReport
 from app.schemas.player_candidates import PlayerCandidateCollection
-from app.schemas.player_tracking import PlayerTrackingReport
+from app.schemas.player_tracking import PlayerObservation, PlayerTrackingReport
 from app.services.active_play import (
     ActivePlayError,
     ActivePlayNotReadyError,
@@ -80,6 +80,7 @@ from app.services.candidates import (
     select_player_candidate,
     unmerge_player_candidates,
 )
+from app.services.candidates.service import require_current_candidate_evidence
 from app.services.court_detection import RecognitionFramesUnavailableError, detect_pickleball_court
 from app.services.jobs.exceptions import (
     JobConflictError,
@@ -448,10 +449,19 @@ class AnalysisWorkflowService:
             self._cleanup_staging_dir(analysis_id)
 
     def get_job(self, analysis_id: str) -> AnalysisJobResponse:
+        job = self.repository.load_job_metadata(analysis_id)
+        if not self.repository.candidate_evidence_is_current(analysis_id):
+            job = job.model_copy(
+                update={
+                    "player_selected": False,
+                    "analytics_completed": False,
+                    "analysis_readiness": None,
+                    "status": AnalysisStatus.processing,
+                    "current_stage": AnalysisStage.tracked,
+                }
+            )
         return AnalysisJobResponse.model_validate(
-            self.repository.refresh_artifacts(
-                self.repository.load_job_metadata(analysis_id)
-            ).model_dump(mode="json")
+            self.repository.refresh_artifacts(job).model_dump(mode="json")
         )
 
     def list_sampled_frames(self, analysis_id: str) -> SampledFramesResponse:
@@ -556,6 +566,7 @@ class AnalysisWorkflowService:
             tracking_completed=False,
             player_selected=False,
             analytics_completed=False,
+            selected_evidence_signature=None,
             analysis_readiness=None,
             manual_calibration_required=False,
         )
@@ -790,7 +801,10 @@ class AnalysisWorkflowService:
         # resolve_artifact retains owner, lifecycle, size, and checksum validation.
         path = self.repository.resolve_artifact(analysis_id, "tracking/player_candidates.json")
         try:
-            return load_player_candidates(path)
+            collection = load_player_candidates(path)
+            if collection.schema_version != CANDIDATE_SCHEMA_VERSION:
+                return collection.model_copy(update={"analysis_readiness": None})
+            return collection
         except CandidateError as exc:
             raise JobRequestError(
                 "candidate_persistence_failure", "Saved player candidates could not be loaded."
@@ -807,7 +821,9 @@ class AnalysisWorkflowService:
             tracking=self._load_tracking(tracking_path),
             preserve_review=True,
         )
-        collection, _ = self._refresh_analysis_readiness(job, collection)
+        collection, updated = self._refresh_analysis_readiness(job, collection)
+        if updated is job:
+            self.repository.save_job(updated)
         return collection
 
     @media_operation(require_calibration=True, exclusive=True)
@@ -835,14 +851,7 @@ class AnalysisWorkflowService:
             raise JobRequestError(
                 "candidate_selection_failed", "Player candidate selection failed."
             ) from exc
-        updated = self.repository.update_job(
-            job,
-            status=AnalysisStatus.processing,
-            current_stage=AnalysisStage.player_selected,
-            error=None,
-            player_selected=True,
-        )
-        collection, _ = self._refresh_analysis_readiness(updated, collection)
+        collection, _ = self._refresh_analysis_readiness(job, collection)
         return collection
 
     @media_operation(require_calibration=True, exclusive=True)
@@ -872,16 +881,7 @@ class AnalysisWorkflowService:
             raise JobRequestError(
                 "candidate_rejection_failed", "Player candidate could not be excluded."
             ) from exc
-        updated_job = job
-        if collection.selected_candidate_id is None and job.player_selected:
-            updated_job = self.repository.update_job(
-                job,
-                status=AnalysisStatus.processing,
-                current_stage=AnalysisStage.tracked,
-                player_selected=False,
-                analytics_completed=False,
-            )
-        collection, _ = self._refresh_analysis_readiness(updated_job, collection)
+        collection, _ = self._refresh_analysis_readiness(job, collection)
         return collection
 
     @media_operation(require_calibration=True, exclusive=True)
@@ -961,16 +961,7 @@ class AnalysisWorkflowService:
             raise JobRequestError(
                 "candidate_unmerge_failed", "Manual candidate merge could not be undone."
             ) from exc
-        updated_job = job
-        if collection.selected_candidate_id is None and job.player_selected:
-            updated_job = self.repository.update_job(
-                job,
-                status=AnalysisStatus.processing,
-                current_stage=AnalysisStage.tracked,
-                player_selected=False,
-                analytics_completed=False,
-            )
-        collection, refreshed_job = self._refresh_analysis_readiness(updated_job, collection)
+        collection, refreshed_job = self._refresh_analysis_readiness(job, collection)
         if refreshed_job is job:
             self.repository.save_job(refreshed_job)
         return collection
@@ -1008,13 +999,10 @@ class AnalysisWorkflowService:
         tracking_path = self.repository.analysis_dir(analysis_id) / "tracking" / "tracking.json"
         self._refresh_player_selection_metrics(tracking_path, self._load_tracking(tracking_path))
         try:
-            tracking = select_player_track(
-                tracking_report_path=tracking_path, track_id=request.track_id
-            )
             candidates = self._ensure_player_candidates(
                 analysis_id,
                 job=job,
-                tracking=tracking,
+                tracking=self._load_tracking(tracking_path),
                 preserve_review=True,
             )
             candidate = next(
@@ -1025,25 +1013,21 @@ class AnalysisWorkflowService:
                 ),
                 None,
             )
-            if candidate is not None:
-                select_player_candidate(
-                    candidate_path=tracking_path.parent / "player_candidates.json",
-                    candidate_id=candidate.candidate_id,
-                    tracking_report_path=tracking_path,
+            if candidate is None or not candidate.selection_eligible:
+                raise JobRequestError(
+                    "player_selection_failed",
+                    "This raw track has no eligible current player candidate.",
                 )
-                tracking = self._load_tracking(tracking_path)
+            tracking = select_player_track(
+                tracking_report_path=tracking_path, track_id=request.track_id
+            )
+            candidates = load_player_candidates(tracking_path.parent / "player_candidates.json")
         except TrackingError as exc:
             raise JobRequestError("player_selection_failed", "Player selection failed.") from exc
         except CandidateError as exc:
             raise JobRequestError("player_selection_failed", "Player selection failed.") from exc
 
-        updated = self.repository.update_job(
-            job,
-            status=AnalysisStatus.processing,
-            current_stage=AnalysisStage.player_selected,
-            error=None,
-            player_selected=True,
-        )
+        candidates, updated = self._refresh_analysis_readiness(job, candidates)
         selection_artifact = self._optional_artifact(
             analysis_id,
             tracking_path.parent / tracking.artifacts.player_selection_image,
@@ -1061,6 +1045,18 @@ class AnalysisWorkflowService:
     def generate_analytics(self, analysis_id: str) -> AnalyticsGenerationResponse:
         job = self.repository.load_job(analysis_id)
         self._require_supported_interpretation(job, "movement analytics and Match IQ")
+        self._require(
+            job.player_selected, "player_selection_required", "Player selection is required."
+        )
+        collection = self._ensure_player_candidates(
+            analysis_id,
+            job=job,
+            tracking=self._load_tracking(
+                self.repository.analysis_dir(analysis_id) / "tracking" / "tracking.json"
+            ),
+            preserve_review=True,
+        )
+        collection, job = self._refresh_analysis_readiness(job, collection)
         self._require(
             job.player_selected, "player_selection_required", "Player selection is required."
         )
@@ -1365,13 +1361,22 @@ class AnalysisWorkflowService:
         if candidate_path.is_file():
             try:
                 collection = load_player_candidates(candidate_path)
-                if collection.schema_version == CANDIDATE_SCHEMA_VERSION:
-                    return collection
+                self._require(
+                    collection.schema_version == CANDIDATE_SCHEMA_VERSION,
+                    "candidate_regeneration_required",
+                    "Regenerate legacy player candidates and select your player again.",
+                )
+                return collection
             except CandidateError as exc:
                 raise JobRequestError(
                     "candidate_persistence_failure",
                     "Saved player candidates could not be loaded.",
                 ) from exc
+        self._require(
+            not job.player_selected and not job.analytics_completed,
+            "candidate_regeneration_required",
+            "Regenerate missing player candidate evidence before changing selection or results.",
+        )
         return self._build_player_candidates(
             analysis_id,
             job=job,
@@ -1532,6 +1537,65 @@ class AnalysisWorkflowService:
         job: AnalysisJob,
         collection: PlayerCandidateCollection,
     ) -> tuple[PlayerCandidateCollection, AnalysisJob]:
+        require_current_candidate_evidence(collection)
+        selected = next(
+            (
+                item
+                for item in collection.candidates
+                if item.candidate_id == collection.selected_candidate_id and item.selection_eligible
+            ),
+            None,
+        )
+        tracking_dir = self.repository.analysis_dir(job.analysis_id) / "tracking"
+        tracking = self._load_tracking(tracking_dir / "tracking.json")
+        self._require(
+            (
+                selected is None
+                and tracking.selected_player_track_id is None
+                and tracking.selected_player_candidate_id is None
+                and not tracking.selected_player_source_track_ids
+            )
+            or (
+                selected is not None
+                and tracking.selected_player_candidate_id == selected.candidate_id
+                and tracking.selected_player_source_track_ids == selected.source_raw_track_ids
+                and tracking.selected_player_track_id == selected.source_raw_track_ids[0]
+            ),
+            "player_selection_changed",
+            "Player evidence changed. Select a current player candidate again.",
+        )
+        signature = None
+        if selected is not None:
+            digest = hashlib.sha256()
+            digest.update(
+                json.dumps(
+                    {
+                        "schema_version": collection.schema_version,
+                        "candidate": selected.model_dump(
+                            mode="json",
+                            exclude={
+                                "review_status",
+                                "representative_frame",
+                                "representative_crop_artifact",
+                                "representative_full_frame_artifact",
+                                "preview_frames",
+                            },
+                        ),
+                    },
+                    sort_keys=True,
+                ).encode()
+            )
+            # Include actual selected observations, not just summary totals or tracker IDs.
+            with (tracking_dir / tracking.artifacts.observations_jsonl).open(
+                encoding="utf-8"
+            ) as rows:
+                for row in rows:
+                    if not row.strip():
+                        continue
+                    observation = PlayerObservation.model_validate_json(row)
+                    if observation.track_id in selected.source_raw_track_ids:
+                        digest.update(observation.model_dump_json().encode())
+            signature = digest.hexdigest()
         readiness = assess_analysis_readiness(
             upload_preflight=job.upload_preflight,
             calibration_completed=job.calibration_completed,
@@ -1548,7 +1612,33 @@ class AnalysisWorkflowService:
                 else None
             ),
         )
-        if collection.analysis_readiness == readiness and job.analysis_readiness == readiness:
+        if signature is not None:
+            signature = hashlib.sha256(
+                (
+                    signature
+                    + json.dumps(
+                        readiness.model_dump(mode="json", exclude={"assessed_at"}),
+                        sort_keys=True,
+                    )
+                ).encode()
+            ).hexdigest()
+        lineage_changed = (
+            signature != job.selected_evidence_signature
+            or job.player_selected != (selected is not None)
+            or (job.analytics_completed and signature is None)
+        )
+        if lineage_changed:
+            # Same retirement mechanism as recalibration: remove only workspace derivatives;
+            # persist_job atomically retires their durable registrations with the state change.
+            for folder in ("analytics", "active_play"):
+                old = self.repository.analysis_dir(job.analysis_id) / folder
+                if old.exists():
+                    shutil.rmtree(old)
+        if (
+            not lineage_changed
+            and collection.analysis_readiness == readiness
+            and job.analysis_readiness == readiness
+        ):
             return collection, job
         updated_collection = collection.model_copy(update={"analysis_readiness": readiness})
         candidate_path = (
@@ -1558,7 +1648,17 @@ class AnalysisWorkflowService:
             json.dumps(updated_collection.model_dump(mode="json"), indent=2) + "\n",
             encoding="utf-8",
         )
-        updated_job = self.repository.update_job(job, analysis_readiness=readiness)
+        updates: dict[str, object] = {"analysis_readiness": readiness}
+        if lineage_changed:
+            updates.update(
+                selected_evidence_signature=signature,
+                player_selected=selected is not None,
+                analytics_completed=False,
+                status=AnalysisStatus.processing,
+                current_stage=AnalysisStage.player_selected if selected else AnalysisStage.tracked,
+                error=None,
+            )
+        updated_job = self.repository.update_job(job, **updates)
         return updated_collection, updated_job
 
 

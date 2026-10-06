@@ -388,10 +388,36 @@ class AnalysisJobRepository:
         with self.media_operation(analysis_id, wait=True):
             return self._resolve_artifact(analysis_id, artifact_path)
 
+    def candidate_evidence_is_current(self, analysis_id: str) -> bool:
+        from app.services.candidates.service import (
+            CANDIDATE_SCHEMA_VERSION,
+            CandidateError,
+            load_player_candidates,
+        )
+
+        try:
+            self.persistence.service.get_artifact(
+                owner_user_id=self.owner_user_id,
+                analysis_id=analysis_id,
+                logical_key="tracking/player_candidates.json",
+            )
+        except (ResourceNotFoundError, OwnershipMismatchError):
+            # Historical raw-only workflows have no candidate-schema claims.
+            return True
+        try:
+            path = self.resolve_artifact(analysis_id, "tracking/player_candidates.json")
+            return load_player_candidates(path).schema_version == CANDIDATE_SCHEMA_VERSION
+        except (CandidateError, JobNotFoundError):
+            return False
+
     def _resolve_artifact(self, analysis_id: str, artifact_path: str) -> Path:
         analysis_dir = self.analysis_dir(analysis_id)
         relative_path = validate_relative_artifact_path(artifact_path)
         job = self.load_job_metadata(analysis_id)
+        if relative_path.startswith(("analytics/", "active_play/")) and not (
+            self.candidate_evidence_is_current(analysis_id)
+        ):
+            raise JobNotFoundError("Regenerate legacy candidate evidence before using results.")
         if relative_path == job.source_video or is_playback_media(relative_path):
             self.require_retained_source(analysis_id)
         try:

@@ -711,6 +711,13 @@ export function getPlayerCandidates(analysisId: string): Promise<PlayerCandidate
   );
 }
 
+export function generatePlayerCandidates(analysisId: string): Promise<PlayerCandidateCollection> {
+  return postJson(
+    `/api/v1/analyses/${encodeURIComponent(analysisId)}/player-candidates/generate`,
+    playerCandidateCollectionSchema,
+  );
+}
+
 export function selectPlayerCandidate(
   analysisId: string,
   candidateId: string,

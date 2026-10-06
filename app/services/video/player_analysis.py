@@ -23,6 +23,10 @@ from app.schemas.player_tracking import (
     TrackSummary,
 )
 from app.services.detection.interfaces import ImageArray, PersonDetectionBackend
+from app.services.tracking.continuity import (
+    is_observed_court_position,
+    supports_observed_interval,
+)
 from app.services.tracking.exceptions import (
     CalibrationReportNotFoundError,
     CalibrationReportReadError,
@@ -89,21 +93,27 @@ class _TrackSelectionMetrics:
     court_observation_count: int = 0
     extended_court_observation_count: int = 0
     court_distance_feet: float = 0.0
-    last_court_position: tuple[float, float] | None = None
+    last_observation: PlayerObservation | None = None
+    observed_duration_seconds: float = 0.0
 
     def update(self, observation: PlayerObservation) -> None:
         self.observation_count += 1
         self.confidence_sum += observation.confidence
-        if observation.inside_court:
+        if is_observed_court_position(observation):
             self.court_observation_count += 1
-            if self.last_court_position is not None:
+            if self.last_observation is not None and supports_observed_interval(
+                self.last_observation, observation
+            ):
+                self.observed_duration_seconds += (
+                    observation.timestamp_seconds - self.last_observation.timestamp_seconds
+                )
                 step_distance = _point_distance_feet(
-                    self.last_court_position,
+                    self.last_observation.court_position,
                     observation.court_position,
                 )
                 if step_distance <= MAX_COURT_MOVEMENT_STEP_FEET:
                     self.court_distance_feet += step_distance
-            self.last_court_position = observation.court_position
+        self.last_observation = observation
         if observation.inside_extended_court:
             self.extended_court_observation_count += 1
 
@@ -138,7 +148,8 @@ class _TrackAccumulator:
     court_observation_count: int = 0
     extended_court_observation_count: int = 0
     court_distance_feet: float = 0.0
-    last_court_position: tuple[float, float] | None = None
+    last_observation: PlayerObservation | None = None
+    observed_duration_seconds: float = 0.0
     representative_crop: _RepresentativeCrop | None = None
     rejection_reasons: list[str] = field(default_factory=list)
 
@@ -147,22 +158,27 @@ class _TrackAccumulator:
         self.last_timestamp_seconds = observation.timestamp_seconds
         self.observation_count += 1
         self.confidence_sum += observation.confidence
-        if observation.inside_court:
+        if is_observed_court_position(observation):
             self.court_observation_count += 1
-            if self.last_court_position is not None:
+            if self.last_observation is not None and supports_observed_interval(
+                self.last_observation, observation
+            ):
+                self.observed_duration_seconds += (
+                    observation.timestamp_seconds - self.last_observation.timestamp_seconds
+                )
                 step_distance = _point_distance_feet(
-                    self.last_court_position,
+                    self.last_observation.court_position,
                     observation.court_position,
                 )
                 if step_distance <= MAX_COURT_MOVEMENT_STEP_FEET:
                     self.court_distance_feet += step_distance
-            self.last_court_position = observation.court_position
+        self.last_observation = observation
         if observation.inside_extended_court:
             self.extended_court_observation_count += 1
         self._update_representative_crop(observation, frame)
 
     def to_summary(self, eligibility: EligibilityConfig) -> TrackSummary:
-        duration_seconds = max(0.0, self.last_timestamp_seconds - self.first_timestamp_seconds)
+        duration_seconds = self.observed_duration_seconds
         average_confidence = (
             self.confidence_sum / self.observation_count if self.observation_count else 0.0
         )
@@ -742,13 +758,13 @@ def refresh_player_selection_metrics(
             continue
 
         court_movement_rate = (
-            metrics.court_distance_feet / summary.duration_seconds
-            if summary.duration_seconds > 0
+            metrics.court_distance_feet / metrics.observed_duration_seconds
+            if metrics.observed_duration_seconds > 0
             else 0.0
         )
         rejection_reasons = _eligibility_rejection_reasons(
             observation_count=summary.observation_count,
-            duration_seconds=summary.duration_seconds,
+            duration_seconds=metrics.observed_duration_seconds,
             inside_court_ratio=metrics.inside_court_ratio,
             inside_extended_ratio=metrics.inside_extended_ratio,
             court_movement_rate_feet_per_second=court_movement_rate,
@@ -759,6 +775,7 @@ def refresh_player_selection_metrics(
         updated_summaries.append(
             summary.model_copy(
                 update={
+                    "duration_seconds": metrics.observed_duration_seconds,
                     "average_confidence": metrics.average_confidence,
                     "court_distance_feet": metrics.court_distance_feet,
                     "court_movement_rate_feet_per_second": court_movement_rate,

@@ -1056,6 +1056,32 @@ class PersistenceService:
                     )
                     .values(is_current=False, updated_at=now)
                 )
+            if payload.get("selected_evidence_signature") != analysis.job_payload.get(
+                "selected_evidence_signature"
+            ) or (
+                analysis.job_payload.get("analytics_completed")
+                and not payload.get("analytics_completed")
+            ):
+                session.execute(
+                    update(AnalysisArtifact)
+                    .where(
+                        AnalysisArtifact.analysis_id == analysis_id,
+                        AnalysisArtifact.is_current.is_(True),
+                        AnalysisArtifact.logical_key.startswith("analytics/")
+                        | AnalysisArtifact.logical_key.startswith("active_play/"),
+                    )
+                    .values(is_current=False, updated_at=now)
+                )
+                # Never re-register files from the invalidated workspace snapshot.
+                artifacts = [
+                    item
+                    for item in artifacts
+                    if not (
+                        (item.logical_key or item.storage_key).startswith(
+                            ("analytics/", "active_play/")
+                        )
+                    )
+                ]
             previous_state = analysis.state
             new_state = str(payload["status"])
             run: AnalysisRun | None = self._active_or_latest_run(session, analysis.id)

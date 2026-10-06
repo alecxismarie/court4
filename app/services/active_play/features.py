@@ -20,6 +20,10 @@ from app.schemas.player_candidates import (
 )
 from app.schemas.player_tracking import PlayerObservation, PlayerTrackingReport
 from app.services.active_play.policy import ACTIVE_PLAY_POLICY, ActivePlayPolicy
+from app.services.tracking.continuity import (
+    is_observed_court_position,
+    supports_observed_interval,
+)
 from app.sports.pickleball.geometry import REGULATION_COURT
 
 
@@ -29,6 +33,7 @@ class SmoothedTrackPoint:
     track_id: int
     x: float
     y: float
+    segment_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -39,6 +44,7 @@ class VelocitySample:
     speed_feet_per_second: float
     velocity_x: float
     velocity_y: float
+    segment_id: int = 0
 
 
 @dataclass(frozen=True)
@@ -58,25 +64,27 @@ def smooth_track_positions(
 ) -> tuple[SmoothedTrackPoint, ...]:
     """Smooth court positions without crossing raw-track or observation-gap boundaries."""
 
-    valid = sorted(
-        (item for item in observations if item.inside_court),
+    ordered = sorted(
+        observations,
         key=lambda item: (item.track_id, item.timestamp_seconds, item.frame_index),
     )
     segments: list[list[PlayerObservation]] = []
-    for observation in valid:
-        if (
-            not segments
-            or observation.track_id != segments[-1][-1].track_id
-            or observation.timestamp_seconds - segments[-1][-1].timestamp_seconds
-            > policy.maximum_observed_gap_seconds
+    previous: PlayerObservation | None = None
+    for observation in ordered:
+        if not is_observed_court_position(observation):
+            previous = None
+            continue
+        if previous is None or not supports_observed_interval(
+            previous, observation, max_gap_seconds=policy.maximum_observed_gap_seconds
         ):
             segments.append([observation])
         else:
             segments[-1].append(observation)
+        previous = observation
 
     half_window = policy.smoothing_seconds / 2.0
     smoothed: list[SmoothedTrackPoint] = []
-    for segment in segments:
+    for segment_id, segment in enumerate(segments):
         for center in segment:
             neighbors = [
                 item
@@ -89,6 +97,7 @@ def smooth_track_positions(
                     track_id=center.track_id,
                     x=sum(item.court_position[0] for item in neighbors) / len(neighbors),
                     y=sum(item.court_position[1] for item in neighbors) / len(neighbors),
+                    segment_id=segment_id,
                 )
             )
     return tuple(sorted(smoothed, key=lambda item: (item.timestamp_seconds, item.track_id)))
@@ -103,7 +112,7 @@ def calculate_velocity_samples(
     ordered = sorted(points, key=lambda item: (item.track_id, item.timestamp_seconds))
     for previous, current in zip(ordered, ordered[1:], strict=False):
         delta = current.timestamp_seconds - previous.timestamp_seconds
-        if current.track_id != previous.track_id:
+        if current.track_id != previous.track_id or current.segment_id != previous.segment_id:
             continue
         if (
             delta < policy.minimum_velocity_delta_seconds
@@ -120,6 +129,7 @@ def calculate_velocity_samples(
                 speed_feet_per_second=math.hypot(velocity_x, velocity_y),
                 velocity_x=velocity_x,
                 velocity_y=velocity_y,
+                segment_id=current.segment_id,
             )
         )
     return tuple(sorted(samples, key=lambda item: (item.end_seconds, item.track_id)))
@@ -134,7 +144,7 @@ def calculate_speed_change_samples(
     ordered = sorted(samples, key=lambda item: (item.track_id, item.end_seconds))
     for previous, current in zip(ordered, ordered[1:], strict=False):
         delta = current.end_seconds - previous.end_seconds
-        if current.track_id != previous.track_id:
+        if current.track_id != previous.track_id or current.segment_id != previous.segment_id:
             continue
         if (
             delta < policy.minimum_velocity_delta_seconds
@@ -158,7 +168,7 @@ def calculate_direction_change_times(
     changes: list[float] = []
     ordered = sorted(samples, key=lambda item: (item.track_id, item.end_seconds))
     for previous, current in zip(ordered, ordered[1:], strict=False):
-        if current.track_id != previous.track_id:
+        if current.track_id != previous.track_id or current.segment_id != previous.segment_id:
             continue
         if (
             previous.speed_feet_per_second < policy.minimum_direction_speed_feet_per_second
@@ -454,16 +464,15 @@ def _observed_intervals(
     *,
     policy: ActivePlayPolicy,
 ) -> tuple[tuple[float, float], ...]:
-    inside = sorted(
-        (item for item in observations if item.inside_court),
+    ordered = sorted(
+        observations,
         key=lambda item: (item.timestamp_seconds, item.frame_index),
     )
     intervals: list[tuple[float, float]] = []
-    for previous, current in zip(inside, inside[1:], strict=False):
-        gap = current.timestamp_seconds - previous.timestamp_seconds
-        if previous.track_id != current.track_id:
-            continue
-        if 0 < gap <= policy.maximum_observed_gap_seconds:
+    for previous, current in zip(ordered, ordered[1:], strict=False):
+        if supports_observed_interval(
+            previous, current, max_gap_seconds=policy.maximum_observed_gap_seconds
+        ):
             intervals.append((previous.timestamp_seconds, current.timestamp_seconds))
     return _merge_numeric_intervals(intervals)
 

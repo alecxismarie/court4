@@ -53,17 +53,19 @@ from scripts.reconcile_multipart_uploads import reconcile_expired_multipart_uplo
 @pytest.mark.parametrize("corruption", ["size", "checksum"])
 def test_s3_candidate_get_is_narrow_owner_scoped_and_integrity_checked(
     tmp_path: Path,
-    synthetic_video_factory: Callable[..., Path],
+    synthetic_court_video_factory: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
     source_deleted: bool,
     corruption: str,
 ) -> None:
+    from tests.test_calibration_verification import _confirm
+
     client, service, storage, owner = _client(tmp_path)
     service.settings.storage_max_active_uploads = 1
     uploaded = _direct_round_trip(
         client,
         storage,
-        synthetic_video_factory(tmp_path / "match.avi").read_bytes(),
+        synthetic_court_video_factory(tmp_path / "match.avi").read_bytes(),
         "candidate-read",
     )
     analysis_id = uploaded["analysis_id"]
@@ -83,6 +85,9 @@ def test_s3_candidate_get_is_narrow_owner_scoped_and_integrity_checked(
         finally:
             workflow.close()
 
+    cast(FastAPI, client.app).dependency_overrides[get_workflow_service] = workflow_for_user
+    assert client.post(f"/api/v1/analyses/{analysis_id}/court-detection").status_code == 200
+    _confirm(client, analysis_id)
     repository = AnalysisJobRepository.from_settings(
         settings=service.settings,
         owner_user_id=owner,
@@ -118,13 +123,16 @@ def test_s3_candidate_get_is_narrow_owner_scoped_and_integrity_checked(
     repository.update_job(
         job,
         tracking_completed=True,
-        source_media_state="deleted" if source_deleted else "available",
     )
     repository.close()
     cast(FastAPI, client.app).dependency_overrides[get_workflow_service] = workflow_for_user
-    with get_persistence().session_factory() as session:
+    with get_persistence().session_factory.begin() as session:
         analysis = session.get(Analysis, analysis_id)
         assert analysis is not None
+        if source_deleted:
+            video = session.get(UploadedVideo, analysis.uploaded_video_id)
+            assert video is not None
+            video.state = "deleted"
         previous_payload = analysis.job_payload
         previous_updated_at = analysis.updated_at
         records = list(
@@ -185,6 +193,8 @@ def test_s3_tracking_uses_admitted_workspace_and_retries_disk_full(
     synthetic_court_video_factory: Callable[..., Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from tests.test_calibration_verification import _confirm
+
     client, service, storage, owner = _client(tmp_path)
     legacy_output = tmp_path / "data" / "output"
     service.settings.analysis_output_dir = legacy_output
@@ -213,6 +223,7 @@ def test_s3_tracking_uses_admitted_workspace_and_retries_disk_full(
 
     cast(FastAPI, client.app).dependency_overrides[get_workflow_service] = workflow_for_user
     assert client.post(f"/api/v1/analyses/{analysis_id}/court-detection").status_code == 200
+    _confirm(client, analysis_id)
     detections = tmp_path / "detections.jsonl"
     detections.write_text("", encoding="utf-8")
     monkeypatch.setattr(
@@ -617,10 +628,14 @@ def test_initiate_is_idempotent_and_rejects_metadata_reuse(tmp_path: Path) -> No
 
 @pytest.fixture
 def upload_logs(
-    caplog: pytest.LogCaptureFixture, request: pytest.FixtureRequest
+    caplog: pytest.LogCaptureFixture,
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> pytest.LogCaptureFixture:
-    # create_app resets root logging handlers; attach capture to the timing logger.
+    # Alembic fileConfig can disable existing application loggers. create_app also
+    # resets root handlers, so isolate both global-state effects for this capture.
     logger = logging.getLogger("app.services.upload_observability")
+    monkeypatch.setattr(logger, "disabled", False)
     caplog.set_level("INFO", logger=logger.name)
     logger.addHandler(caplog.handler)
     request.addfinalizer(lambda: logger.removeHandler(caplog.handler))

@@ -2,6 +2,7 @@ import json
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import cv2
 import pytest
@@ -24,6 +25,7 @@ from app.services.analytics import (
     generate_match_analytics,
 )
 from app.services.analytics.movement import calculate_distance_metrics
+from app.services.analytics.trajectory import base_court_canvas, court_to_pixel
 from app.services.analytics.zones import calculate_zone_occupancy, classify_court_zone
 from app.sports.pickleball.calibration import calibrate_court
 from app.sports.pickleball.geometry import Point2D
@@ -146,9 +148,57 @@ def test_candidate_analytics_combines_fragments_without_cross_fragment_jump(
     assert result.report.distance.total_distance_feet == pytest.approx(2)
     assert result.report.observed_duration_seconds == pytest.approx(2)
     assert result.report.unobserved_gap_seconds == pytest.approx(1)
+    assert [p.starts_new_segment for p in result.timeline.positions] == [True, False, True, False]
+    # The trajectory must not draw the same cross-fragment jump rejected by distance.
+    canvas = base_court_canvas(image_width_pixels=500)
+    x, y = court_to_pixel((10.5, 20.5), canvas)
+    trajectory = cv2.imread(str(result.trajectory_path))
+    assert trajectory is not None
+    assert (trajectory[y, x] == canvas[y, x]).all()
     assert result.report.continuity_warnings == [
         "movement_combines_multiple_track_fragments",
         "unobserved_gaps_not_interpolated",
+    ]
+
+
+@pytest.mark.parametrize("unsupported", ["outside", "interpolated", "excluded"])
+def test_synthetic_unsupported_interval_is_not_movement_evidence(
+    tmp_path: Path,
+    synthetic_court_image_factory: Callable[..., Path],
+    unsupported: str,
+) -> None:
+    observations = _selected_observations(
+        [
+            (0.0, 5.0, 5.0),
+            (0.2, 6.0, 5.0),
+            (0.4, 15.0, 5.0),
+            (0.6, 7.0, 5.0),
+            (0.8, 8.0, 5.0),
+        ]
+    )
+    changes: dict[str, dict[str, Any]] = {
+        "outside": {"inside_court": False, "court_position": (30.0, 5.0)},
+        "interpolated": {"interpolated": True},
+        "excluded": {"excluded_from_player_tracks": True},
+    }
+    observations[2] = observations[2].model_copy(update=changes[unsupported])
+    _create_analytics_case(tmp_path, synthetic_court_image_factory, observations=observations)
+    result = generate_match_analytics(
+        analysis_id="analytics-case",
+        output_dir=tmp_path / "output",
+        transition_area_depth_feet=8,
+        image_width_pixels=500,
+    )
+    assert result.report.distance.total_distance_feet == pytest.approx(2)
+    assert result.report.observed_duration_seconds == pytest.approx(0.4)
+    assert result.report.zone_occupancy.tracked_time_seconds == pytest.approx(0.4)
+    assert result.report.unobserved_gap_seconds == pytest.approx(0.4)
+    assert result.timeline.observation_count == 4
+    assert [point.starts_new_segment for point in result.timeline.positions] == [
+        True,
+        False,
+        True,
+        False,
     ]
 
 

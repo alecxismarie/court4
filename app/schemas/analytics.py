@@ -11,6 +11,8 @@ class TimelinePosition(BaseModel):
     timestamp_seconds: float = Field(ge=0)
     x: float
     y: float
+    # Older timelines carry no continuity proof; render their points unconnected.
+    starts_new_segment: bool = True
 
 
 class TimelineReport(BaseModel):

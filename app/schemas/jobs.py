@@ -96,6 +96,7 @@ class AnalysisJob(BaseModel):
     tracking_completed: bool = False
     player_selected: bool = False
     analytics_completed: bool = False
+    selected_evidence_signature: str | None = None
     manual_calibration_required: bool = False
     court_detection_status: CourtDetectionOutcome | None = None
     court_detection_confidence: float | None = Field(default=None, ge=0, le=1)

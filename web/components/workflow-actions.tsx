@@ -20,6 +20,7 @@ import { z } from "zod";
 import {
   detectCourt,
   generateAnalytics,
+  generatePlayerCandidates,
   getPlayerCandidates,
   mergePlayerCandidates,
   rejectPlayerCandidate,
@@ -75,6 +76,13 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
   const analysisId = job.analysis_id;
   const calibrationIds = job.active_calibration_id ? [job.active_calibration_id] : getCalibrationIds(job);
   const defaultCalibrationId = calibrationIds[0] ?? "auto-court-detection";
+  const invalidateDerivedResults = async () => {
+    const queryKey = ["analysis", analysisId, "analytics"];
+    await queryClient.cancelQueries({ queryKey });
+    queryClient.removeQueries({ queryKey });
+    await queryClient.invalidateQueries({ queryKey: ["analysis-history"] });
+    await queryClient.invalidateQueries({ queryKey: ["play-history"] });
+  };
   const detectionMutation = useMutation({
     mutationFn: () => detectCourt(analysisId),
     onSuccess: async () => {
@@ -101,6 +109,7 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
   const selectionMutation = useMutation({
     mutationFn: (candidateId: string) => selectPlayerCandidate(analysisId, candidateId),
     onSuccess: async (collection) => {
+      await invalidateDerivedResults();
       // A refresh started before the save must not overwrite its confirmed result.
       await queryClient.cancelQueries({
         queryKey: ["analysis", analysisId, "player-candidates"],
@@ -116,6 +125,7 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
   const rejectionMutation = useMutation({
     mutationFn: (candidateId: string) => rejectPlayerCandidate(analysisId, candidateId),
     onSuccess: async () => {
+      await invalidateDerivedResults();
       await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId] });
       await queryClient.invalidateQueries({
         queryKey: ["analysis", analysisId, "player-candidates"],
@@ -126,6 +136,7 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
     mutationFn: (candidateIds: [string, string]) =>
       mergePlayerCandidates(analysisId, candidateIds),
     onSuccess: async (collection) => {
+      await invalidateDerivedResults();
       await queryClient.cancelQueries({
         queryKey: ["analysis", analysisId, "player-candidates"],
         exact: true,
@@ -140,6 +151,8 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
   const restoreMutation = useMutation({
     mutationFn: (candidateId: string) => restorePlayerCandidate(analysisId, candidateId),
     onSuccess: async () => {
+      await invalidateDerivedResults();
+      await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId], exact: true });
       await queryClient.invalidateQueries({
         queryKey: ["analysis", analysisId, "player-candidates"],
       });
@@ -148,6 +161,7 @@ export function MatchWorkflow({ job }: { job: AnalysisJob }) {
   const unmergeMutation = useMutation({
     mutationFn: (candidateId: string) => unmergePlayerCandidate(analysisId, candidateId),
     onSuccess: async () => {
+      await invalidateDerivedResults();
       await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId] });
       await queryClient.invalidateQueries({
         queryKey: ["analysis", analysisId, "player-candidates"],
@@ -673,6 +687,18 @@ function PlayerSelectionPanel({
 }) {
   const [mergeSourceId, setMergeSourceId] = useState<string | null>(null);
   const [mergeTargetId, setMergeTargetId] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const regeneration = useMutation({
+    mutationFn: () => generatePlayerCandidates(analysisId),
+    onSuccess: async (updated) => {
+      await queryClient.cancelQueries({ queryKey: ["analysis", analysisId] });
+      queryClient.removeQueries({ queryKey: ["analysis", analysisId, "analytics"] });
+      queryClient.setQueryData(["analysis", analysisId, "player-candidates"], updated);
+      await queryClient.invalidateQueries({ queryKey: ["analysis", analysisId] });
+      await queryClient.invalidateQueries({ queryKey: ["analysis-history"] });
+      await queryClient.invalidateQueries({ queryKey: ["play-history"] });
+    },
+  });
   if (isLoading) {
     return <Skeleton className="mt-5 h-64" />;
   }
@@ -703,6 +729,22 @@ function PlayerSelectionPanel({
       onRetry={onRetry}
     />
   ) : null;
+
+  if (collection && collection.schema_version !== 4) {
+    return (
+      <div className="mt-5 rounded-md border border-amber-200 bg-amber-50 p-4">
+        <p className="font-semibold text-court-ink">Player evidence needs regeneration</p>
+        <p className="mt-1 text-sm text-court-muted">
+          These saved candidates use legacy evidence. Their historical durations may include
+          missing intervals. Regenerate candidates from the original recording and observations,
+          then select your player again before using measurements.
+        </p>
+        <Button className="mt-3" disabled={regeneration.isPending}
+          onClick={() => regeneration.mutate()}>Regenerate player evidence</Button>
+        {regeneration.error ? <WorkflowError error={regeneration.error} /> : null}
+      </div>
+    );
+  }
 
   const candidates = (collection?.candidates ?? [])
     .filter((candidate) => candidate.selection_eligible)
@@ -867,6 +909,11 @@ function PlayerSelectionPanel({
                 Tracked for {formatTrackedDuration(candidate.total_observed_duration)} across{" "}
                 {candidate.total_observed_frames} observations.
               </p>
+              <CandidateEvidenceViews
+                analysisId={analysisId}
+                candidate={candidate}
+                label={label}
+              />
               {candidate.court_side_estimate === "NEAR" ||
               candidate.court_side_estimate === "FAR" ? (
                 <p className="mt-1 text-sm text-court-muted">
@@ -1115,6 +1162,58 @@ function CandidateQualityBadge({ quality }: { quality: PlayerCandidate["quality"
     <span className="rounded-md bg-court-panel px-2 py-1 text-xs font-semibold text-court-ink">
       {label}
     </span>
+  );
+}
+
+function CandidateEvidenceViews({
+  analysisId,
+  candidate,
+  label,
+}: {
+  analysisId: string;
+  candidate: PlayerCandidate;
+  label: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const previews = candidate.preview_frames.filter(
+    (preview) => preview.full_frame_artifact || preview.crop_artifact,
+  );
+  if (!previews.length) return null;
+
+  return (
+    <details
+      className="mt-3 text-sm text-court-muted"
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary className="cursor-pointer py-2 font-medium text-court-ink">
+        Review views across this track
+      </summary>
+      {open ? (
+        <div className="space-y-3">
+          <p>
+            Check that the highlighted person is you in each view. These are sample
+            observations; they do not confirm identity throughout the recording.
+            {candidate.source_raw_track_ids.length > 1
+              ? ` This candidate combines ${candidate.source_raw_track_ids.length} tracked sections.`
+              : ""}
+            {" "}Missing intervals are excluded from observed time.
+          </p>
+          {previews.map((preview) => (
+            <figure key={preview.frame_index}>
+              <AuthenticatedImage
+                src={getArtifactUrl(
+                  analysisId,
+                  (preview.full_frame_artifact || preview.crop_artifact)!,
+                )}
+                alt={`${label} observation at ${preview.timestamp_seconds.toFixed(1)} seconds`}
+                className="max-h-80 w-full rounded-md border border-court-line object-contain"
+              />
+              <figcaption>{preview.timestamp_seconds.toFixed(1)} seconds</figcaption>
+            </figure>
+          ))}
+        </div>
+      ) : null}
+    </details>
   );
 }
 

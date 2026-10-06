@@ -28,9 +28,38 @@ def select_player_track(*, tracking_report_path: Path, track_id: int) -> PlayerT
             f"Track ID {track_id} is not eligible for selection: {reasons}."
         )
 
+    candidate_path = tracking_report_path.parent / "player_candidates.json"
+    if candidate_path.is_file():
+        from app.services.candidates.service import (
+            load_player_candidates,
+            require_current_candidate_evidence,
+            select_player_candidate,
+        )
+
+        collection = load_player_candidates(candidate_path)
+        require_current_candidate_evidence(collection)
+        candidate = next(
+            (
+                item
+                for item in collection.candidates
+                if track_id in item.source_raw_track_ids and item.selection_eligible
+            ),
+            None,
+        )
+        if candidate is None:
+            raise IneligibleTrackSelectionError("No eligible candidate contains this raw track.")
+        select_player_candidate(
+            candidate_path=candidate_path,
+            candidate_id=candidate.candidate_id,
+            tracking_report_path=tracking_report_path,
+        )
+        return load_tracking_report(tracking_report_path)
+
     updated_report = report.model_copy(
         update={
             "selected_player_track_id": track_id,
+            "selected_player_candidate_id": None,
+            "selected_player_source_track_ids": [track_id],
             "selected_player_saved_at": datetime.now(tz=UTC),
         }
     )

@@ -1,6 +1,6 @@
 import json
 import math
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TypedDict
@@ -35,6 +35,7 @@ from app.services.analytics.movement import _load_selected_observations
 from app.services.candidates.service import (
     CandidateImpossibleMergeError,
     _association_evidence,
+    _build_fragments,
     _Fragment,
     build_player_candidates,
     merge_player_candidates,
@@ -45,7 +46,11 @@ from app.services.candidates.service import (
 )
 from app.services.jobs.repository import AnalysisJobRepository
 from app.services.jobs.workflow import AnalysisWorkflowService
+from app.services.video.player_analysis import _TrackAccumulator, _TrackSelectionMetrics
+from app.sports.pickleball.calibration import calibrate_court
+from tests.test_calibration_verification import _confirm
 from tests.test_direct_uploads import _client
+from tests.test_player_tracking import VALID_IMAGE_POINTS
 
 
 class _CandidateCase(TypedDict):
@@ -152,6 +157,96 @@ def test_long_gap_fragment_association_requires_strong_appearance_match() -> Non
     )
 
     assert _association_evidence(first, second) is None
+
+
+@pytest.mark.parametrize("fork", [False, True])
+def test_synthetic_competing_fragments_abstain_from_automatic_identity(
+    tmp_path: Path,
+    fork: bool,
+) -> None:
+    """Two simultaneous people both plausibly precede one new ID after a crossing."""
+    case = _candidate_case(
+        tmp_path,
+        [
+            *_track(1, start_frame=3 if fork else 0, positions=[(10.0, 10.0), (10.2, 10.0)]),
+            *_track(2, start_frame=3 if fork else 0, positions=[(10.8, 10.0), (10.6, 10.0)]),
+            *_track(3, start_frame=0 if fork else 3, positions=[(10.4, 10.0), (10.5, 10.0)]),
+        ],
+    )
+    assert {tuple(c.source_raw_track_ids) for c in _all_candidates(_build(case))} == {
+        (1,),
+        (2,),
+        (3,),
+    }
+
+
+def test_synthetic_same_id_disappearance_does_not_inflate_candidate_readiness(
+    tmp_path: Path,
+) -> None:
+    case = _candidate_case(
+        tmp_path,
+        [
+            *_track(1, start_frame=0, positions=[(5 + i / 10, 10.0) for i in range(11)]),
+            *_track(1, start_frame=100, positions=[(8 + i / 10, 10.0) for i in range(11)]),
+        ],
+    )
+    collection = _build(case)
+    candidate = _all_candidates(collection)[0]
+    assert candidate.total_observed_duration == pytest.approx(2.0)
+    assert collection.analysis_readiness is not None
+    assert collection.analysis_readiness.analysis_signals is not None
+    assert collection.analysis_readiness.analysis_signals.unobserved_gap_seconds == pytest.approx(9)
+
+
+def test_synthetic_raw_summary_and_refresh_exclude_dropout_movement() -> None:
+    observations = [
+        *_track(1, start_frame=0, positions=[(5.0, 10.0), (6.0, 10.0)]),
+        *_track(1, start_frame=100, positions=[(10.0, 10.0), (11.0, 10.0)]),
+    ]
+    accumulator = _TrackAccumulator(1, 0, 0, 0.0, 0.0)
+    metrics = _TrackSelectionMetrics()
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    for observation in observations:
+        accumulator.update(observation, frame)
+        metrics.update(observation)
+    assert accumulator.observed_duration_seconds == pytest.approx(0.2)
+    assert metrics.observed_duration_seconds == pytest.approx(0.2)
+    assert accumulator.court_distance_feet == metrics.court_distance_feet == 2.0
+
+
+def test_synthetic_outside_endpoint_cannot_borrow_earlier_court_position() -> None:
+    fragments = _build_fragments(
+        [
+            *_track(1, start_frame=0, positions=[(5.0, 10.0), (30.0, 10.0)]),
+            *_track(2, start_frame=2, positions=[(5.1, 10.0), (5.2, 10.0)]),
+        ]
+    )
+    assert _association_evidence(fragments[1], fragments[2]) is None
+
+
+def test_regeneration_clears_selection_when_candidate_loses_observed_evidence(
+    tmp_path: Path,
+) -> None:
+    observations = _track(1, start_frame=0, positions=[(5 + i / 10, 10.0) for i in range(15)])
+    case = _candidate_case(tmp_path, observations)
+    candidate = _build(case).candidates[0]
+    select_player_candidate(
+        candidate_path=case["candidate"],
+        candidate_id=candidate.candidate_id,
+        tracking_report_path=case["tracking"],
+    )
+    case["observations"].write_text(
+        "\n".join(
+            o.model_copy(update={"interpolated": True}).model_dump_json() for o in observations
+        ),
+        encoding="utf-8",
+    )
+    regenerated = _build(case)
+    assert regenerated.selected_candidate_id is None
+    saved = PlayerTrackingReport.model_validate_json(case["tracking"].read_text())
+    assert saved.selected_player_candidate_id is None
+    assert saved.selected_player_track_id is None
+    assert saved.selected_player_source_track_ids == []
 
 
 def test_candidate_quality_and_vertical_suitability_are_factual(tmp_path: Path) -> None:
@@ -367,7 +462,8 @@ def test_manual_merge_deduplicates_shared_boundary_and_preserves_lineage(tmp_pat
     candidate = merged.candidates[0]
     assert candidate.source_raw_track_ids == [1, 2]
     assert candidate.total_observed_frames == 29
-    assert candidate.total_observed_duration == pytest.approx(2.8)
+    # The deduplicated raw-ID boundary is not an observed interval, matching analytics.
+    assert candidate.total_observed_duration == pytest.approx(2.7)
     assert merged.selected_candidate_id == candidate.candidate_id
     rebuilt = _build(case)
     assert rebuilt.selected_candidate_id == candidate.candidate_id
@@ -383,7 +479,10 @@ def test_manual_merge_deduplicates_shared_boundary_and_preserves_lineage(tmp_pat
 
 @pytest.mark.parametrize("selected", [False, True])
 def test_manual_merge_survives_s3_workspace_cleanup_and_refetch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selected: bool
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    selected: bool,
+    synthetic_court_image_factory: Callable[..., Path],
 ) -> None:
     client, upload_service, storage, owner = _client(tmp_path)
     repositories: list[AnalysisJobRepository] = []
@@ -422,6 +521,17 @@ def test_manual_merge_survives_s3_workspace_cleanup_and_refetch(
             candidate_id=original.candidates[0].candidate_id,
             tracking_report_path=case["tracking"],
         )
+    calibrate_court(
+        image_path=synthetic_court_image_factory(tmp_path / "court.jpg"),
+        output_dir=repo.output_dir,
+        image_points=VALID_IMAGE_POINTS,
+        calibration_id="calibration",
+        analysis_id="candidate-test",
+        numeric_tolerance=0.000001,
+        min_polygon_area_pixels=1000,
+        transition_area_depth_feet=8,
+        top_down_width_pixels=500,
+    )
     now = datetime.now(tz=UTC)
     repo.save_job(
         AnalysisJob(
@@ -440,6 +550,11 @@ def test_manual_merge_survives_s3_workspace_cleanup_and_refetch(
     repo.close()
     assert isinstance(client.app, FastAPI)
     client.app.dependency_overrides[get_workflow_service] = workflow_for_user
+    _confirm(client, "candidate-test")
+    if selected:
+        analyzed = client.post("/api/v1/analyses/candidate-test/analytics")
+        assert analyzed.status_code == 200, analyzed.text
+        assert analyzed.json()["job"]["analytics_completed"]
     if not selected:
         # Persistence must not depend on whether readiness happens to need an update.
         monkeypatch.setattr(
@@ -464,6 +579,11 @@ def test_manual_merge_survives_s3_workspace_cleanup_and_refetch(
         assert fetched.json() == merged.json()
         assert not repositories[-1].output_dir.exists()
     if selected:
+        # A new S3 workspace must not rematerialize the pre-merge measurements.
+        assert client.get("/api/v1/analyses/candidate-test/analytics").status_code == 409
+        refreshed = client.get("/api/v1/analyses/candidate-test").json()
+        assert not refreshed["analytics_completed"]
+        assert not any(a["path"].startswith("analytics/") for a in refreshed["available_artifacts"])
         assert merged.json()["selected_candidate_id"] == candidate["candidate_id"]
         assert merged.json()["analysis_readiness"]["analysis_signals"]["fragment_count"] == 2
         with get_persistence().session_factory() as session:

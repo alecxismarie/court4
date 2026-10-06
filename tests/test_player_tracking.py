@@ -209,12 +209,21 @@ def test_player_selection_success(
     case = _create_tracking_case(tmp_path, synthetic_court_image_factory, synthetic_video_factory)
     result = _run_tracking(case)
 
+    stale = result.report.model_copy(
+        update={
+            "selected_player_candidate_id": "previous-candidate",
+            "selected_player_source_track_ids": [2, 3],
+        }
+    )
+    result.tracking_path.write_text(stale.model_dump_json(), encoding="utf-8")
     updated = select_player_track(tracking_report_path=result.tracking_path, track_id=1)
     saved = json.loads(result.tracking_path.read_text(encoding="utf-8"))
 
     assert updated.selected_player_track_id == 1
     assert saved["selected_player_track_id"] == 1
     assert saved["selected_player_saved_at"] is not None
+    assert saved["selected_player_candidate_id"] is None
+    assert saved["selected_player_source_track_ids"] == [1]
 
 
 def test_player_selection_failure_for_unknown_track(

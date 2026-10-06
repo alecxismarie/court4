@@ -22,8 +22,13 @@ def write_trajectory_image(
     image = base_court_canvas(image_width_pixels=image_width_pixels)
     if positions:
         pixel_points = [_court_to_pixel((position.x, position.y), image) for position in positions]
-        for first, second in zip(pixel_points, pixel_points[1:], strict=False):
-            cv2.line(image, first, second, (40, 90, 220), thickness=3)
+        for index, (first, second) in enumerate(
+            zip(pixel_points, pixel_points[1:], strict=False), start=1
+        ):
+            if not positions[index].starts_new_segment:
+                cv2.line(image, first, second, (40, 90, 220), thickness=3)
+        for point in pixel_points:
+            cv2.circle(image, point, 3, (40, 90, 220), thickness=-1)
         cv2.circle(image, pixel_points[0], 9, (0, 170, 0), thickness=-1)
         cv2.circle(image, pixel_points[-1], 9, (0, 0, 220), thickness=-1)
         _draw_label(image, "start", (pixel_points[0][0] + 10, pixel_points[0][1] - 8))

@@ -9,6 +9,9 @@ from app.services import upload_observability
 def test_timing_does_not_log_exception_details(
     caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Alembic fileConfig can disable existing application loggers when this test
+    # follows migration coverage in the complete suite.
+    monkeypatch.setattr(upload_observability.logger, "disabled", False)
     caplog.set_level("INFO", logger="app.services.upload_observability")
     times = iter([10.0, 12.5])
     monkeypatch.setattr(upload_observability, "perf_counter", lambda: next(times))

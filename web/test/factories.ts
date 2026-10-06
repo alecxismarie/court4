@@ -509,7 +509,7 @@ export function makePlayerCandidateCollection(
   overrides: Partial<PlayerCandidateCollection> = {},
 ): PlayerCandidateCollection {
   return {
-    schema_version: 1,
+    schema_version: 4,
     analysis_id: "analysis-123",
     candidates: [makePlayerCandidate()],
     excluded_candidates: [],

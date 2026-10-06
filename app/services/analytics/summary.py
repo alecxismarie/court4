@@ -3,6 +3,7 @@ from datetime import datetime
 
 from app.schemas.analytics import MovementSummaryReport, ZoneOccupancyReport
 from app.schemas.player_tracking import PlayerObservation, PlayerTrackingReport
+from app.services.tracking.continuity import is_observed_court_position
 
 
 def build_movement_summary(
@@ -24,7 +25,7 @@ def build_movement_summary(
     continuity_warnings: Sequence[str] = (),
 ) -> MovementSummaryReport:
     valid_court_observation_count = sum(
-        1 for observation in observations if observation.inside_court
+        1 for observation in observations if is_observed_court_position(observation)
     )
     span_duration_seconds = (
         observations[-1].timestamp_seconds - observations[0].timestamp_seconds

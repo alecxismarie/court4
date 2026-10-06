@@ -30,6 +30,10 @@ from app.services.analytics.heatmap import write_heatmap_image
 from app.services.analytics.summary import build_movement_summary
 from app.services.analytics.trajectory import write_trajectory_image
 from app.services.analytics.zones import calculate_zone_occupancy
+from app.services.tracking.continuity import (
+    is_observed_court_position,
+    supports_observed_interval,
+)
 from app.services.tracking.exceptions import TrackingError
 from app.services.video.player_analysis import load_calibration_report
 from app.services.video.player_selection import load_tracking_report
@@ -37,7 +41,6 @@ from app.services.video.player_selection import load_tracking_report
 logger = logging.getLogger(__name__)
 
 FEET_TO_METERS = 0.3048
-MAX_OBSERVED_GAP_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,37 @@ def generate_match_analytics(
     analysis_dir = output_dir.expanduser() / analysis_id
     tracking_path = analysis_dir / "tracking" / "tracking.json"
     tracking_report = _load_tracking_report_for_analytics(tracking_path)
+    candidate_path = tracking_path.parent / "player_candidates.json"
+    if candidate_path.is_file():
+        from app.services.candidates.service import (
+            CandidateError,
+            load_player_candidates,
+            require_current_candidate_evidence,
+        )
+
+        try:
+            collection = load_player_candidates(candidate_path)
+            require_current_candidate_evidence(collection)
+        except CandidateError as exc:
+            raise MissingSelectedPlayerError(str(exc)) from exc
+        candidate = next(
+            (
+                item
+                for item in collection.candidates
+                if (
+                    item.candidate_id == collection.selected_candidate_id
+                    and item.selection_eligible
+                )
+            ),
+            None,
+        )
+        if (
+            candidate is None
+            or tracking_report.selected_player_candidate_id != candidate.candidate_id
+            or tracking_report.selected_player_source_track_ids != candidate.source_raw_track_ids
+            or tracking_report.selected_player_track_id != candidate.source_raw_track_ids[0]
+        ):
+            raise MissingSelectedPlayerError("Tracking and candidate selection must agree.")
     selected_track_id = tracking_report.selected_player_track_id
     if selected_track_id is None:
         raise MissingSelectedPlayerError(
@@ -325,13 +359,9 @@ def _calculate_candidate_distance_metrics(
     *,
     observed_duration_seconds: float,
 ) -> DistanceMetrics:
-    inside = [observation for observation in observations if observation.inside_court]
     total_distance_feet = 0.0
-    for current, next_observation in zip(inside, inside[1:], strict=False):
-        gap = next_observation.timestamp_seconds - current.timestamp_seconds
-        if current.track_id != next_observation.track_id:
-            continue
-        if gap <= 0 or gap > MAX_OBSERVED_GAP_SECONDS:
+    for current, next_observation in zip(observations, observations[1:], strict=False):
+        if not supports_observed_interval(current, next_observation):
             continue
         total_distance_feet += math.hypot(
             next_observation.court_position[0] - current.court_position[0],
@@ -354,7 +384,7 @@ def _observation_durations(
     observed = 0.0
     for current, next_observation in zip(observations, observations[1:], strict=False):
         gap = next_observation.timestamp_seconds - current.timestamp_seconds
-        if current.track_id == next_observation.track_id and 0 < gap <= MAX_OBSERVED_GAP_SECONDS:
+        if supports_observed_interval(current, next_observation):
             observed += gap
     span = (
         observations[-1].timestamp_seconds - observations[0].timestamp_seconds
@@ -383,9 +413,12 @@ def _timeline_positions(observations: Sequence[PlayerObservation]) -> tuple[Time
             timestamp_seconds=observation.timestamp_seconds,
             x=observation.court_position[0],
             y=observation.court_position[1],
+            starts_new_segment=(
+                index == 0 or not supports_observed_interval(observations[index - 1], observation)
+            ),
         )
-        for observation in observations
-        if observation.inside_court
+        for index, observation in enumerate(observations)
+        if is_observed_court_position(observation)
     )
 
 

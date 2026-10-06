@@ -33,6 +33,7 @@ from app.services.active_play.engine import (
     merge_active_play_windows,
 )
 from app.services.active_play.features import (
+    _observed_intervals,
     build_motion_feature_windows,
     calculate_direction_change_times,
     calculate_speed_change_samples,
@@ -82,6 +83,25 @@ def test_long_gap_and_raw_track_change_are_not_bridged() -> None:
     assert len(velocity) == 1
     assert velocity[0].start_seconds == 0.0
     assert velocity[0].end_seconds == 0.1
+
+
+@pytest.mark.parametrize("unsupported", ["outside", "interpolated", "excluded"])
+def test_synthetic_unsupported_sample_breaks_active_play_coverage_and_velocity(
+    unsupported: str,
+) -> None:
+    observations = [_observation(1, index, index / 5, (float(index), 5.0)) for index in range(5)]
+    changes = {
+        "outside": {"inside_court": False},
+        "interpolated": {"interpolated": True},
+        "excluded": {"excluded_from_player_tracks": True},
+    }
+    observations[2] = observations[2].model_copy(update=changes[unsupported])
+    intervals = _observed_intervals(observations, policy=ACTIVE_PLAY_POLICY)
+    velocity = calculate_velocity_samples(smooth_track_positions(observations))
+    assert intervals == ((0.0, 0.2), (0.6, 0.8))
+    assert [(v.start_seconds, v.end_seconds) for v in velocity] == list(intervals)
+    assert calculate_speed_change_samples(velocity) == ()
+    assert calculate_direction_change_times(velocity) == ()
 
 
 def test_motion_windows_report_multi_player_coverage_and_simultaneous_movement() -> None:

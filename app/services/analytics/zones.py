@@ -2,6 +2,7 @@ from collections.abc import Sequence
 
 from app.schemas.analytics import ZoneOccupancyMetric, ZoneOccupancyReport
 from app.schemas.player_tracking import PlayerObservation
+from app.services.tracking.continuity import supports_observed_interval
 from app.sports.pickleball.geometry import REGULATION_COURT, Point2D
 
 ZoneName = str
@@ -41,28 +42,18 @@ def calculate_zone_occupancy(
     max_observation_gap_seconds: float = 1.0,
 ) -> ZoneOccupancyReport:
     zone_seconds = {KITCHEN: 0.0, TRANSITION_ZONE: 0.0, BASELINE_AREA: 0.0}
-    inside_observations = [
-        observation
-        for observation in observations
-        if observation.inside_court
-        and classify_court_zone(
-            observation.court_position,
-            transition_area_depth_feet=transition_area_depth_feet,
-        )
-        is not None
-    ]
-    inside_observations.sort(key=lambda item: (item.timestamp_seconds, item.frame_index))
+    ordered = sorted(observations, key=lambda item: (item.timestamp_seconds, item.frame_index))
 
     for current, next_observation in zip(
-        inside_observations,
-        inside_observations[1:],
+        ordered,
+        ordered[1:],
         strict=False,
     ):
-        if current.track_id != next_observation.track_id:
+        if not supports_observed_interval(
+            current, next_observation, max_gap_seconds=max_observation_gap_seconds
+        ):
             continue
         duration = max(0.0, next_observation.timestamp_seconds - current.timestamp_seconds)
-        if duration > max_observation_gap_seconds:
-            continue
         zone = classify_court_zone(
             current.court_position,
             transition_area_depth_feet=transition_area_depth_feet,

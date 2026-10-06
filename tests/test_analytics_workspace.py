@@ -100,6 +100,9 @@ def test_s3_analytics_workspace_registration_cleanup_and_retry(
         },
     )
     assert confirmed.status_code == 200, confirmed.text
+    candidates = client.post(f"/api/v1/analyses/{analysis_id}/player-candidates/generate")
+    assert candidates.status_code == 200, candidates.text
+    assert candidates.json()["selected_candidate_id"] is not None
     original_write = Path.write_text
 
     def disk_full(path: Path, *args: Any, **kwargs: Any) -> int:

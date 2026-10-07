@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
@@ -1203,6 +1203,52 @@ class PersistenceService:
             if artifact is None:
                 raise ArtifactNotAvailableError("Artifact was not found.")
             return artifact
+
+    def get_artifacts(
+        self,
+        *,
+        owner_user_id: UUID,
+        analysis_id: str,
+        logical_keys: Collection[str],
+    ) -> list[AnalysisArtifact]:
+        """Return only requested current registrations for one live owned analysis."""
+        keys = tuple(dict.fromkeys(logical_keys))
+        if not keys:
+            return []
+        with self._session_factory() as session:
+            self._owned_analysis(session.get(Analysis, analysis_id), owner_user_id)
+            return list(
+                session.scalars(
+                    select(AnalysisArtifact).where(
+                        AnalysisArtifact.owner_user_id == owner_user_id,
+                        AnalysisArtifact.analysis_id == analysis_id,
+                        AnalysisArtifact.logical_key.in_(keys),
+                        AnalysisArtifact.state == "available",
+                        AnalysisArtifact.is_current.is_(True),
+                    )
+                )
+            )
+
+    def find_current_calibration_artifacts(
+        self, *, owner_user_id: UUID, analysis_id: str, limit: int = 2
+    ) -> list[AnalysisArtifact]:
+        """Bound legacy calibration discovery without enumerating the artifact registry."""
+        with self._session_factory() as session:
+            self._owned_analysis(session.get(Analysis, analysis_id), owner_user_id)
+            return list(
+                session.scalars(
+                    select(AnalysisArtifact)
+                    .where(
+                        AnalysisArtifact.owner_user_id == owner_user_id,
+                        AnalysisArtifact.analysis_id == analysis_id,
+                        AnalysisArtifact.logical_key.like("calibrations/%/calibration.json"),
+                        AnalysisArtifact.state == "available",
+                        AnalysisArtifact.is_current.is_(True),
+                    )
+                    .order_by(AnalysisArtifact.logical_key)
+                    .limit(limit)
+                )
+            )
 
     def ready(self) -> bool:
         try:

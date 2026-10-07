@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from sqlalchemy import text
 
 from app.persistence.errors import (
+    ArtifactNotAvailableError,
     OptimisticConcurrencyError,
     OwnershipMismatchError,
     ResourceNotFoundError,
@@ -46,6 +47,7 @@ from app.services.jobs.exceptions import (
     JobStorageBackendError,
     JobStorageCapacityError,
 )
+from app.services.report_observability import report_artifact, report_phase, report_timed
 from app.sports import SportType
 
 ANALYSIS_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -264,6 +266,7 @@ class AnalysisJobRepository:
             self._materialize_current_artifacts(analysis_id)
             return self.refresh_artifacts(job)
 
+    @report_timed("persistence")
     def load_job_metadata(self, analysis_id: str) -> AnalysisJob:
         self.validate_analysis_id(analysis_id)
         try:
@@ -273,26 +276,29 @@ class AnalysisJobRepository:
             )
             job = AnalysisJob.model_validate(payload)
             if job.calibration_completed:
-                records = self.persistence.service.list_artifacts(
-                    owner_user_id=self.owner_user_id, analysis_id=analysis_id
-                )
-                calibrations = [
-                    record
-                    for record in records
-                    if record.logical_key.startswith("calibrations/")
-                    and record.logical_key.endswith("/calibration.json")
-                ]
                 active_id = job.active_calibration_id
-                if active_id is None and len(calibrations) == 1:
-                    active_id = calibrations[0].logical_key.split("/")[1]
-                checksum = next(
-                    (
-                        r.checksum_sha256
-                        for r in calibrations
-                        if r.logical_key == f"calibrations/{active_id}/calibration.json"
-                    ),
-                    None,
-                )
+                checksum = None
+                if active_id is not None:
+                    try:
+                        with report_phase("registry"):
+                            calibration = self.persistence.service.get_artifact(
+                                owner_user_id=self.owner_user_id,
+                                analysis_id=analysis_id,
+                                logical_key=f"calibrations/{active_id}/calibration.json",
+                            )
+                        checksum = calibration.checksum_sha256
+                    except ArtifactNotAvailableError:
+                        pass
+                else:
+                    with report_phase("registry"):
+                        calibrations = self.persistence.service.find_current_calibration_artifacts(
+                            owner_user_id=self.owner_user_id,
+                            analysis_id=analysis_id,
+                            limit=2,
+                        )
+                    if len(calibrations) == 1:
+                        active_id = calibrations[0].logical_key.split("/")[1]
+                        checksum = calibrations[0].checksum_sha256
                 job = job.model_copy(
                     update={
                         "active_calibration_id": active_id,
@@ -388,6 +394,65 @@ class AnalysisJobRepository:
         with self.media_operation(analysis_id, wait=True):
             return self._resolve_artifact(analysis_id, artifact_path)
 
+    @report_timed("evidence")
+    def resolve_report_artifacts(self, analysis_id: str) -> dict[str, Path]:
+        """Resolve the bounded current report dependency set under repository authority."""
+        from app.services.candidates.service import (
+            CANDIDATE_SCHEMA_VERSION,
+            CandidateError,
+            load_player_candidates,
+        )
+
+        keys = (
+            "tracking/player_candidates.json",
+            "analytics/analytics.json",
+            "analytics/match_iq.json",
+        )
+        with self.media_operation(analysis_id, wait=True):
+            try:
+                with report_phase("registry"):
+                    records = self.persistence.service.get_artifacts(
+                        owner_user_id=self.owner_user_id,
+                        analysis_id=analysis_id,
+                        logical_keys=keys,
+                    )
+            except (ResourceNotFoundError, OwnershipMismatchError):
+                raise JobNotFoundError() from None
+            by_key = {record.logical_key: record for record in records}
+            candidate = by_key.get(keys[0])
+            if candidate is not None:
+                try:
+                    candidate_path = self._resolve_registered_artifact(
+                        analysis_id, keys[0], candidate, verify_bytes=True
+                    )
+                    if (
+                        load_player_candidates(candidate_path).schema_version
+                        != CANDIDATE_SCHEMA_VERSION
+                    ):
+                        raise JobNotFoundError(
+                            "Regenerate legacy candidate evidence before using results."
+                        )
+                except CandidateError:
+                    raise JobNotFoundError(
+                        "Regenerate legacy candidate evidence before using results."
+                    ) from None
+            analytics = by_key.get(keys[1])
+            if analytics is None:
+                raise JobNotFoundError("Artifact was not found.")
+            resolved = {
+                keys[1]: self._resolve_registered_artifact(
+                    analysis_id, keys[1], analytics, verify_bytes=True
+                )
+            }
+            match_iq = by_key.get(keys[2])
+            if match_iq is not None:
+                with suppress(JobNotFoundError):
+                    resolved[keys[2]] = self._resolve_registered_artifact(
+                        analysis_id, keys[2], match_iq, verify_bytes=True
+                    )
+            return resolved
+
+    @report_timed("evidence")
     def candidate_evidence_is_current(self, analysis_id: str) -> bool:
         from app.services.candidates.service import (
             CANDIDATE_SCHEMA_VERSION,
@@ -396,11 +461,12 @@ class AnalysisJobRepository:
         )
 
         try:
-            self.persistence.service.get_artifact(
-                owner_user_id=self.owner_user_id,
-                analysis_id=analysis_id,
-                logical_key="tracking/player_candidates.json",
-            )
+            with report_phase("registry"):
+                self.persistence.service.get_artifact(
+                    owner_user_id=self.owner_user_id,
+                    analysis_id=analysis_id,
+                    logical_key="tracking/player_candidates.json",
+                )
         except (ResourceNotFoundError, OwnershipMismatchError):
             # Historical raw-only workflows have no candidate-schema claims.
             return True
@@ -411,7 +477,6 @@ class AnalysisJobRepository:
             return False
 
     def _resolve_artifact(self, analysis_id: str, artifact_path: str) -> Path:
-        analysis_dir = self.analysis_dir(analysis_id)
         relative_path = validate_relative_artifact_path(artifact_path)
         job = self.load_job_metadata(analysis_id)
         if relative_path.startswith(("analytics/", "active_play/")) and not (
@@ -421,36 +486,56 @@ class AnalysisJobRepository:
         if relative_path == job.source_video or is_playback_media(relative_path):
             self.require_retained_source(analysis_id)
         try:
-            record = self.persistence.service.get_artifact(
-                owner_user_id=self.owner_user_id,
-                analysis_id=analysis_id,
-                logical_key=relative_path,
-            )
+            with report_phase("registry"):
+                record = self.persistence.service.get_artifact(
+                    owner_user_id=self.owner_user_id,
+                    analysis_id=analysis_id,
+                    logical_key=relative_path,
+                )
         except (ResourceNotFoundError, OwnershipMismatchError):
             raise JobNotFoundError("Artifact was not found.") from None
+        return self._resolve_registered_artifact(analysis_id, relative_path, record)
+
+    def _resolve_registered_artifact(
+        self,
+        analysis_id: str,
+        relative_path: str,
+        record: PersistedArtifact,
+        *,
+        verify_bytes: bool = False,
+    ) -> Path:
+        analysis_dir = self.analysis_dir(analysis_id)
         if record.content_type.startswith("video/"):
             self.require_retained_source(analysis_id)
+        report_artifact(relative_path, record.size_bytes)
         resolved = self.workspace.resolve(analysis_id, relative_path)
         if not _is_relative_to(resolved, analysis_dir):
             raise JobRequestError("unsafe_artifact_path", "Artifact path is outside the analysis.")
+        if verify_bytes and resolved.is_file() and not _artifact_matches(resolved, record):
+            if record.storage_provider == "local" or not self._cleanup_workspace:
+                raise JobNotFoundError("Artifact bytes failed integrity verification.")
+            resolved.unlink()
         if not resolved.is_file() and record.storage_provider == "local":
             legacy_path = self.legacy_storage.resolve(analysis_id, record.storage_key)
             if legacy_path.is_file() and legacy_path != resolved:
-                if (
-                    legacy_path.stat().st_size != record.size_bytes
-                    or _file_sha256(legacy_path) != record.checksum_sha256
-                ):
+                if not _artifact_matches(legacy_path, record):
                     raise JobNotFoundError("Artifact bytes failed integrity verification.")
                 self._reserve_workspace([record])
                 resolved.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(legacy_path, resolved)
+                with report_phase("hydration"):
+                    shutil.copyfile(legacy_path, resolved)
+                if verify_bytes and not _artifact_matches(resolved, record):
+                    resolved.unlink(missing_ok=True)
+                    raise JobNotFoundError("Artifact bytes failed integrity verification.")
+                report_artifact(relative_path, record.size_bytes, hydrated=True)
         if not resolved.is_file() and record.storage_provider != "local":
             self._reserve_workspace([record])
             try:
-                metadata = self.object_storage.download_file(
-                    key=record.storage_key,
-                    destination=resolved,
-                )
+                with report_phase("hydration"):
+                    metadata = self.object_storage.download_file(
+                        key=record.storage_key,
+                        destination=resolved,
+                    )
             except ObjectNotFoundError:
                 raise JobNotFoundError("Artifact bytes are unavailable.") from None
             except ObjectStorageError as exc:
@@ -458,9 +543,11 @@ class AnalysisJobRepository:
             if (
                 metadata.size_bytes != record.size_bytes
                 or metadata.checksum_sha256 != record.checksum_sha256
+                or (verify_bytes and not _artifact_matches(resolved, record))
             ):
                 resolved.unlink(missing_ok=True)
                 raise JobNotFoundError("Artifact bytes failed integrity verification.")
+            report_artifact(relative_path, record.size_bytes, hydrated=True)
         if not resolved.is_file():
             raise JobNotFoundError("Artifact bytes are unavailable.")
         return resolved
@@ -691,6 +778,10 @@ def _file_sha256(path: Path) -> str:
         while chunk := handle.read(1024 * 1024):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _artifact_matches(path: Path, record: PersistedArtifact) -> bool:
+    return path.stat().st_size == record.size_bytes and _file_sha256(path) == record.checksum_sha256
 
 
 def _artifact_kind(storage_key: str) -> str:

@@ -37,6 +37,7 @@ from app.services.history import HistoryProjectionService
 from app.services.jobs import AnalysisWorkflowService
 from app.services.jobs.match_lifecycle import MatchLifecycleService
 from app.services.jobs.source_media import SourceMediaService
+from app.services.report_observability import report_read
 from app.sports import SportType
 
 router = APIRouter(prefix="/analyses", tags=["analyses"])
@@ -412,7 +413,8 @@ def get_analytics(
     analysis_id: str,
     workflow: WorkflowDependency,
 ) -> AnalyticsResponse:
-    return workflow.get_analytics(analysis_id)
+    with report_read():
+        return workflow.get_analytics(analysis_id)
 
 
 @development_router.post(

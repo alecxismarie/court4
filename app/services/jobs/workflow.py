@@ -99,6 +99,7 @@ from app.services.match_iq import (
     load_match_iq_report,
 )
 from app.services.recording_quality import assess_analysis_readiness
+from app.services.report_observability import report_phase, report_timed
 from app.services.tracking import (
     DetectorModelInvalidError,
     DetectorModelMissingError,
@@ -153,6 +154,7 @@ class AnalysisWorkflowService:
     def close(self) -> None:
         self.repository.close()
 
+    @report_timed("evidence")
     def _require_verified_calibration(self, analysis_id: str) -> AnalysisJob:
         job = self.repository.load_job_metadata(analysis_id)
         self._require_supported_interpretation(job, "court-based measurements")
@@ -1166,28 +1168,27 @@ class AnalysisWorkflowService:
                 "Saved shadow Active Play evidence could not be read.",
             ) from exc
 
-    @media_operation(require_source=False, require_calibration=True)
+    @media_operation(require_source=False)
     def get_analytics(self, analysis_id: str) -> AnalyticsResponse:
-        job = self.repository.load_job(analysis_id)
+        # A saved report needs current authority and registered JSON, not a full
+        # processing workspace. The report resolver retains candidate-schema gates,
+        # owner/lifecycle checks and storage integrity verification.
+        job = self._require_verified_calibration(analysis_id)
         self._require_supported_interpretation(job, "movement analytics and Match IQ")
         self._require(job.analytics_completed, "analytics_not_ready", "Analytics are not ready.")
         try:
-            analytics_path = self.repository.resolve_artifact(
-                analysis_id, "analytics/analytics.json"
-            )
+            artifacts = self.repository.resolve_report_artifacts(analysis_id)
+            analytics_path = artifacts["analytics/analytics.json"]
         except JobNotFoundError:
             raise JobConflictError("analytics_not_ready", "Analytics are not ready.") from None
-        try:
-            match_iq_path = self.repository.resolve_artifact(
-                analysis_id, f"analytics/{MATCH_IQ_FILENAME}"
-            )
-        except JobNotFoundError:
-            match_iq_path = analytics_path.parent / "__not_registered__"
-        return AnalyticsResponse(
-            analysis_id=analysis_id,
-            analytics=self._load_analytics(analytics_path),
-            match_iq=self._load_optional_match_iq(match_iq_path),
+        match_iq_path = artifacts.get(
+            f"analytics/{MATCH_IQ_FILENAME}", analytics_path.parent / "__not_registered__"
         )
+        with report_phase("analytics_json"):
+            analytics = self._load_analytics(analytics_path)
+        with report_phase("match_iq_json"):
+            match_iq = self._load_optional_match_iq(match_iq_path)
+        return AnalyticsResponse(analysis_id=analysis_id, analytics=analytics, match_iq=match_iq)
 
     async def _save_upload_to_staging(
         self, upload: UploadFile, analysis_id: str

@@ -452,7 +452,9 @@ class AnalysisWorkflowService:
 
     def get_job(self, analysis_id: str) -> AnalysisJobResponse:
         job = self.repository.load_job_metadata(analysis_id)
-        if not self.repository.candidate_evidence_is_current(analysis_id):
+        with self.repository.bounded_artifact_read():
+            candidate_current = self.repository.candidate_evidence_is_current(analysis_id)
+        if not candidate_current:
             job = job.model_copy(
                 update={
                     "player_selected": False,
@@ -489,7 +491,8 @@ class AnalysisWorkflowService:
         artifact_path = validate_relative_artifact_path(artifact_path)
         if artifact_path.startswith(("analytics/", "tracking/", "active_play/")):
             self._require_verified_calibration(analysis_id)
-        resolved = self.repository.resolve_artifact(analysis_id, artifact_path)
+        with self.repository.bounded_artifact_read():
+            resolved = self.repository.resolve_artifact(analysis_id, artifact_path)
         if not resolved.exists() or not resolved.is_file():
             raise JobNotFoundError("Artifact not found.")
         artifact = self.repository.artifact_from_path(analysis_id, resolved)
@@ -801,7 +804,8 @@ class AnalysisWorkflowService:
             )
         # Listing saved candidates must not download the video/previews or regenerate state.
         # resolve_artifact retains owner, lifecycle, size, and checksum validation.
-        path = self.repository.resolve_artifact(analysis_id, "tracking/player_candidates.json")
+        with self.repository.bounded_artifact_read():
+            path = self.repository.resolve_artifact(analysis_id, "tracking/player_candidates.json")
         try:
             collection = load_player_candidates(path)
             if collection.schema_version != CANDIDATE_SCHEMA_VERSION:

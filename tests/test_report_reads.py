@@ -1,7 +1,10 @@
 """Report authority and bounded hydration through real API/persistence boundaries."""
 
 import json
+import shutil
+from asyncio import CancelledError
 from collections.abc import Iterator
+from concurrent.futures import CancelledError as FutureCancelledError
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,11 +17,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.api.v1.analyses import get_workflow_service
+from app.api.v1.history import get_history_service
 from app.auth import VerifiedUser
 from app.config import get_settings
 from app.persistence.models import Analysis, AnalysisArtifact
+from app.persistence.object_storage import ObjectStorageError
 from app.persistence.service import ArtifactInput
+from app.persistence.storage import LocalStorage, StorageCapacityError
 from app.services import report_observability
+from app.services.jobs.exceptions import JobStorageCapacityError
 from app.services.jobs.repository import AnalysisJobRepository
 from app.services.jobs.workflow import AnalysisWorkflowService
 from tests import test_candidate_evidence_lineage as lineage
@@ -42,6 +49,7 @@ class ReportCase:
     downloads: list[str]
     workspaces: list[Path]
     expected: dict[str, Any]
+    settings: Any = None
     workspace_seed: dict[str, bytes] = field(default_factory=dict)
 
     def records(self) -> dict[str, AnalysisArtifact]:
@@ -87,7 +95,7 @@ def report_case(
             "storage_hard_stop_free_bytes": 1,
         }
     )
-    result = ReportCase(client, repo, storage, [], [], expected)
+    result = ReportCase(client, repo, storage, [], [], expected, settings)
     if storage is not None:
         original_download = storage.download_file
 
@@ -119,7 +127,246 @@ def report_case(
             instance.close()
 
     cast(FastAPI, client.app).dependency_overrides[get_workflow_service] = workflow
+
+    def history(user: VerifiedUser) -> Iterator[Any]:
+        instance = AnalysisJobRepository.from_settings(
+            settings=settings,
+            owner_user_id=user.id,
+            persistence=repo.persistence,
+            object_storage=storage or repo.object_storage,
+        )
+        try:
+            from app.services.history import HistoryProjectionService
+
+            yield HistoryProjectionService(repository=instance)
+        finally:
+            instance.close()
+
+    cast(FastAPI, client.app).dependency_overrides[get_history_service] = history
     return result
+
+
+@pytest.mark.parametrize("report_case", ["s3"], indirect=True)
+def test_processing_slot_does_not_block_bounded_authorized_reads(
+    report_case: ReportCase,
+) -> None:
+    case = report_case
+    storage = LocalStorage(case.settings.processing_workspace_root)
+    reservation, _ = storage.reserve_capacity(
+        requested_bytes=1_024,
+        warning_free_bytes=2,
+        hard_stop_free_bytes=1,
+        max_active_uploads=1,
+    )
+    try:
+        analyses = case.client.get("/api/v1/analyses")
+        assert analyses.status_code == 200, analyses.text
+        assert any(item["analysis_id"] == AID for item in analyses.json()["items"])
+        play = case.client.get("/api/v1/play-history")
+        assert play.status_code == 200, play.text
+        artifact = case.client.get(lineage.BASE + "/artifacts/analytics/analytics.json")
+        assert artifact.status_code == 200, artifact.text
+        with pytest.raises(StorageCapacityError) as rejected:
+            storage.reserve_capacity(
+                requested_bytes=1,
+                warning_free_bytes=2,
+                hard_stop_free_bytes=1,
+                max_active_uploads=1,
+            )
+        assert rejected.value.reason == "active_limit"
+    finally:
+        reservation.release()
+    assert storage.root not in LocalStorage._active_by_root
+    assert storage.root not in LocalStorage._active_reads_by_root
+
+
+@pytest.mark.parametrize("report_case", ["s3"], indirect=True)
+def test_read_admission_rejection_is_typed_and_releases_on_cleanup(
+    report_case: ReportCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = report_case
+    storage = LocalStorage(case.settings.processing_workspace_root)
+    held = [
+        storage.reserve_capacity(
+            requested_bytes=1,
+            warning_free_bytes=2,
+            hard_stop_free_bytes=1,
+            max_active_uploads=1,
+            admission="read",
+            max_active_reads=4,
+        )[0]
+        for _ in range(4)
+    ]
+    try:
+        response = case.client.get("/api/v1/analyses")
+        assert response.status_code == 429
+        assert response.json()["error"]["code"] == "processing_workspace_unavailable"
+        assert response.headers["retry-after"] == "5"
+    finally:
+        for reservation in held:
+            reservation.release()
+
+    repository = AnalysisJobRepository.from_settings(
+        settings=case.settings,
+        owner_user_id=case.repo.owner_user_id,
+        persistence=case.repo.persistence,
+        object_storage=case.storage,
+    )
+    reservation, _ = storage.reserve_capacity(
+        requested_bytes=100,
+        warning_free_bytes=2,
+        hard_stop_free_bytes=1,
+        max_active_uploads=1,
+    )
+    repository._workspace_reservation = reservation
+    original_cleanup = shutil.rmtree
+
+    def cleanup(path: Path) -> None:
+        assert LocalStorage._active_by_root[storage.root] == 1
+        original_cleanup(path)
+
+    monkeypatch.setattr("app.services.jobs.repository.shutil.rmtree", cleanup)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda _: repository.close(), range(2)))
+    repository.close()
+    assert storage.root not in LocalStorage._active_by_root
+    assert storage.root not in LocalStorage._reserved_by_root
+
+    failed_repository = AnalysisJobRepository.from_settings(
+        settings=case.settings,
+        owner_user_id=case.repo.owner_user_id,
+        persistence=case.repo.persistence,
+        object_storage=case.storage,
+    )
+    failed_reservation, _ = storage.reserve_capacity(
+        requested_bytes=100,
+        warning_free_bytes=2,
+        hard_stop_free_bytes=1,
+        max_active_uploads=1,
+    )
+    failed_repository._workspace_reservation = failed_reservation
+
+    def failed_cleanup(path: Path) -> None:
+        assert path == failed_repository.output_dir
+        assert LocalStorage._active_by_root[storage.root] == 1
+        raise OSError("simulated cleanup failure")
+
+    monkeypatch.setattr("app.services.jobs.repository.shutil.rmtree", failed_cleanup)
+    failed_repository.close()
+    assert failed_repository.output_dir.exists()
+    assert storage.root not in LocalStorage._active_by_root
+    assert storage.root not in LocalStorage._reserved_by_root
+    monkeypatch.setattr("app.services.jobs.repository.shutil.rmtree", original_cleanup)
+    failed_repository.close()
+    assert not failed_repository.output_dir.exists()
+    assert storage.root not in LocalStorage._active_by_root
+    assert storage.root not in LocalStorage._reserved_by_root
+
+
+@pytest.mark.parametrize("report_case", ["s3"], indirect=True)
+def test_read_artifact_limit_preserves_processing_admission_for_large_artifacts(
+    report_case: ReportCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = report_case
+    record = case.records()["analytics/analytics.json"]
+    assert AnalysisJobRepository.MAX_READ_ARTIFACT_BYTES == 16 * 1024 * 1024
+    storage = LocalStorage(case.settings.processing_workspace_root)
+    processing, _ = storage.reserve_capacity(
+        requested_bytes=1,
+        warning_free_bytes=2,
+        hard_stop_free_bytes=1,
+        max_active_uploads=1,
+    )
+    try:
+        accepted_repository = AnalysisJobRepository.from_settings(
+            settings=case.settings,
+            owner_user_id=case.repo.owner_user_id,
+            persistence=case.repo.persistence,
+            object_storage=case.storage,
+        )
+        monkeypatch.setattr(AnalysisJobRepository, "MAX_READ_ARTIFACT_BYTES", record.size_bytes)
+        assert not accepted_repository._requires_processing_admission(record)
+        with accepted_repository.bounded_artifact_read():
+            accepted_repository._reserve_workspace(
+                [record],
+                processing=accepted_repository._requires_processing_admission(record),
+            )
+        assert LocalStorage._active_reads_by_root[storage.root] == 1
+        assert LocalStorage._active_by_root[storage.root] == 1
+        accepted_repository.close()
+
+        rejected_repository = AnalysisJobRepository.from_settings(
+            settings=case.settings,
+            owner_user_id=case.repo.owner_user_id,
+            persistence=case.repo.persistence,
+            object_storage=case.storage,
+        )
+        monkeypatch.setattr(AnalysisJobRepository, "MAX_READ_ARTIFACT_BYTES", record.size_bytes - 1)
+        assert rejected_repository._requires_processing_admission(record)
+        with (
+            rejected_repository.bounded_artifact_read(),
+            pytest.raises(JobStorageCapacityError) as rejected,
+        ):
+            rejected_repository._reserve_workspace(
+                [record],
+                processing=rejected_repository._requires_processing_admission(record),
+            )
+        assert rejected.value.code == "processing_workspace_unavailable"
+        assert rejected.value.status_code == 429
+        rejected_repository.close()
+    finally:
+        processing.release()
+
+
+@pytest.mark.parametrize("report_case", ["s3"], indirect=True)
+def test_history_cumulative_read_limit_fails_safely_and_releases(
+    report_case: ReportCase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = report_case
+    records = case.records()
+    candidates = records["tracking/player_candidates.json"]
+    analytics = records["analytics/analytics.json"]
+    assert AnalysisJobRepository.MAX_READ_WORKSPACE_BYTES == 128 * 1024 * 1024
+    monkeypatch.setattr(
+        AnalysisJobRepository,
+        "MAX_READ_WORKSPACE_BYTES",
+        candidates.size_bytes + analytics.size_bytes - 1,
+    )
+
+    response = case.client.get("/api/v1/analyses")
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "read_workspace_limit"
+    root = LocalStorage(case.settings.processing_workspace_root).root
+    assert root not in LocalStorage._active_reads_by_root
+    assert root not in LocalStorage._reserved_by_root
+    assert all(not path.exists() for path in case.workspaces)
+
+
+@pytest.mark.parametrize("report_case", ["s3"], indirect=True)
+@pytest.mark.parametrize("failure", ["backend", "cancelled"])
+def test_read_hydration_failure_releases_admission_at_dependency_teardown(
+    report_case: ReportCase, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    case = report_case
+    assert case.storage is not None
+
+    def fail_download(*, key: str, destination: Path) -> Any:
+        if failure == "cancelled":
+            raise CancelledError()
+        raise ObjectStorageError("simulated download failure")
+
+    monkeypatch.setattr(case.storage, "download_file", fail_download)
+    if failure == "cancelled":
+        with pytest.raises((CancelledError, FutureCancelledError)):
+            case.client.get("/api/v1/analyses")
+    else:
+        response = case.client.get("/api/v1/analyses")
+        assert response.status_code == 503
+    root = LocalStorage(case.settings.processing_workspace_root).root
+    assert root not in LocalStorage._active_reads_by_root
+    assert root not in LocalStorage._reserved_by_root
+    assert all(not path.exists() for path in case.workspaces)
 
 
 def test_report_hydration_is_bounded_and_independent_of_visuals(

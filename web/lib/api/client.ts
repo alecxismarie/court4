@@ -28,12 +28,14 @@ export function getAccessToken(): string | null {
 export class Court4ApiError extends Error {
   readonly code: string;
   readonly status: number | null;
+  readonly retryAfterMs: number;
 
-  constructor(message: string, options: { code: string; status?: number | null }) {
+  constructor(message: string, options: { code: string; status?: number | null; retryAfterMs?: number }) {
     super(message);
     this.name = "Court4ApiError";
     this.code = options.code;
     this.status = options.status ?? null;
+    this.retryAfterMs = options.retryAfterMs ?? 0;
   }
 }
 
@@ -190,9 +192,15 @@ export function getArtifactUrl(analysisId: string, artifactPath: string): string
 }
 
 export async function apiErrorFromResponse(response: Response): Promise<Court4ApiError> {
+  const retryAfter = response.headers.get("Retry-After");
+  const retryAfterMs = retryAfter === null ? 0 : /^\d+$/.test(retryAfter.trim())
+    ? Number(retryAfter) * 1000
+    : Math.max(0, Date.parse(retryAfter) - Date.now());
+  const boundedRetryAfterMs = Number.isFinite(retryAfterMs) ? Math.min(retryAfterMs, 30_000) : 0;
   const fallback = new Court4ApiError(defaultStatusMessage(response.status), {
     code: `http_${response.status}`,
     status: response.status,
+    retryAfterMs: boundedRetryAfterMs,
   });
 
   const contentType = response.headers.get("content-type") ?? "";
@@ -209,6 +217,7 @@ export async function apiErrorFromResponse(response: Response): Promise<Court4Ap
     return new Court4ApiError(parsed.data.error.message, {
       code: parsed.data.error.code,
       status: response.status,
+      retryAfterMs: boundedRetryAfterMs,
     });
   } catch {
     return fallback;

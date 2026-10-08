@@ -5,6 +5,8 @@ import { ArrowRight, BarChart3, CircleHelp, FileText, Route } from "lucide-react
 import { ButtonLink } from "@/components/ui/button";
 import type { PlayHistoryResponse } from "@/lib/api/types";
 import { usePlayHistory } from "@/lib/use-history";
+import { useRetryAfter } from "@/lib/use-retry-after";
+import { Button } from "@/components/ui/button";
 import { formatDateTime } from "@/lib/utils";
 import { formatTrackedTime } from "@/lib/workspace-data";
 
@@ -17,6 +19,7 @@ const comparisonDisclaimer =
 
 export function PlayHistoryWorkspace() {
   const history = usePlayHistory();
+  const retryAfter = useRetryAfter(history.error);
   const data = history.data;
 
   return (
@@ -37,7 +40,7 @@ export function PlayHistoryWorkspace() {
       {history.isLoading ? (
         <Message message="Reviewing your qualified observations." />
       ) : history.isError || !data ? (
-        <Message message="Court4 could not load your Play History. Try again shortly." />
+        <section role="alert"><Message message="Court4 could not load your Play History. Try again shortly." /><Button disabled={retryAfter > 0} onClick={() => void history.refetch()}>{retryAfter > 0 ? `Retry in ${retryAfter}s` : "Retry Play History"}</Button></section>
       ) : (
         <ProgressContent data={data} />
       )}

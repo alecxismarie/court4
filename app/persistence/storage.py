@@ -4,7 +4,7 @@ import logging
 import os
 import shutil
 import socket
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath
 from tempfile import NamedTemporaryFile
 from threading import Lock
@@ -45,6 +45,9 @@ class StorageCapacitySnapshot:
     railway_volume_mount_path: str | None
     software_commit_identifier: str | None
     deployment_build_identifier: str | None
+    admission: Literal["processing", "read"] = "processing"
+    active_read_count: int = 0
+    max_active_reads: int = 4
 
     def log_context(self) -> dict[str, object]:
         return asdict(self)
@@ -74,13 +77,34 @@ class StorageCapacityStatus:
 class StorageReservation:
     storage: LocalStorage
     reserved_bytes: int
+    admission: Literal["processing", "read"] = "processing"
+    max_active_uploads: int = 1
+    max_active_reads: int = 4
     _released: bool = False
+    _lock: Lock = field(default_factory=Lock, repr=False)
 
     def release(self) -> None:
-        if self._released:
-            return
-        self.storage._release_capacity(self.reserved_bytes)
-        self._released = True
+        with self._lock:
+            if self._released:
+                return
+            self.storage._release_capacity(self.reserved_bytes, self.admission)
+            self._released = True
+
+    def extend(
+        self, requested_bytes: int, *, warning_free_bytes: int, hard_stop_free_bytes: int
+    ) -> None:
+        with self._lock:
+            if self._released:
+                raise RuntimeError("Cannot extend a released storage reservation.")
+            self.storage._extend_capacity(
+                requested_bytes,
+                warning_free_bytes=warning_free_bytes,
+                hard_stop_free_bytes=hard_stop_free_bytes,
+                max_active_uploads=self.max_active_uploads,
+                max_active_reads=self.max_active_reads,
+                admission=self.admission,
+            )
+            self.reserved_bytes += requested_bytes
 
 
 @dataclass(frozen=True)
@@ -89,6 +113,7 @@ class LocalStorage:
     _capacity_lock: ClassVar[Lock] = Lock()
     _reserved_by_root: ClassVar[dict[Path, int]] = {}
     _active_by_root: ClassVar[dict[Path, int]] = {}
+    _active_reads_by_root: ClassVar[dict[Path, int]] = {}
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "root", self.root.expanduser().resolve())
@@ -156,16 +181,26 @@ class LocalStorage:
         warning_free_bytes: int,
         hard_stop_free_bytes: int,
         max_active_uploads: int,
+        admission: Literal["processing", "read"] = "processing",
+        max_active_reads: int = 4,
         software_commit_identifier: str | None = None,
         deployment_build_identifier: str | None = None,
     ) -> tuple[StorageReservation, StorageCapacityStatus]:
         if max_active_uploads < 1:
             raise ValueError("Maximum active uploads must be positive.")
+        if max_active_reads < 1:
+            raise ValueError("Maximum active reads must be positive.")
         self.root.mkdir(parents=True, exist_ok=True)
         with self._capacity_lock:
             active = self._active_by_root.get(self.root, 0)
+            active_reads = self._active_reads_by_root.get(self.root, 0)
             reserved_bytes = self._reserved_by_root.get(self.root, 0)
-            if active >= max_active_uploads:
+            at_limit = (
+                active >= max_active_uploads
+                if admission == "processing"
+                else active_reads >= max_active_reads
+            )
+            if at_limit:
                 snapshot = self._capacity_snapshot(
                     filesystem_total_bytes=None,
                     filesystem_used_bytes=None,
@@ -180,6 +215,9 @@ class LocalStorage:
                     decision="active_limit",
                     software_commit_identifier=software_commit_identifier,
                     deployment_build_identifier=deployment_build_identifier,
+                    admission=admission,
+                    active_read_count=active_reads,
+                    max_active_reads=max_active_reads,
                 )
                 self._log_capacity_decision(snapshot)
                 raise StorageCapacityError("active_limit", snapshot=snapshot)
@@ -201,6 +239,9 @@ class LocalStorage:
                     decision="hard_stop",
                     software_commit_identifier=software_commit_identifier,
                     deployment_build_identifier=deployment_build_identifier,
+                    admission=admission,
+                    active_read_count=active_reads,
+                    max_active_reads=max_active_reads,
                 )
                 self._log_capacity_decision(snapshot)
                 raise StorageCapacityError("hard_stop", snapshot=snapshot)
@@ -224,12 +265,24 @@ class LocalStorage:
                 decision=decision,
                 software_commit_identifier=software_commit_identifier,
                 deployment_build_identifier=deployment_build_identifier,
+                admission=admission,
+                active_read_count=active_reads,
+                max_active_reads=max_active_reads,
             )
             self._reserved_by_root[self.root] = reserved_bytes + requested_bytes
-            self._active_by_root[self.root] = active + 1
+            if admission == "processing":
+                self._active_by_root[self.root] = active + 1
+            else:
+                self._active_reads_by_root[self.root] = active_reads + 1
             self._log_capacity_decision(snapshot)
         return (
-            StorageReservation(storage=self, reserved_bytes=requested_bytes),
+            StorageReservation(
+                storage=self,
+                reserved_bytes=requested_bytes,
+                admission=admission,
+                max_active_uploads=max_active_uploads,
+                max_active_reads=max_active_reads,
+            ),
             StorageCapacityStatus(
                 state=state,
                 free_bytes=free_bytes,
@@ -254,6 +307,9 @@ class LocalStorage:
         decision: CapacityDecision,
         software_commit_identifier: str | None,
         deployment_build_identifier: str | None,
+        admission: Literal["processing", "read"] = "processing",
+        active_read_count: int = 0,
+        max_active_reads: int = 4,
     ) -> StorageCapacitySnapshot:
         return StorageCapacitySnapshot(
             resolved_storage_root=str(self.root),
@@ -282,6 +338,9 @@ class LocalStorage:
             railway_volume_mount_path=os.environ.get("RAILWAY_VOLUME_MOUNT_PATH"),
             software_commit_identifier=software_commit_identifier,
             deployment_build_identifier=deployment_build_identifier,
+            admission=admission,
+            active_read_count=active_read_count,
+            max_active_reads=max_active_reads,
         )
 
     @staticmethod
@@ -289,18 +348,63 @@ class LocalStorage:
         log = logger.info if snapshot.decision == "accepted" else logger.warning
         log("storage_capacity_admission_decision", extra=snapshot.log_context())
 
-    def _release_capacity(self, reserved_bytes: int) -> None:
+    def _extend_capacity(
+        self,
+        requested_bytes: int,
+        *,
+        warning_free_bytes: int,
+        hard_stop_free_bytes: int,
+        max_active_uploads: int,
+        max_active_reads: int,
+        admission: Literal["processing", "read"],
+    ) -> None:
+        if requested_bytes < 0:
+            raise ValueError("Additional reservation cannot be negative.")
+        if requested_bytes == 0:
+            return
+        with self._capacity_lock:
+            reserved = self._reserved_by_root.get(self.root, 0)
+            free_after = shutil.disk_usage(self.root).free - reserved - requested_bytes
+            if free_after < hard_stop_free_bytes:
+                snapshot = self._capacity_snapshot(
+                    filesystem_total_bytes=None,
+                    filesystem_used_bytes=None,
+                    filesystem_free_bytes=None,
+                    existing_reserved_bytes=reserved,
+                    requested_reservation_bytes=requested_bytes,
+                    free_after_reservations=free_after,
+                    warning_free_bytes=warning_free_bytes,
+                    hard_stop_free_bytes=hard_stop_free_bytes,
+                    active_upload_count=self._active_by_root.get(self.root, 0),
+                    max_active_uploads=max_active_uploads,
+                    decision="hard_stop",
+                    software_commit_identifier=None,
+                    deployment_build_identifier=None,
+                    admission=admission,
+                    active_read_count=self._active_reads_by_root.get(self.root, 0),
+                    max_active_reads=max_active_reads,
+                )
+                self._log_capacity_decision(snapshot)
+                raise StorageCapacityError("hard_stop", snapshot=snapshot)
+            self._reserved_by_root[self.root] = reserved + requested_bytes
+
+    def _release_capacity(
+        self, reserved_bytes: int, admission: Literal["processing", "read"] = "processing"
+    ) -> None:
         with self._capacity_lock:
             remaining = max(0, self._reserved_by_root.get(self.root, 0) - reserved_bytes)
-            active = max(0, self._active_by_root.get(self.root, 0) - 1)
+            counts = (
+                self._active_by_root if admission == "processing" else self._active_reads_by_root
+            )
+            active = max(0, counts.get(self.root, 0) - 1)
             if remaining:
                 self._reserved_by_root[self.root] = remaining
             else:
                 self._reserved_by_root.pop(self.root, None)
             if active:
-                self._active_by_root[self.root] = active
+                counts[self.root] = active
             else:
-                self._active_by_root.pop(self.root, None)
+                counts.pop(self.root, None)
 
     def _inside(self, path: Path) -> Path:
         resolved = path.resolve()

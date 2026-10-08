@@ -52,7 +52,7 @@ from app.services.history.progress_policy import (
     evaluate_interpretation_eligibility,
     evaluate_trend_eligibility,
 )
-from app.services.jobs.exceptions import JobWorkflowError
+from app.services.jobs.exceptions import JobNotFoundError
 from app.services.jobs.repository import AnalysisJobRepository
 
 ANALYTICS_PATH = Path("analytics") / "analytics.json"
@@ -84,6 +84,12 @@ class HistoryProjectionService:
         self.repository = repository
 
     def analysis_history(
+        self, *, limit: int, offset: int, status: AnalysisHistoryStatus | None = None
+    ) -> AnalysisHistoryResponse:
+        with self.repository.bounded_artifact_read():
+            return self._analysis_history(limit=limit, offset=offset, status=status)
+
+    def _analysis_history(
         self, *, limit: int, offset: int, status: AnalysisHistoryStatus | None = None
     ) -> AnalysisHistoryResponse:
         # Classify/order metadata first. Only the requested page needs result
@@ -120,6 +126,10 @@ class HistoryProjectionService:
         )
 
     def play_history(self, *, recent_limit: int) -> PlayHistoryResponse:
+        with self.repository.bounded_artifact_read():
+            return self._play_history(recent_limit=recent_limit)
+
+    def _play_history(self, *, recent_limit: int) -> PlayHistoryResponse:
         contributions = self._all_items()
         included = self._unique_included(contributions)
         eligible = len(included)
@@ -261,14 +271,14 @@ class HistoryProjectionService:
     def _load_analytics(self, analysis_id: str) -> AnalyticsReport | None:
         try:
             path = self.repository.resolve_artifact(analysis_id, ANALYTICS_PATH.as_posix())
-        except JobWorkflowError:
+        except JobNotFoundError:
             return None
         return _load_model(path, AnalyticsReport)
 
     def _load_match_iq(self, analysis_id: str) -> MatchIQReport | None:
         try:
             path = self.repository.resolve_artifact(analysis_id, MATCH_IQ_PATH.as_posix())
-        except JobWorkflowError:
+        except JobNotFoundError:
             return None
         return _load_model(path, MatchIQReport)
 

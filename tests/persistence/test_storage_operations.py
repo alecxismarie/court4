@@ -334,6 +334,67 @@ def test_storage_capacity_policy_defaults_are_unchanged() -> None:
     assert Settings.model_fields["storage_max_active_uploads"].default == 1
 
 
+def test_bounded_reads_share_bytes_but_not_processing_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    storage = LocalStorage(tmp_path / "workspace")
+    monkeypatch.setattr(
+        "app.persistence.storage.shutil.disk_usage",
+        lambda _: DiskUsage(10_000, 1_000, 9_000),
+    )
+    processing, _ = storage.reserve_capacity(
+        requested_bytes=1_000,
+        warning_free_bytes=2_000,
+        hard_stop_free_bytes=1_000,
+        max_active_uploads=1,
+    )
+    reads = []
+    try:
+        for _ in range(4):
+            read, _ = storage.reserve_capacity(
+                requested_bytes=500,
+                warning_free_bytes=2_000,
+                hard_stop_free_bytes=1_000,
+                max_active_uploads=1,
+                admission="read",
+                max_active_reads=4,
+            )
+            reads.append(read)
+        assert LocalStorage._active_by_root[storage.root] == 1
+        assert LocalStorage._active_reads_by_root[storage.root] == 4
+        assert LocalStorage._reserved_by_root[storage.root] == 3_000
+        with pytest.raises(StorageCapacityError) as read_limit:
+            storage.reserve_capacity(
+                requested_bytes=1,
+                warning_free_bytes=2_000,
+                hard_stop_free_bytes=1_000,
+                max_active_uploads=1,
+                admission="read",
+                max_active_reads=4,
+            )
+        assert read_limit.value.reason == "active_limit"
+        with pytest.raises(StorageCapacityError) as hard_stop:
+            reads[0].extend(
+                6_000,
+                warning_free_bytes=2_000,
+                hard_stop_free_bytes=1_000,
+            )
+        assert hard_stop.value.reason == "hard_stop"
+        assert reads[0].reserved_bytes == 500
+        assert LocalStorage._reserved_by_root[storage.root] == 3_000
+        reads[0].extend(250, warning_free_bytes=2_000, hard_stop_free_bytes=1_000)
+        assert LocalStorage._reserved_by_root[storage.root] == 3_250
+    finally:
+        for read in reads:
+            read.release()
+            read.release()
+        processing.release()
+        processing.release()
+    assert storage.root not in LocalStorage._active_by_root
+    assert storage.root not in LocalStorage._active_reads_by_root
+    assert storage.root not in LocalStorage._reserved_by_root
+
+
 def test_reconciliation_is_read_only_and_reports_deterministic_findings(tmp_path: Path) -> None:
     runtime = get_persistence()
     root = tmp_path / "storage"

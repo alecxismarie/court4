@@ -12,6 +12,7 @@ from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
+from threading import Lock
 from time import sleep
 from uuid import UUID
 
@@ -57,6 +58,10 @@ logger = logging.getLogger(__name__)
 class AnalysisJobRepository:
     """Compatibility façade whose authority is PostgreSQL, not ``job.json``."""
 
+    MAX_READ_ARTIFACT_BYTES = 16 * 1024 * 1024
+    MAX_READ_WORKSPACE_BYTES = 128 * 1024 * 1024
+    MAX_ACTIVE_READS = 4
+
     def __init__(
         self,
         *,
@@ -85,6 +90,9 @@ class AnalysisJobRepository:
         self._workspace_hard_stop_free_bytes = workspace_hard_stop_free_bytes
         self._workspace_max_active = workspace_max_active
         self._workspace_reservation: StorageReservation | None = None
+        self._read_reservation: StorageReservation | None = None
+        self._close_lock = Lock()
+        self._read_artifacts: ContextVar[bool] = ContextVar("read_artifacts", default=False)
         self._media_locks: ContextVar[tuple[str, ...]] = ContextVar(
             "source_media_locks", default=()
         )
@@ -181,19 +189,32 @@ class AnalysisJobRepository:
         )
 
     def close(self) -> None:
-        if self._workspace_reservation is not None:
-            self._workspace_reservation.release()
-            self._workspace_reservation = None
-        if not self._cleanup_workspace or not self.output_dir.exists():
-            return
+        with self._close_lock:
+            try:
+                if self._cleanup_workspace and self.output_dir.exists():
+                    try:
+                        shutil.rmtree(self.output_dir)
+                    except OSError:
+                        logger.warning(
+                            "processing_workspace_cleanup_failed",
+                            extra={"workspace_name": self.output_dir.name},
+                            exc_info=True,
+                        )
+            finally:
+                for name in ("_read_reservation", "_workspace_reservation"):
+                    reservation = getattr(self, name)
+                    if reservation is not None:
+                        reservation.release()
+                        setattr(self, name, None)
+
+    @contextmanager
+    def bounded_artifact_read(self) -> Iterator[None]:
+        """Only registered, small non-video artifacts may use read admission."""
+        token = self._read_artifacts.set(True)
         try:
-            shutil.rmtree(self.output_dir)
-        except OSError:
-            logger.warning(
-                "processing_workspace_cleanup_failed",
-                extra={"workspace_name": self.output_dir.name},
-                exc_info=True,
-            )
+            yield
+        finally:
+            self._read_artifacts.reset(token)
 
     def create_or_replace_job(self, job: AnalysisJob) -> AnalysisJob:
         return self.save_job(job)
@@ -397,6 +418,10 @@ class AnalysisJobRepository:
     @report_timed("evidence")
     def resolve_report_artifacts(self, analysis_id: str) -> dict[str, Path]:
         """Resolve the bounded current report dependency set under repository authority."""
+        with self.bounded_artifact_read():
+            return self._resolve_report_artifacts(analysis_id)
+
+    def _resolve_report_artifacts(self, analysis_id: str) -> dict[str, Path]:
         from app.services.candidates.service import (
             CANDIDATE_SCHEMA_VERSION,
             CandidateError,
@@ -520,7 +545,10 @@ class AnalysisJobRepository:
             if legacy_path.is_file() and legacy_path != resolved:
                 if not _artifact_matches(legacy_path, record):
                     raise JobNotFoundError("Artifact bytes failed integrity verification.")
-                self._reserve_workspace([record])
+                self._reserve_workspace(
+                    [record],
+                    processing=self._requires_processing_admission(record),
+                )
                 resolved.parent.mkdir(parents=True, exist_ok=True)
                 with report_phase("hydration"):
                     shutil.copyfile(legacy_path, resolved)
@@ -529,7 +557,10 @@ class AnalysisJobRepository:
                     raise JobNotFoundError("Artifact bytes failed integrity verification.")
                 report_artifact(relative_path, record.size_bytes, hydrated=True)
         if not resolved.is_file() and record.storage_provider != "local":
-            self._reserve_workspace([record])
+            self._reserve_workspace(
+                [record],
+                processing=self._requires_processing_admission(record),
+            )
             try:
                 with report_phase("hydration"):
                     metadata = self.object_storage.download_file(
@@ -669,7 +700,7 @@ class AnalysisJobRepository:
                 and not is_playback_media(record.logical_key)
                 and not record.content_type.startswith("video/")
             ]
-        self._reserve_workspace(records)
+        self._reserve_workspace(records, processing=True)
         for record in records:
             destination = self.workspace.resolve(analysis_id, record.logical_key)
             if destination.is_file():
@@ -702,8 +733,10 @@ class AnalysisJobRepository:
                 destination.unlink(missing_ok=True)
                 raise JobNotFoundError("Artifact bytes failed integrity verification.")
 
-    def _reserve_workspace(self, records: list[PersistedArtifact]) -> None:
-        if self.object_storage.provider == "local" or self._workspace_reservation is not None:
+    def _reserve_workspace(
+        self, records: list[PersistedArtifact], *, processing: bool = False
+    ) -> None:
+        if self.object_storage.provider == "local":
             return
         if (
             self._workspace_warning_free_bytes is None
@@ -715,12 +748,34 @@ class AnalysisJobRepository:
             record.size_bytes for record in records if record.artifact_kind == "source_video"
         ]
         requested_bytes = sum(sizes) + (max(source_sizes) if source_sizes else 0)
+        use_read = (
+            self._read_artifacts.get() and not processing and self._workspace_reservation is None
+        )
+        existing = self._read_reservation if use_read else self._workspace_reservation
+        if use_read and (
+            (existing.reserved_bytes if existing is not None else 0) + requested_bytes
+            > self.MAX_READ_WORKSPACE_BYTES
+        ):
+            raise JobStorageCapacityError(
+                "read_workspace_limit",
+                "This read needs more temporary space than allowed.",
+                status_code=413,
+            )
         try:
+            if existing is not None:
+                existing.extend(
+                    requested_bytes,
+                    warning_free_bytes=self._workspace_warning_free_bytes,
+                    hard_stop_free_bytes=self._workspace_hard_stop_free_bytes,
+                )
+                return
             reservation, _status = self.storage.reserve_capacity(
                 requested_bytes=requested_bytes,
                 warning_free_bytes=self._workspace_warning_free_bytes,
                 hard_stop_free_bytes=self._workspace_hard_stop_free_bytes,
                 max_active_uploads=self._workspace_max_active,
+                admission="read" if use_read else "processing",
+                max_active_reads=self.MAX_ACTIVE_READS,
             )
         except StorageCapacityError as exc:
             status_code = 429 if exc.reason == "active_limit" else 507
@@ -729,7 +784,16 @@ class AnalysisJobRepository:
                 "Temporary processing workspace capacity is unavailable.",
                 status_code=status_code,
             ) from exc
-        self._workspace_reservation = reservation
+        if use_read:
+            self._read_reservation = reservation
+        else:
+            self._workspace_reservation = reservation
+
+    def _requires_processing_admission(self, record: PersistedArtifact) -> bool:
+        return (
+            record.content_type.startswith("video/")
+            or record.size_bytes > self.MAX_READ_ARTIFACT_BYTES
+        )
 
     def _player_selection(self, analysis_id: str) -> PlayerSelectionInput | None:
         tracking_path = self.analysis_dir(analysis_id) / "tracking" / "tracking.json"

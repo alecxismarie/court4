@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DashboardWorkspace } from "@/components/dashboard-workspace";
+import { Court4ApiError } from "@/lib/api/client";
 import { emptyPlayerProfile } from "@/lib/player-profile";
 import {
   makeAnalysisHistoryItem,
@@ -100,7 +101,26 @@ describe("dashboard workspace", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("could not be loaded");
     expect(screen.queryByText("Your first analysis starts here")).not.toBeInTheDocument();
     await userEvent.setup().click(screen.getByRole("button", { name: "Retry dashboard" }));
-    expect(retry).toHaveBeenCalledTimes(2);
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it("respects Retry-After before allowing a manual capacity retry", async () => {
+    const refetch = vi.fn();
+    const error = new Court4ApiError("Busy", {
+      code: "processing_workspace_unavailable",
+      status: 429,
+      retryAfterMs: 5_000,
+    });
+    analysisHistoryMock.mockReturnValue({
+      ...query(makeAnalysisHistoryResponse()),
+      isError: true,
+      error,
+      refetch,
+    });
+    renderWithQueryClient(<DashboardWorkspace />);
+    const retry = await screen.findByRole("button", { name: /Retry in 5s/ });
+    expect(retry).toBeDisabled();
+    expect(refetch).not.toHaveBeenCalled();
   });
 
   it("shows a personalized welcome with a saved display name", () => {

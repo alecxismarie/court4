@@ -64,7 +64,16 @@ async def _job_workflow_error_handler(
     if not isinstance(exc, JobWorkflowError):
         return _internal_error_response()
     response = ApiErrorResponse(error=ApiErrorDetail(code=exc.code, message=exc.message))
-    return JSONResponse(status_code=exc.status_code, content=response.model_dump(mode="json"))
+    headers = (
+        {"Retry-After": "5"}
+        if exc.status_code == 429 and exc.code == "processing_workspace_unavailable"
+        else None
+    )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=response.model_dump(mode="json"),
+        headers=headers,
+    )
 
 
 async def _unexpected_error_handler(request: Request, exc: Exception) -> JSONResponse:

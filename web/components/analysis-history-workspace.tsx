@@ -9,6 +9,7 @@ import type { AnalysisHistoryItem } from "@/lib/api/types";
 import { toApiUrl } from "@/lib/api/client";
 import { AuthenticatedImage } from "@/components/authenticated-image";
 import { useAnalysisHistory } from "@/lib/use-history";
+import { useRetryAfter } from "@/lib/use-retry-after";
 import { formatDateTime } from "@/lib/utils";
 
 type Filter = "ALL" | "READY" | "LIMITED" | "UNSUITABLE" | "PROCESSING";
@@ -26,6 +27,7 @@ export function AnalysisHistoryWorkspace() {
   const [offset, setOffset] = useState(0);
   const limit = 100;
   const history = useAnalysisHistory({ limit, offset, status: filter === "ALL" ? undefined : filter });
+  const retryAfter = useRetryAfter(history.error);
   const items = useMemo(
     () =>
       (history.data?.items ?? []).filter((item) => {
@@ -71,7 +73,7 @@ export function AnalysisHistoryWorkspace() {
       {history.isLoading ? (
         <HistoryMessage message="Loading your analyses." />
       ) : history.isError ? (
-        <section role="alert"><HistoryMessage message="Court4 could not load Analysis History. Try again shortly." /><Button onClick={() => void history.refetch()}>Retry history</Button></section>
+        <section role="alert"><HistoryMessage message="Court4 could not load Analysis History. Try again shortly." /><Button disabled={retryAfter > 0} onClick={() => void history.refetch()}>{retryAfter > 0 ? `Retry in ${retryAfter}s` : "Retry history"}</Button></section>
       ) : history.data?.total === 0 && filter === "ALL" ? (
         <HistoryMessage message="No analyses yet. Upload a match recording to create your first Court4 report." />
       ) : items.length === 0 ? (

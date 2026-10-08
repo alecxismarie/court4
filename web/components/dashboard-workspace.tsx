@@ -19,6 +19,7 @@ import { FirstTimeProfileModal } from "@/components/first-time-profile-modal";
 import { useOptionalAuth } from "@/lib/auth-context";
 import { useAnalysisHistory, usePlayHistory } from "@/lib/use-history";
 import { usePlayerProfile } from "@/lib/use-player-profile";
+import { useRetryAfter } from "@/lib/use-retry-after";
 import { isFirstPlayerWelcome } from "@/lib/profile-onboarding";
 import { formatDateTime } from "@/lib/utils";
 import { formatTrackedTime } from "@/lib/workspace-data";
@@ -29,6 +30,7 @@ export function DashboardWorkspace() {
   const [firstWelcome, setFirstWelcome] = useState(false);
   const analyses = useAnalysisHistory();
   const playHistory = usePlayHistory();
+  const retryAfter = useRetryAfter(analyses.error, playHistory.error);
   const displayName = profile.displayName;
   const latestCompleted = analyses.data?.items.find((item) =>
     ["READY", "LIMITED", "UNSUITABLE"].includes(item.status),
@@ -54,8 +56,10 @@ export function DashboardWorkspace() {
   if (analyses.isError || playHistory.isError) {
     return <section role="alert" className="space-y-4 rounded-md border border-court-line bg-white p-6">
       <h1 className="text-2xl font-semibold">Your dashboard could not be loaded</h1>
-      <p>Your saved matches have not been removed. Reconnect and try again.</p>
-      <Button onClick={() => { void analyses.refetch(); void playHistory.refetch(); }}>Retry dashboard</Button>
+      <p>Your match data is temporarily unavailable. Please try again shortly.</p>
+      <Button disabled={retryAfter > 0} onClick={() => { if (analyses.isError) void analyses.refetch(); if (playHistory.isError) void playHistory.refetch(); }}>
+        {retryAfter > 0 ? `Retry in ${retryAfter}s` : "Retry dashboard"}
+      </Button>
     </section>;
   }
 

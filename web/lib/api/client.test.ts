@@ -71,6 +71,15 @@ describe("API error normalization", () => {
     });
   });
 
+  it("retains a bounded Retry-After delay on typed capacity errors", async () => {
+    const response = new Response(JSON.stringify({ error: {
+      code: "processing_workspace_unavailable", message: "Busy",
+    } }), { status: 429, headers: { "content-type": "application/json", "Retry-After": "5" } });
+    await expect(apiErrorFromResponse(response)).resolves.toMatchObject({
+      code: "processing_workspace_unavailable", status: 429, retryAfterMs: 5000,
+    });
+  });
+
   it("globally signals the mandatory activation route for typed verification errors", async () => {
     const listener = vi.fn();
     window.addEventListener(EMAIL_VERIFICATION_REQUIRED_EVENT, listener);

@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Protocol, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.config.settings import Settings
 from app.persistence.errors import PersistenceConfigurationError
@@ -350,8 +350,11 @@ class S3ObjectStorage:
                 raise ObjectStorageError("Object storage returned invalid part metadata.") from exc
         raise ObjectStorageError("Object storage returned invalid part pagination.")
 
-    def __init__(self, *, client: object, bucket: str) -> None:
+    def __init__(
+        self, *, client: object, bucket: str, diagnostic_client: object | None = None
+    ) -> None:
         self._client = client
+        self._diagnostic_client = diagnostic_client
         self._bucket = bucket
 
     @classmethod
@@ -386,18 +389,97 @@ class S3ObjectStorage:
             raise PersistenceConfigurationError(
                 "The S3 storage dependency is unavailable."
             ) from exc
-        client = boto3.client(
-            "s3",
+        client_options = dict(
             endpoint_url=endpoint,
             region_name=region,
             aws_access_key_id=access_key.get_secret_value(),
             aws_secret_access_key=secret_key.get_secret_value(),
+        )
+        client = boto3.client(
+            "s3",
+            **client_options,
             config=Config(
                 signature_version="s3v4",
                 s3={"addressing_style": settings.storage_s3_addressing_style},
             ),
         )
-        return cls(client=client, bucket=bucket)
+        diagnostic_client = boto3.client(
+            "s3",
+            **client_options,
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": settings.storage_s3_addressing_style},
+                connect_timeout=3,
+                read_timeout=5,
+                retries={"mode": "standard", "total_max_attempts": 2},
+            ),
+        )
+        return cls(client=client, bucket=bucket, diagnostic_client=diagnostic_client)
+
+    def diagnostic_stat(self, *, key: str) -> ObjectMetadata:
+        """Use the timeout and retry limited client for diagnostic preflight."""
+        if self._diagnostic_client is None:
+            raise ObjectStorageError("Bounded diagnostic storage client is unavailable.")
+        response = self._call_on(
+            self._diagnostic_client,
+            "head_object",
+            Bucket=self._bucket,
+            Key=validate_object_key(key),
+        )
+        return self._metadata_from_head(key, response)
+
+    def diagnostic_download_file(
+        self, *, key: str, destination: Path, max_bytes: int, expected: ObjectMetadata
+    ) -> ObjectMetadata:
+        """Stream at most the registered size plus one byte into a temporary file."""
+        if self._diagnostic_client is None:
+            raise ObjectStorageError("Bounded diagnostic storage client is unavailable.")
+        if max_bytes < 0 or expected.size_bytes > max_bytes:
+            raise ObjectStorageError("Diagnostic download limit is invalid.")
+        safe_key = validate_object_key(key)
+        resolved = destination.expanduser().resolve()
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        temporary = resolved.with_name(f".{resolved.name}.{uuid4().hex}.court4-diagnostic-download")
+        body = None
+        try:
+            response = self._call_on(
+                self._diagnostic_client, "get_object", Bucket=self._bucket, Key=safe_key
+            )
+            if not isinstance(response, dict) or response.get("Body") is None:
+                raise ObjectStorageError("Object storage returned an invalid object stream.")
+            body = response["Body"]
+            digest = hashlib.sha256()
+            size = 0
+            with temporary.open("xb") as output:
+                while True:
+                    block = body.read(min(64 * 1024, max_bytes - size + 1))
+                    if not block:
+                        break
+                    size += len(block)
+                    if size > max_bytes:
+                        raise ObjectStorageError("Diagnostic object exceeded its registered size.")
+                    output.write(block)
+                    digest.update(block)
+            if size != expected.size_bytes or digest.hexdigest() != expected.checksum_sha256:
+                raise ObjectStorageError("Diagnostic object failed integrity verification.")
+            stream = body
+            body = None
+            stream.close()
+            temporary.replace(resolved)
+            return expected
+        except ObjectStorageError:
+            raise
+        except Exception as exc:
+            raise ObjectStorageError("Diagnostic object download failed.") from exc
+        finally:
+            try:
+                if body is not None:
+                    try:
+                        body.close()
+                    except Exception:
+                        logger.warning("diagnostic_object_stream_close_failed")
+            finally:
+                temporary.unlink(missing_ok=True)
 
     def ready(self) -> bool:
         try:
@@ -450,6 +532,10 @@ class S3ObjectStorage:
     def stat(self, *, key: str) -> ObjectMetadata:
         safe_key = validate_object_key(key)
         response = self._call("head_object", Bucket=self._bucket, Key=safe_key)
+        return self._metadata_from_head(safe_key, response)
+
+    @staticmethod
+    def _metadata_from_head(key: str, response: object) -> ObjectMetadata:
         if not isinstance(response, dict):
             raise ObjectStorageError("Object storage returned invalid metadata.")
         custom_metadata = response.get("Metadata") or {}
@@ -458,9 +544,15 @@ class S3ObjectStorage:
         )
         if not isinstance(checksum, str) or len(checksum) != 64:
             raise ObjectStorageError("Object storage checksum metadata is missing.")
+        try:
+            size = int(response["ContentLength"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ObjectStorageError("Object storage returned invalid metadata.") from exc
+        if size < 0:
+            raise ObjectStorageError("Object storage returned invalid metadata.")
         return ObjectMetadata(
-            key=safe_key,
-            size_bytes=int(response["ContentLength"]),
+            key=validate_object_key(key),
+            size_bytes=size,
             checksum_sha256=checksum,
             content_type=str(response.get("ContentType") or "application/octet-stream"),
             provider_version=(
@@ -602,8 +694,11 @@ class S3ObjectStorage:
         return verified
 
     def _call(self, method: str, *args: object, **kwargs: object) -> object:
+        return self._call_on(self._client, method, *args, **kwargs)
+
+    def _call_on(self, client: object, method: str, *args: object, **kwargs: object) -> object:
         try:
-            operation = getattr(self._client, method)
+            operation = getattr(client, method)
             return operation(*args, **kwargs)
         except Exception as exc:
             response = getattr(exc, "response", None)

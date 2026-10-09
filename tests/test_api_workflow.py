@@ -1,5 +1,7 @@
+import hashlib
+import importlib
 import json
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Collection, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
@@ -11,7 +13,14 @@ from httpx import Response
 
 from app.config import get_settings
 from app.main import create_app
-from app.persistence.models import Analysis, AnalysisRun, User
+from app.persistence.models import (
+    Analysis,
+    AnalysisRun,
+    User,
+)
+from app.persistence.models import (
+    AnalysisArtifact as PersistedArtifact,
+)
 from app.persistence.runtime import get_persistence
 from app.schemas.jobs import AnalysisJob
 from app.services.jobs import AnalysisJobRepository
@@ -874,6 +883,234 @@ def test_openapi_docs_available(
     response = client.get("/docs")
 
     assert response.status_code == 200
+
+
+def test_staging_tracking_diagnostic_is_owner_scoped_bounded_and_read_only(
+    tmp_path: Path,
+    synthetic_video_factory: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.tracking import diagnostic
+
+    route = "/api/v1/analyses/any/tracking-diagnostic"
+    assert TestClient(create_app()).get(route).status_code == 404
+    main_module = importlib.import_module("app.main")
+    monkeypatch.setattr(
+        main_module,
+        "get_settings",
+        lambda: get_settings().model_copy(update={"environment": "staging"}),
+    )
+    client, output_dir = _api_client(tmp_path, monkeypatch)
+    video_path = synthetic_video_factory(
+        tmp_path / "diagnostic.avi", frame_count=15, fps=10.0, width=800, height=900
+    )
+    analysis_id = _upload_video(client, video_path).json()["analysis_id"]
+    client.post(
+        f"/api/v1/analyses/{analysis_id}/calibration",
+        json=_calibration_payload(calibration_id="api-calibration"),
+    )
+    _confirm_calibration(client, analysis_id)
+    _write_controlled_api_detections(output_dir, analysis_id)
+    tracking = client.post(
+        f"/api/v1/analyses/{analysis_id}/tracking",
+        json={
+            "calibration_id": "api-calibration",
+            "backend": "controlled-json",
+            "detections_jsonl": "uploads/detections.jsonl",
+            "frame_interval": 1,
+        },
+    )
+    assert tracking.status_code == 200
+    candidate_id = client.get(f"/api/v1/analyses/{analysis_id}/player-candidates").json()[
+        "candidates"
+    ][0]["candidate_id"]
+    assert (
+        client.post(
+            f"/api/v1/analyses/{analysis_id}/player-candidates/{candidate_id}/select"
+        ).status_code
+        == 200
+    )
+    assert client.post(f"/api/v1/analyses/{analysis_id}/analytics").status_code == 200
+
+    diagnostic_route = f"/api/v1/analyses/{analysis_id}/tracking-diagnostic"
+    workspace = output_dir / analysis_id
+    evidence = [
+        workspace / "tracking" / "tracking.json",
+        workspace / "tracking" / "observations.jsonl",
+        workspace / "tracking" / "player_candidates.json",
+        workspace / "analytics" / "analytics.json",
+        workspace / "metadata.json",
+    ]
+    original_hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in evidence]
+    before_job = client.get(f"/api/v1/analyses/{analysis_id}").json()
+    original_resolve = AnalysisJobRepository._resolve_registered_artifact
+    resolved_keys: list[str] = []
+
+    def record_resolve(
+        self: AnalysisJobRepository,
+        analysis_id: str,
+        relative_path: str,
+        record: PersistedArtifact,
+        *,
+        verify_bytes: bool = False,
+        diagnostic_pre_reserved: bool = False,
+    ) -> Path:
+        resolved_keys.append(relative_path)
+        return original_resolve(
+            self,
+            analysis_id,
+            relative_path,
+            record,
+            verify_bytes=verify_bytes,
+            diagnostic_pre_reserved=diagnostic_pre_reserved,
+        )
+
+    monkeypatch.setattr(AnalysisJobRepository, "_resolve_registered_artifact", record_resolve)
+    response = client.get(diagnostic_route)
+    monkeypatch.setattr(AnalysisJobRepository, "_resolve_registered_artifact", original_resolve)
+    assert response.status_code == 200
+    assert set(resolved_keys) == {
+        "tracking/tracking.json",
+        "tracking/observations.jsonl",
+        "tracking/player_candidates.json",
+        "analytics/analytics.json",
+        "metadata.json",
+    }
+    assert response.headers["cache-control"] == "no-store"
+    summary = response.json()
+    assert summary["selected_candidate_id"] == candidate_id
+    assert summary["selected_raw_ids"] == [1]
+    assert summary["observed_seconds"] == pytest.approx(1.4)
+    assert summary["internal_unobserved_seconds"] == pytest.approx(0)
+    assert summary["full_video_unobserved_or_uncertain_seconds"] == pytest.approx(0.1)
+    assert sum(item["duration_seconds"] for item in summary["accepted_intervals"]) == pytest.approx(
+        1.4
+    )
+    assert "source_video" not in response.text
+    assert "bounding_box" not in response.text
+    assert [hashlib.sha256(path.read_bytes()).hexdigest() for path in evidence] == original_hashes
+    assert client.get(f"/api/v1/analyses/{analysis_id}").json() == before_job
+
+    token = client.headers.pop("Authorization")
+    assert client.get(diagnostic_route).status_code == 401
+    client.headers["Authorization"] = token
+    other = TestClient(create_app())
+    registered = other.post(
+        "/api/v1/auth/register",
+        json={"email": "diagnostic-other@example.com", "password": "a sufficiently long password"},
+    )
+    assert registered.status_code == 201
+    other.headers["Authorization"] = f"Bearer {registered.json()['access_token']}"
+    other_id = UUID(registered.json()["user"]["id"])
+    with get_persistence().session_factory.begin() as session:
+        other_user = session.get(User, other_id)
+        assert other_user is not None
+        other_user.email_verified_at = datetime.now(tz=UTC)
+    assert other.get(diagnostic_route).status_code == 404
+
+    original_response_limit = diagnostic.MAX_RESPONSE_BYTES
+    monkeypatch.setattr(diagnostic, "MAX_RESPONSE_BYTES", 1)
+    assert client.get(diagnostic_route).status_code == 413
+    monkeypatch.setattr(diagnostic, "MAX_RESPONSE_BYTES", original_response_limit)
+    original_artifact_limit = AnalysisJobRepository.MAX_READ_ARTIFACT_BYTES
+    monkeypatch.setattr(AnalysisJobRepository, "MAX_READ_ARTIFACT_BYTES", 1)
+    assert client.get(diagnostic_route).status_code == 413
+    monkeypatch.setattr(AnalysisJobRepository, "MAX_READ_ARTIFACT_BYTES", original_artifact_limit)
+    original_row_limit = diagnostic.MAX_OBSERVATION_ROWS
+    monkeypatch.setattr(diagnostic, "MAX_OBSERVATION_ROWS", 1)
+    assert client.get(diagnostic_route).status_code == 413
+    monkeypatch.setattr(diagnostic, "MAX_OBSERVATION_ROWS", original_row_limit)
+    from app.persistence.service import PersistenceService
+
+    original_get_artifacts = PersistenceService.get_artifacts
+
+    def omit_registration(
+        self: PersistenceService,
+        *,
+        owner_user_id: UUID,
+        analysis_id: str,
+        logical_keys: Collection[str],
+    ) -> list[PersistedArtifact]:
+        return original_get_artifacts(
+            self,
+            owner_user_id=owner_user_id,
+            analysis_id=analysis_id,
+            logical_keys=logical_keys,
+        )[:-1]
+
+    monkeypatch.setattr(PersistenceService, "get_artifacts", omit_registration)
+    assert client.get(diagnostic_route).status_code == 404
+    monkeypatch.setattr(PersistenceService, "get_artifacts", original_get_artifacts)
+    evidence[1].write_text("corrupt\n", encoding="utf-8")
+    assert client.get(diagnostic_route).status_code == 404
+
+
+def test_staging_tracking_diagnostic_reports_continuity_gaps_without_identity_guess(
+    tmp_path: Path,
+    synthetic_video_factory: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    main_module = importlib.import_module("app.main")
+    monkeypatch.setattr(
+        main_module,
+        "get_settings",
+        lambda: get_settings().model_copy(update={"environment": "staging"}),
+    )
+    client, output_dir = _api_client(tmp_path, monkeypatch)
+    video_path = synthetic_video_factory(
+        tmp_path / "gapped.avi", frame_count=30, fps=10.0, width=800, height=900
+    )
+    analysis_id = _upload_video(client, video_path).json()["analysis_id"]
+    client.post(
+        f"/api/v1/analyses/{analysis_id}/calibration",
+        json=_calibration_payload(calibration_id="api-calibration"),
+    )
+    _confirm_calibration(client, analysis_id)
+    calibration = load_calibration_report(
+        output_dir / analysis_id / "calibrations/api-calibration/calibration.json"
+    )
+    lines = []
+    for frame in [*range(6), *range(20, 30)]:
+        ground = court_point_to_image((10.0 + frame * 0.1, 12.0), calibration)
+        lines.append(_line_from_ground_point(frame, 1, ground, confidence=0.92))
+    for frame in range(8, 20):
+        ground = court_point_to_image((18.0, 30.0), calibration)
+        lines.append(_line_from_ground_point(frame, 2, ground, confidence=0.92))
+    detections = output_dir / analysis_id / "uploads/detections.jsonl"
+    detections.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _api_repository(output_dir).register_current_artifacts(analysis_id)
+    tracking = client.post(
+        f"/api/v1/analyses/{analysis_id}/tracking",
+        json={
+            "calibration_id": "api-calibration",
+            "backend": "controlled-json",
+            "detections_jsonl": "uploads/detections.jsonl",
+            "frame_interval": 1,
+        },
+    )
+    assert tracking.status_code == 200
+    groups = client.get(f"/api/v1/analyses/{analysis_id}/player-candidates").json()
+    selected = next(item for item in groups["candidates"] if 1 in item["source_raw_track_ids"])
+    assert (
+        client.post(
+            f"/api/v1/analyses/{analysis_id}/player-candidates/{selected['candidate_id']}/select"
+        ).status_code
+        == 200
+    )
+    assert client.post(f"/api/v1/analyses/{analysis_id}/analytics").status_code == 200
+    response = client.get(f"/api/v1/analyses/{analysis_id}/tracking-diagnostic")
+    assert response.status_code == 200
+    summary = response.json()
+    assert summary["selected_raw_ids"] == [1]
+    assert summary["observed_seconds"] == pytest.approx(1.4)
+    assert summary["internal_unobserved_seconds"] == pytest.approx(1.5)
+    assert summary["full_video_unobserved_or_uncertain_seconds"] == pytest.approx(1.6)
+    assert summary["after_last_seconds"] == pytest.approx(0.1)
+    assert len(summary["accepted_intervals"]) == 2
+    assert len(summary["rejected_intervals"]) == 1
+    assert summary["rejected_intervals"][0]["reasons"] == ["gap_over_one_second"]
+    assert summary["rejected_intervals"][0]["other_raw_ids_present"] == [2]
+    assert summary["identity_of_other_raw_ids"] == "Unknown"
 
 
 def _api_client(

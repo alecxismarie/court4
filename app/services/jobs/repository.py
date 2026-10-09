@@ -17,7 +17,7 @@ from time import sleep
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.persistence.errors import (
     ArtifactNotAvailableError,
@@ -26,13 +26,15 @@ from app.persistence.errors import (
     ResourceNotFoundError,
     SourceMediaUnavailableError,
 )
-from app.persistence.models import Analysis
+from app.persistence.models import Analysis, PlayerSelection
 from app.persistence.models import AnalysisArtifact as PersistedArtifact
 from app.persistence.object_storage import (
     LocalObjectStorage,
+    ObjectMetadata,
     ObjectNotFoundError,
     ObjectStorage,
     ObjectStorageError,
+    S3ObjectStorage,
     artifact_object_key,
     build_object_storage,
     source_object_key,
@@ -215,6 +217,187 @@ class AnalysisJobRepository:
             yield
         finally:
             self._read_artifacts.reset(token)
+
+    @contextmanager
+    def verified_diagnostic_artifacts(self, analysis_id: str) -> Iterator[dict[str, Path]]:
+        """Read fixed evidence under admission and verify lifecycle consistency."""
+        logical_keys = (
+            "tracking/tracking.json",
+            "tracking/observations.jsonl",
+            "tracking/player_candidates.json",
+            "analytics/analytics.json",
+            "metadata.json",
+        )
+        max_artifact_bytes = self.MAX_READ_ARTIFACT_BYTES
+        max_total_bytes = 64 * 1024 * 1024
+        # Acquire the read slot before an advisory lock or any S3 request. A zero
+        # byte slot can be extended once the owned registrations are known.
+        try:
+            reservation, _ = self.storage.reserve_capacity(
+                requested_bytes=0,
+                warning_free_bytes=self._workspace_warning_free_bytes or 0,
+                hard_stop_free_bytes=self._workspace_hard_stop_free_bytes or 0,
+                max_active_uploads=self._workspace_max_active,
+                admission="read",
+                max_active_reads=self.MAX_ACTIVE_READS,
+            )
+        except StorageCapacityError as exc:
+            raise JobStorageCapacityError(
+                "diagnostic_read_unavailable",
+                "Diagnostic read capacity is unavailable.",
+                status_code=429 if exc.reason == "active_limit" else 507,
+            ) from exc
+        try:
+            with self._admitted_diagnostic_artifacts(
+                analysis_id, logical_keys, max_artifact_bytes, max_total_bytes, reservation
+            ) as paths:
+                yield paths
+        finally:
+            reservation.release()
+
+    def current_diagnostic_selection(self, analysis_id: str) -> PlayerSelectionInput | None:
+        """Read the owner-scoped persisted selection for diagnostic consistency checks."""
+        with self.persistence.session_factory() as session:
+            current = session.scalar(
+                select(PlayerSelection).where(
+                    PlayerSelection.owner_user_id == self.owner_user_id,
+                    PlayerSelection.analysis_id == analysis_id,
+                    PlayerSelection.is_current.is_(True),
+                )
+            )
+            if current is None:
+                return None
+            return PlayerSelectionInput(
+                candidate_id=current.candidate_id,
+                track_id=current.track_id,
+                source_track_ids=current.source_track_ids,
+            )
+
+    @contextmanager
+    def _admitted_diagnostic_artifacts(
+        self,
+        analysis_id: str,
+        logical_keys: tuple[str, ...],
+        max_artifact_bytes: int,
+        max_total_bytes: int,
+        reservation: StorageReservation,
+    ) -> Iterator[dict[str, Path]]:
+        with self.media_operation(analysis_id, exclusive=True):
+            self.load_job_metadata(analysis_id)
+            records = self.persistence.service.get_artifacts(
+                owner_user_id=self.owner_user_id,
+                analysis_id=analysis_id,
+                logical_keys=logical_keys,
+            )
+            by_key = {record.logical_key: record for record in records}
+            if set(by_key) != set(logical_keys):
+                raise JobNotFoundError("Required tracking evidence is unavailable.")
+            if (
+                any(
+                    record.content_type.startswith("video/")
+                    or record.size_bytes < 0
+                    or record.size_bytes > max_artifact_bytes
+                    for record in records
+                )
+                or sum(record.size_bytes for record in records) > max_total_bytes
+            ):
+                raise JobStorageCapacityError(
+                    "diagnostic_evidence_limit",
+                    "Saved evidence exceeds the diagnostic read limit.",
+                    status_code=413,
+                )
+            selection = self.current_diagnostic_selection(analysis_id)
+            if self.object_storage.provider == "local":
+                paths = self._hydrate_diagnostic_artifacts(analysis_id, logical_keys, by_key)
+                yield paths
+                return
+
+        # The workspace belongs to this request. Versioned S3 keys and a final
+        # registry check allow network and parsing work without occupying a DB
+        # advisory-lock connection throughout the transfer.
+        if not isinstance(self.object_storage, S3ObjectStorage):
+            raise JobStorageBackendError("Bounded diagnostic storage is unavailable.")
+        try:
+            reservation.extend(
+                sum(record.size_bytes for record in records),
+                warning_free_bytes=self._workspace_warning_free_bytes or 0,
+                hard_stop_free_bytes=self._workspace_hard_stop_free_bytes or 0,
+            )
+        except StorageCapacityError as exc:
+            raise JobStorageCapacityError(
+                "diagnostic_read_unavailable",
+                "Diagnostic read capacity is unavailable.",
+                status_code=507,
+            ) from exc
+        paths = self._hydrate_diagnostic_artifacts(analysis_id, logical_keys, by_key)
+        yield paths
+        with self.media_operation(analysis_id, exclusive=True):
+            self.load_job_metadata(analysis_id)
+            current = self.persistence.service.get_artifacts(
+                owner_user_id=self.owner_user_id,
+                analysis_id=analysis_id,
+                logical_keys=logical_keys,
+            )
+            if (
+                self._diagnostic_record_identity(current)
+                != self._diagnostic_record_identity(records)
+                or self.current_diagnostic_selection(analysis_id) != selection
+            ):
+                raise JobConflictError("diagnostic_lineage_changed", "Saved evidence changed.")
+
+    @staticmethod
+    def _diagnostic_record_identity(
+        records: list[PersistedArtifact],
+    ) -> set[tuple[str, str, str, int, str, str]]:
+        return {
+            (
+                record.logical_key,
+                record.storage_key,
+                record.checksum_sha256,
+                record.size_bytes,
+                record.content_type,
+                record.storage_provider,
+            )
+            for record in records
+        }
+
+    def _hydrate_diagnostic_artifacts(
+        self,
+        analysis_id: str,
+        logical_keys: tuple[str, ...],
+        by_key: dict[str, PersistedArtifact],
+    ) -> dict[str, Path]:
+        diagnostic_storage = self.object_storage
+        with self.bounded_artifact_read():
+            for record in by_key.values():
+                if record.storage_provider != "local":
+                    if not isinstance(diagnostic_storage, S3ObjectStorage):
+                        raise JobStorageBackendError()
+                    try:
+                        provider_metadata = diagnostic_storage.diagnostic_stat(
+                            key=record.storage_key
+                        )
+                    except ObjectNotFoundError:
+                        raise JobNotFoundError(
+                            "Required tracking evidence is unavailable."
+                        ) from None
+                    except ObjectStorageError:
+                        raise JobStorageBackendError() from None
+                    if (
+                        provider_metadata.size_bytes != record.size_bytes
+                        or provider_metadata.checksum_sha256 != record.checksum_sha256
+                    ):
+                        raise JobNotFoundError("Artifact bytes failed integrity verification.")
+            return {
+                key: self._resolve_registered_artifact(
+                    analysis_id,
+                    key,
+                    by_key[key],
+                    verify_bytes=True,
+                    diagnostic_pre_reserved=True,
+                )
+                for key in logical_keys
+            }
 
     def create_or_replace_job(self, job: AnalysisJob) -> AnalysisJob:
         return self.save_job(job)
@@ -528,6 +711,7 @@ class AnalysisJobRepository:
         record: PersistedArtifact,
         *,
         verify_bytes: bool = False,
+        diagnostic_pre_reserved: bool = False,
     ) -> Path:
         analysis_dir = self.analysis_dir(analysis_id)
         if record.content_type.startswith("video/"):
@@ -545,10 +729,11 @@ class AnalysisJobRepository:
             if legacy_path.is_file() and legacy_path != resolved:
                 if not _artifact_matches(legacy_path, record):
                     raise JobNotFoundError("Artifact bytes failed integrity verification.")
-                self._reserve_workspace(
-                    [record],
-                    processing=self._requires_processing_admission(record),
-                )
+                if not diagnostic_pre_reserved:
+                    self._reserve_workspace(
+                        [record],
+                        processing=self._requires_processing_admission(record),
+                    )
                 resolved.parent.mkdir(parents=True, exist_ok=True)
                 with report_phase("hydration"):
                     shutil.copyfile(legacy_path, resolved)
@@ -557,16 +742,32 @@ class AnalysisJobRepository:
                     raise JobNotFoundError("Artifact bytes failed integrity verification.")
                 report_artifact(relative_path, record.size_bytes, hydrated=True)
         if not resolved.is_file() and record.storage_provider != "local":
-            self._reserve_workspace(
-                [record],
-                processing=self._requires_processing_admission(record),
-            )
+            if not diagnostic_pre_reserved:
+                self._reserve_workspace(
+                    [record],
+                    processing=self._requires_processing_admission(record),
+                )
             try:
                 with report_phase("hydration"):
-                    metadata = self.object_storage.download_file(
-                        key=record.storage_key,
-                        destination=resolved,
-                    )
+                    if diagnostic_pre_reserved:
+                        if not isinstance(self.object_storage, S3ObjectStorage):
+                            raise JobStorageBackendError()
+                        metadata = self.object_storage.diagnostic_download_file(
+                            key=record.storage_key,
+                            destination=resolved,
+                            max_bytes=record.size_bytes,
+                            expected=ObjectMetadata(
+                                key=record.storage_key,
+                                size_bytes=record.size_bytes,
+                                checksum_sha256=record.checksum_sha256,
+                                content_type=record.content_type,
+                            ),
+                        )
+                    else:
+                        metadata = self.object_storage.download_file(
+                            key=record.storage_key,
+                            destination=resolved,
+                        )
             except ObjectNotFoundError:
                 raise JobNotFoundError("Artifact bytes are unavailable.") from None
             except ObjectStorageError as exc:

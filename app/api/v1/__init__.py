@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1.analyses import development_router as analyses_development_router
 from app.api.v1.analyses import router as analyses_router
+from app.api.v1.analyses import staging_router as analyses_staging_router
 from app.api.v1.auth import development_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.history import router as history_router
@@ -16,6 +17,8 @@ def create_api_v1_router(settings: Settings) -> APIRouter:
     router.include_router(analyses_router)
     router.include_router(history_router)
     router.include_router(uploads_router)
+    if settings.environment == "staging":
+        router.include_router(analyses_staging_router)
     if settings.environment in {"development", "test"}:
         router.include_router(development_router)
         router.include_router(analyses_development_router)

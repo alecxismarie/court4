@@ -2,7 +2,7 @@ from collections.abc import Iterator
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, File, Form, Header, Query, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.auth import VerifiedUser
 from app.config import get_settings
@@ -38,10 +38,12 @@ from app.services.jobs import AnalysisWorkflowService
 from app.services.jobs.match_lifecycle import MatchLifecycleService
 from app.services.jobs.source_media import SourceMediaService
 from app.services.report_observability import report_read
+from app.services.tracking.diagnostic import tracking_evidence_diagnostic
 from app.sports import SportType
 
 router = APIRouter(prefix="/analyses", tags=["analyses"])
 development_router = APIRouter(prefix="/analyses", tags=["internal-development"])
+staging_router = APIRouter(prefix="/analyses", tags=["internal-staging"])
 
 ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     400: {"model": ApiErrorResponse, "description": "Invalid request."},
@@ -69,6 +71,12 @@ def get_workflow_service(
 
 
 WorkflowDependency = Annotated[AnalysisWorkflowService, Depends(get_workflow_service)]
+
+
+@staging_router.get("/{analysis_id}/tracking-diagnostic", include_in_schema=False)
+def get_tracking_diagnostic(analysis_id: str, workflow: WorkflowDependency) -> JSONResponse:
+    summary = tracking_evidence_diagnostic(workflow.repository, analysis_id)
+    return JSONResponse(summary, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/{analysis_id}/lifecycle", responses=ERROR_RESPONSES)

@@ -8,6 +8,10 @@ import numpy as np
 import pytest
 
 os.environ["PICKLEBALL_AI_ENVIRONMENT"] = "test"
+# Pytest's API assertions use the local frontend origin. The Docker service
+# keeps its separate browser E2E origin when it runs Uvicorn instead of pytest.
+os.environ["PICKLEBALL_AI_FRONTEND_ALLOWED_ORIGINS"] = "http://localhost:3000"
+os.environ["FRONTEND_BASE_URL"] = "http://localhost:3000"
 # Fail independently of a developer's root .env: automated tests use only the
 # isolated in-memory development sink unless a single test opts in explicitly.
 os.environ["EMAIL_PROVIDER"] = "development"

@@ -10,6 +10,7 @@ import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from threading import Lock
@@ -34,6 +35,7 @@ from app.persistence.object_storage import (
     ObjectNotFoundError,
     ObjectStorage,
     ObjectStorageError,
+    ObjectStreamLimitError,
     S3ObjectStorage,
     artifact_object_key,
     build_object_storage,
@@ -57,12 +59,62 @@ ANALYSIS_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class DiagnosticEvidence:
+    paths: dict[str, Path]
+    streamed_observations: PersistedArtifact | None = None
+    stream_storage: S3ObjectStorage | None = None
+    stream_max_bytes: int = 0
+
+    @property
+    def streaming(self) -> bool:
+        return self.streamed_observations is not None
+
+    @contextmanager
+    def observation_lines(
+        self, *, deadline: float, max_line_bytes: int
+    ) -> Iterator[Iterator[bytes]]:
+        record = self.streamed_observations
+        if record is None:
+            with self.paths["tracking/observations.jsonl"].open("rb") as source:
+                yield source
+            return
+        if self.stream_storage is None:
+            raise JobStorageBackendError("Bounded diagnostic storage is unavailable.")
+        try:
+            with self.stream_storage.diagnostic_stream_lines(
+                key=record.storage_key,
+                expected=ObjectMetadata(
+                    key=record.storage_key,
+                    size_bytes=record.size_bytes,
+                    checksum_sha256=record.checksum_sha256,
+                    content_type=record.content_type,
+                ),
+                max_bytes=self.stream_max_bytes,
+                max_line_bytes=max_line_bytes,
+                deadline=deadline,
+            ) as lines:
+                yield lines
+        except ObjectStreamLimitError as exc:
+            raise JobStorageCapacityError(
+                "diagnostic_stream_limit",
+                "Diagnostic stream resource limit reached.",
+                status_code=413,
+            ) from exc
+        except ObjectNotFoundError:
+            raise JobNotFoundError("Artifact bytes are unavailable.") from None
+        except ObjectStorageError as exc:
+            raise JobStorageBackendError("Diagnostic evidence could not be verified.") from exc
+
+
 class AnalysisJobRepository:
     """Compatibility façade whose authority is PostgreSQL, not ``job.json``."""
 
     MAX_READ_ARTIFACT_BYTES = 16 * 1024 * 1024
     MAX_READ_WORKSPACE_BYTES = 128 * 1024 * 1024
     MAX_ACTIVE_READS = 4
+    # Disabled until a separately reviewed streaming byte ceiling is selected.
+    MAX_DIAGNOSTIC_STREAM_BYTES = 0
 
     def __init__(
         self,
@@ -219,7 +271,7 @@ class AnalysisJobRepository:
             self._read_artifacts.reset(token)
 
     @contextmanager
-    def verified_diagnostic_artifacts(self, analysis_id: str) -> Iterator[dict[str, Path]]:
+    def verified_diagnostic_artifacts(self, analysis_id: str) -> Iterator[DiagnosticEvidence]:
         """Read fixed evidence under admission and verify lifecycle consistency."""
         logical_keys = (
             "tracking/tracking.json",
@@ -281,7 +333,7 @@ class AnalysisJobRepository:
         max_artifact_bytes: int,
         max_total_bytes: int,
         reservation: StorageReservation,
-    ) -> Iterator[dict[str, Path]]:
+    ) -> Iterator[DiagnosticEvidence]:
         with self.media_operation(analysis_id, exclusive=True):
             self.load_job_metadata(analysis_id)
             records = self.persistence.service.get_artifacts(
@@ -292,11 +344,20 @@ class AnalysisJobRepository:
             by_key = {record.logical_key: record for record in records}
             if set(by_key) != set(logical_keys):
                 raise JobNotFoundError("Required tracking evidence is unavailable.")
+            observations = by_key["tracking/observations.jsonl"]
+            streaming = (
+                observations.size_bytes > max_artifact_bytes
+                and self.object_storage.provider == "s3"
+                and max_artifact_bytes < observations.size_bytes <= self.MAX_DIAGNOSTIC_STREAM_BYTES
+            )
             if (
                 any(
                     record.content_type.startswith("video/")
                     or record.size_bytes < 0
-                    or record.size_bytes > max_artifact_bytes
+                    or (
+                        record.size_bytes > max_artifact_bytes
+                        and not (streaming and record is observations)
+                    )
                     for record in records
                 )
                 or sum(record.size_bytes for record in records) > max_total_bytes
@@ -309,7 +370,7 @@ class AnalysisJobRepository:
             selection = self.current_diagnostic_selection(analysis_id)
             if self.object_storage.provider == "local":
                 paths = self._hydrate_diagnostic_artifacts(analysis_id, logical_keys, by_key)
-                yield paths
+                yield DiagnosticEvidence(paths)
                 return
 
         # The workspace belongs to this request. Versioned S3 keys and a final
@@ -329,8 +390,16 @@ class AnalysisJobRepository:
                 "Diagnostic read capacity is unavailable.",
                 status_code=507,
             ) from exc
-        paths = self._hydrate_diagnostic_artifacts(analysis_id, logical_keys, by_key)
-        yield paths
+        hydrated_keys = tuple(
+            key for key in logical_keys if not (streaming and key == "tracking/observations.jsonl")
+        )
+        paths = self._hydrate_diagnostic_artifacts(analysis_id, hydrated_keys, by_key)
+        yield DiagnosticEvidence(
+            paths,
+            streamed_observations=observations if streaming else None,
+            stream_storage=self.object_storage,
+            stream_max_bytes=self.MAX_DIAGNOSTIC_STREAM_BYTES if streaming else 0,
+        )
         with self.media_operation(analysis_id, exclusive=True):
             self.load_job_metadata(analysis_id)
             current = self.persistence.service.get_artifacts(

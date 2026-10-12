@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import shutil
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO, Protocol, cast
@@ -35,6 +38,10 @@ def stream_file_identity(stream: BinaryIO) -> str:
 
 class ObjectStorageError(RuntimeError):
     """A private object could not be stored or retrieved safely."""
+
+
+class ObjectStreamLimitError(ObjectStorageError):
+    """A bounded diagnostic stream exceeded an explicit resource limit."""
 
 
 class ObjectNotFoundError(ObjectStorageError):
@@ -427,6 +434,79 @@ class S3ObjectStorage:
             Key=validate_object_key(key),
         )
         return self._metadata_from_head(key, response)
+
+    @contextmanager
+    def diagnostic_stream_lines(
+        self,
+        *,
+        key: str,
+        expected: ObjectMetadata,
+        max_bytes: int,
+        max_line_bytes: int,
+        deadline: float,
+    ) -> Iterator[Iterator[bytes]]:
+        """Yield bounded JSONL lines; verify every byte before successful exit."""
+        if self._diagnostic_client is None:
+            raise ObjectStorageError("Bounded diagnostic storage client is unavailable.")
+        if max_bytes < 0 or max_line_bytes < 1 or expected.size_bytes > max_bytes:
+            raise ObjectStreamLimitError("Diagnostic stream admission limit reached.")
+        response = self._call_on(
+            self._diagnostic_client, "get_object", Bucket=self._bucket, Key=validate_object_key(key)
+        )
+        if not isinstance(response, dict) or response.get("Body") is None:
+            raise ObjectStorageError("Object storage returned an invalid object stream.")
+        body = cast(BinaryIO, response["Body"])
+        complete = False
+
+        def lines() -> Iterator[bytes]:
+            nonlocal complete
+            digest = hashlib.sha256()
+            size = 0
+            pending = bytearray()
+            while True:
+                if time.monotonic() > deadline:
+                    raise ObjectStreamLimitError("Diagnostic stream time limit reached.")
+                try:
+                    chunk = body.read(min(64 * 1024, max_bytes - size + 1))
+                except Exception as exc:
+                    raise ObjectStorageError("Diagnostic stream read failed.") from exc
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max_bytes or size > expected.size_bytes:
+                    raise ObjectStreamLimitError("Diagnostic stream byte limit reached.")
+                digest.update(chunk)
+                pending.extend(chunk)
+                while True:
+                    newline = pending.find(b"\n")
+                    if newline < 0:
+                        if len(pending) > max_line_bytes:
+                            raise ObjectStreamLimitError("Diagnostic stream line limit reached.")
+                        break
+                    if newline + 1 > max_line_bytes:
+                        raise ObjectStreamLimitError("Diagnostic stream line limit reached.")
+                    line = bytes(pending[: newline + 1])
+                    del pending[: newline + 1]
+                    if time.monotonic() > deadline:
+                        raise ObjectStreamLimitError("Diagnostic stream time limit reached.")
+                    yield line
+            if pending:
+                if len(pending) > max_line_bytes:
+                    raise ObjectStreamLimitError("Diagnostic stream line limit reached.")
+                yield bytes(pending)
+            if size != expected.size_bytes or digest.hexdigest() != expected.checksum_sha256:
+                raise ObjectStorageError("Diagnostic stream failed integrity verification.")
+            complete = True
+
+        try:
+            yield lines()
+            if not complete:
+                raise ObjectStorageError("Diagnostic stream was not fully consumed.")
+        finally:
+            try:
+                body.close()
+            except Exception:
+                logger.warning("diagnostic_object_stream_close_failed")
 
     def diagnostic_download_file(
         self, *, key: str, destination: Path, max_bytes: int, expected: ObjectMetadata

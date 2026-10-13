@@ -114,7 +114,7 @@ class AnalysisJobRepository:
     MAX_READ_WORKSPACE_BYTES = 128 * 1024 * 1024
     MAX_ACTIVE_READS = 4
     # Disabled until a separately reviewed streaming byte ceiling is selected.
-    MAX_DIAGNOSTIC_STREAM_BYTES = 0
+    MAX_DIAGNOSTIC_STREAM_BYTES = 18 * 1024 * 1024
 
     def __init__(
         self,
